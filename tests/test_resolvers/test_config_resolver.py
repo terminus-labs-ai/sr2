@@ -1,0 +1,52 @@
+import pytest
+
+from sr2.resolvers.config_resolver import ConfigResolver
+from sr2.resolvers.registry import ResolvedContent, ResolverContext
+
+
+@pytest.mark.asyncio
+async def test_resolve_existing_key():
+    """Happy path: key exists in agent_config."""
+    resolver = ConfigResolver()
+    ctx = ResolverContext(
+        agent_config={"system_prompt": "You are helpful."},
+        trigger_input="hello",
+    )
+
+    result = await resolver.resolve("system_prompt", {}, ctx)
+
+    assert isinstance(result, ResolvedContent)
+    assert result.key == "system_prompt"
+    assert result.content == "You are helpful."
+    assert result.tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_missing_key_raises():
+    """Missing key raises KeyError."""
+    resolver = ConfigResolver()
+    ctx = ResolverContext(
+        agent_config={"system_prompt": "You are helpful."},
+        trigger_input="hello",
+    )
+
+    with pytest.raises(KeyError, match="Key 'missing' not found in agent_config"):
+        await resolver.resolve("missing", {}, ctx)
+
+
+@pytest.mark.asyncio
+async def test_non_string_values_converted():
+    """Non-string values are converted to string."""
+    resolver = ConfigResolver()
+    ctx = ResolverContext(
+        agent_config={"max_tokens": 4096, "enabled": True},
+        trigger_input="hello",
+    )
+
+    result = await resolver.resolve("max_tokens", {}, ctx)
+    assert result.content == "4096"
+    assert result.tokens == 1
+
+    result_bool = await resolver.resolve("enabled", {}, ctx)
+    assert result_bool.content == "True"
+    assert result_bool.tokens == 1

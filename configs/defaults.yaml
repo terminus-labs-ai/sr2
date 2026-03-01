@@ -1,0 +1,279 @@
+# SR2 - Comprehensive Configuration Defaults
+# Auto-generated from Pydantic models. Do not edit by hand.
+# Re-generate with: uv run python -m schema_gen --format defaults
+#
+# Fields with defaults are shown uncommented.
+# Fields without defaults (required) are commented out with placeholders.
+
+#=====================================================================
+# Pipeline Config
+#=====================================================================
+
+pipeline:
+  # Override the agent-level system prompt for this interface/pipeline.
+  system_prompt: null
+  # Total token budget for the context window. The pipeline distributes this
+  # budget across layers. Higher values allow more context but increase cost and
+  # latency.
+  token_budget: 32000
+  # Fraction of token budget that triggers pre-emptive context rotation. When
+  # remaining budget drops below this fraction, summarization and compaction are
+  # triggered proactively to avoid hitting the hard limit.
+  pre_rot_threshold: 0.25
+  # Per-interface LLM overrides
+  # llm:
+
+  # KV-cache optimization settings
+  kv_cache:
+    # KV-cache optimization strategy. 'append_only' keeps a stable prefix for
+    # cache reuse. 'maximize_prefix_reuse' reorders layers for maximum prefix
+    # hit. 'no_cache_optimization' disables cache-aware ordering.
+    strategy: append_only
+    # When to run compaction. 'post_llm_async' runs after LLM response without
+    # blocking. 'immediate' runs synchronously before next turn. 'disabled'
+    # turns off compaction entirely.
+    compaction_timing: post_llm_async
+    # When to trigger summarization. 'natural_breakpoint' summarizes at topic
+    # shifts or pauses. 'token_threshold' summarizes when token usage exceeds
+    # the configured threshold. 'disabled' turns off summarization.
+    summarization_timing: natural_breakpoint
+    # When to refresh retrieved memories. 'on_topic_shift' refreshes when intent
+    # detection flags a topic change. 'every_n_turns' refreshes at a fixed
+    # interval. 'session_start_only' loads memories once at session start.
+    # 'disabled' turns off memory refresh.
+    memory_refresh: on_topic_shift
+    # Only used if memory_refresh=every_n_turns
+    memory_refresh_interval: 10
+
+  # Content compaction settings
+  compaction:
+    # Enable compaction. When True, verbose tool outputs and file contents are
+    # replaced with compact references. Compacted content can be re-fetched by
+    # the agent using just-in-time retrieval tools.
+    enabled: true
+    # Keep last N turns in full detail
+    raw_window: 5
+    # Don't compact below this token count
+    min_content_size: 100
+    # Compaction rules. Each rule matches a content_type and applies a strategy.
+    # Available strategies: schema_and_sample, reference, result_summary,
+    # supersede, collapse.
+    rules: []
+    # Example entry:
+      # - type: <required>
+      #   strategy: <required>
+      #   max_compacted_tokens: 80
+      #   recovery_hint: false
+
+
+  # Conversation summarization settings
+  summarization:
+    # Enable automatic summarization. When True, older conversation history is
+    # summarized to reclaim token budget while preserving key information.
+    enabled: true
+    # What triggers summarization. 'token_threshold' triggers when token usage
+    # exceeds the threshold fraction. 'topic_shift' triggers on detected topic
+    # changes. 'manual' only triggers via explicit API call.
+    trigger: token_threshold
+    threshold: 0.75
+    # Model identifier for summarization
+    model: fast
+    # Number of most recent turns to exclude from summarization. These turns are
+    # always kept in full detail regardless of token pressure.
+    preserve_recent_turns: 3
+    # Format for generated summaries. 'structured' produces categorized bullet
+    # points (decisions, issues, preferences). 'prose' produces a narrative
+    # paragraph.
+    output_format: structured
+    # How summaries are injected into context. 'flat' inserts the full summary
+    # as a single block. 'selective' inserts only the sections relevant to the
+    # current topic (requires intent detection).
+    injection: flat
+    # Categories of information to always preserve in summaries. These
+    # categories are extracted and retained even under heavy token pressure.
+    preserve: [decisions_and_reasoning, unresolved_issues, user_preferences_expressed, key_facts_and_data, error_context]
+    # Categories of information to discard during summarization. Content
+    # matching these categories is dropped to save tokens.
+    discard: [successful_routine_actions, redundant_confirmations, exploration_dead_ends]
+
+  # Retrieval-augmented context settings
+  retrieval:
+    # Enable retrieval-augmented context. When True, relevant memories and
+    # documents are retrieved and injected into the context window.
+    enabled: true
+    # Retrieval strategy. 'hybrid' combines semantic and keyword search.
+    # 'semantic' uses embedding similarity only. 'keyword' uses BM25/keyword
+    # matching. 'scoped' restricts retrieval to the current topic scope.
+    strategy: hybrid
+    # Maximum number of retrieved items to include in context.
+    top_k: 10
+    # Maximum total tokens allocated for retrieved content. Results are
+    # truncated to fit within this budget.
+    max_tokens: 4000
+
+  # Intent detection and topic shift settings
+  intent_detection:
+    # Enable intent detection. When True, user messages are classified to detect
+    # topic shifts, which can trigger memory refresh and selective
+    # summarization.
+    enabled: true
+    model: fast
+
+  # Tool visibility and masking settings
+  tool_masking:
+    # Tool masking strategy. 'allowed_list' only exposes allowed tools.
+    # 'prefill' uses assistant prefill to guide tool selection. 'logit_mask'
+    # applies logit bias to suppress disallowed tools. 'none' exposes all tools.
+    strategy: allowed_list
+    # Initial tool state name. References a named state in the tool masking
+    # configuration that defines which tools are available at conversation
+    # start.
+    initial_state: default
+
+  # Tool visibility states. Each state defines allowed/denied tools.
+  tool_states:
+    - name: default
+      description: ""
+      allowed_tools: all
+      denied_tools: []
+
+  # Rules for transitioning between tool states.
+  tool_transitions: []
+  # Example entry:
+    # - from_state: <required>
+    #   to_state: <required>
+    #   trigger: agent_intent
+    #   condition: ""
+
+  # Circuit breaker and degradation settings
+  degradation:
+    # Number of consecutive failures before the circuit breaker opens. When
+    # open, requests are short-circuited to prevent cascading failures.
+    circuit_breaker_threshold: 3
+    # Minutes to wait before retrying after the circuit breaker opens. After
+    # this cooldown, the circuit enters half-open state and allows a trial
+    # request.
+    circuit_breaker_cooldown_minutes: 5
+
+  # Context window layers, ordered from most stable to least stable
+  layers: []
+  # Example entry:
+    # - name: <required>
+    #   cache_policy: immutable
+    #   contents: []
+
+
+#=====================================================================
+# Runtime Config (agent.yaml)
+#=====================================================================
+
+# Agent display name.
+agent_name: null
+# System prompt for the LLM.
+system_prompt: ""
+# Pipeline configuration.
+# pipeline:
+#   <name>: {}
+
+runtime:
+  database:
+    # PostgreSQL connection string. Supports ${VAR} env var substitution.
+    url: null
+    # Minimum connection pool size.
+    pool_min: 2
+    # Maximum connection pool size.
+    pool_max: 10
+
+  llm:
+    # Main LLM model configuration.
+    model:
+      # Model identifier.
+      name: claude-sonnet-4-20250514
+      # API base URL.
+      api_base: null
+      # Max tokens per response.
+      max_tokens: 4096
+      # Enable streaming for this model.
+      stream: false
+      # Sampling parameters.
+      # model_params:
+
+
+    # Fast model for extraction, summarization, intent detection.
+    fast_model:
+      # Model identifier.
+      name: claude-haiku-4-5-20251001
+      # API base URL.
+      api_base: null
+      # Max tokens per response.
+      max_tokens: 1000
+      # Enable streaming for this model.
+      stream: false
+      # Sampling parameters.
+      # model_params:
+
+
+    # Embedding model for memory retrieval.
+    embedding:
+      # Model identifier.
+      name: text-embedding-3-small
+      # API base URL.
+      api_base: null
+      # Max tokens per response.
+      max_tokens: 4096
+      # Enable streaming for this model.
+      stream: false
+      # Sampling parameters.
+      # model_params:
+
+
+
+  loop:
+    # Max tool-call loop iterations before stopping.
+    max_iterations: 25
+
+  # Default session settings.
+  session:
+    # Default max turns for sessions not explicitly configured.
+    max_turns: 200
+    # Default idle timeout in minutes before session cleanup.
+    idle_timeout_minutes: 60
+
+  stream_content:
+    # Stream tool invocation status.
+    tool_status: true
+    # Stream tool result content.
+    tool_results: false
+
+
+# Interface plugin definitions.
+# interfaces:
+#   <name>:
+#     # Plugin type: telegram | timer | http | a2a
+#     plugin: <required>
+#     # Session config for this interface.
+#     session: null
+#     # Path to pipeline config (relative to config_dir).
+#     pipeline: null
+
+# Named session configurations.
+# sessions:
+#   <name>: {}
+
+# MCP server connections.
+mcp_servers: []
+# Example entry:
+  # - name: <required>
+  #   url: <required>
+  #   transport: stdio
+  #   tools: null
+  #   headers: null
+  #   env: null
+  #   args: null
+  #   roots: null
+  #   resources: null
+  #   expose_resources_as_tools: false
+  #   prompts: null
+  #   expose_prompts_as_tools: false
+  #   sampling: <required>
+

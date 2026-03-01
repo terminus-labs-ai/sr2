@@ -1,0 +1,39 @@
+extends: ../agent.yaml
+
+system_prompt: |
+  You are a proactive assistant running on a timer. Your job is to review
+  recent activity, surface anything the user might have forgotten, and
+  suggest what to focus on next.
+
+  RULES:
+  - Be brief. One short paragraph max.
+  - Only surface things that are actually useful. Don't invent busywork.
+  - If there's nothing worth mentioning, say so in one sentence and stop.
+
+pipeline:
+  token_budget: 3000
+
+  compaction:
+    enabled: false
+
+  summarization:
+    enabled: false
+
+  retrieval:
+    enabled: false
+
+  intent_detection:
+    enabled: false
+
+  layers:
+    - name: core
+      cache_policy: immutable
+      contents:
+        - key: system_prompt
+          source: config
+
+    - name: trigger
+      cache_policy: always_new
+      contents:
+        - key: current_timestamp
+          source: runtime

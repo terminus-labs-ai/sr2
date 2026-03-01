@@ -1,0 +1,49 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras
+      - run: uv run pytest tests/ -v --ignore=tests/integration/ --cov=sr2 --cov-report=term-missing
+      - run: uv run ruff check src/
+      - name: Verify config schema is up to date
+        run: |
+          uv run python -m schema_gen --format json > schema.json.new
+          if [ -f schema.json ]; then
+            diff schema.json schema.json.new || (echo "schema.json is out of date. Run: sr2-config-docs --format json > schema.json" && exit 1)
+          fi
+          rm -f schema.json.new
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: sr2
+          POSTGRES_PASSWORD: sr2
+          POSTGRES_DB: sr2_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sr2"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-extras
+      - run: uv run pytest tests/integration/ -v
+        env:
+          RUN_INTEGRATION: "1"
+          TEST_POSTGRES_URL: postgresql://sr2:sr2@localhost:5432/sr2_test
