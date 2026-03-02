@@ -51,27 +51,33 @@ class Session:
         call_id: str = "",
     ) -> None:
         """Add a tool call + result pair (two turns)."""
-        self.turns.append({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": json.dumps(arguments),
-                },
-            }],
-            "content_type": "tool_call",
-            "metadata": {"tool_name": tool_name, "args_summary": str(arguments)[:100]},
-        })
-        self.turns.append({
-            "role": "tool_result",
-            "content": result,
-            "content_type": "tool_output",
-            "tool_call_id": call_id,
-            "metadata": {"tool_name": tool_name},
-        })
+        self.turns.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": json.dumps(arguments),
+                        },
+                    }
+                ],
+                "content_type": "tool_call",
+                "metadata": {"tool_name": tool_name, "args_summary": str(arguments)[:100]},
+            }
+        )
+        self.turns.append(
+            {
+                "role": "tool_result",
+                "content": result,
+                "content_type": "tool_output",
+                "tool_call_id": call_id,
+                "metadata": {"tool_name": tool_name},
+            }
+        )
         self.last_activity = datetime.now(UTC)
         self._enforce_rolling()
 
@@ -145,11 +151,14 @@ class SessionManager:
                 return session
 
         # Create new
-        config = self._configs.get(session_name, SessionConfig(
-            name=session_name,
-            max_turns=self._default.max_turns,
-            idle_timeout_minutes=self._default.idle_timeout_minutes,
-        ))
+        config = self._configs.get(
+            session_name,
+            SessionConfig(
+                name=session_name,
+                max_turns=self._default.max_turns,
+                idle_timeout_minutes=self._default.idle_timeout_minutes,
+            ),
+        )
         session = Session(session_name, config)
         self._sessions[session_name] = session
 

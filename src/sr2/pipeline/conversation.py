@@ -99,9 +99,7 @@ class ConversationManager:
         if not zones.compacted:
             return None
 
-        turns_text = "\n".join(
-            f"{t.role}: {t.content}" for t in zones.compacted
-        )
+        turns_text = "\n".join(f"{t.role}: {t.content}" for t in zones.compacted)
         first_turn = zones.compacted[0].turn_number
         last_turn = zones.compacted[-1].turn_number
         turn_range = f"{first_turn}-{last_turn}"
@@ -115,9 +113,7 @@ class ConversationManager:
         if hasattr(result.summary, "summary_of_turns"):
             from sr2.resolvers.summarization_resolver import SummarizationResolver
 
-            summary_text = SummarizationResolver.format_structured_summary(
-                result.summary
-            )
+            summary_text = SummarizationResolver.format_structured_summary(result.summary)
         else:
             summary_text = str(result.summary)
 

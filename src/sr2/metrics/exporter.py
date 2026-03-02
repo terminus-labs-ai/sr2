@@ -49,9 +49,7 @@ class PrometheusExporter:
             avg = self._collector.get_average(name, 100)
             if avg is not None:
                 avg_name = f"{name}_avg100"
-                lines.append(
-                    f"# HELP {avg_name} Average over last 100 invocations"
-                )
+                lines.append(f"# HELP {avg_name} Average over last 100 invocations")
                 lines.append(f"# TYPE {avg_name} gauge")
                 lines.append(f"{avg_name} {avg:.4f}")
 

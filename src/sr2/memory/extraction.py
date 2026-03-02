@@ -18,11 +18,11 @@ class MemoryExtractor:
         max_memories_per_turn: int = 5,
     ):
         """Args:
-            llm_callable: async function(prompt: str) -> str.
-                          Wraps LiteLLM or any LLM call.
-            store: MemoryStore to save extracted memories.
-            key_schema: list of {"prefix": str, "examples": list[str]}
-            max_memories_per_turn: max memories to extract per turn.
+        llm_callable: async function(prompt: str) -> str.
+                      Wraps LiteLLM or any LLM call.
+        store: MemoryStore to save extracted memories.
+        key_schema: list of {"prefix": str, "examples": list[str]}
+        max_memories_per_turn: max memories to extract per turn.
         """
         self._llm = llm_callable
         self._store = store

@@ -276,4 +276,3 @@ mcp_servers: []
   #   prompts: null
   #   expose_prompts_as_tools: false
   #   sampling: <required>
-

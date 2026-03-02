@@ -44,10 +44,12 @@ class ContextBridge:
             system_parts.append(memory)
 
         if system_parts:
-            messages.append({
-                "role": "system",
-                "content": "\n\n".join(system_parts),
-            })
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "\n\n".join(system_parts),
+                }
+            )
 
         # 2. Session turns
         for turn in session_turns:
@@ -56,24 +58,30 @@ class ContextBridge:
 
             # Map internal roles to LLM roles
             if role == "tool_result":
-                messages.append({
-                    "role": "tool",
-                    "content": content,
-                    "tool_call_id": turn.get("tool_call_id", ""),
-                    "name": turn.get("metadata", {}).get("tool_name", ""),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": content,
+                        "tool_call_id": turn.get("tool_call_id", ""),
+                        "name": turn.get("metadata", {}).get("tool_name", ""),
+                    }
+                )
             elif role == "assistant" and turn.get("tool_calls"):
                 # Assistant message with tool calls
-                messages.append({
-                    "role": "assistant",
-                    "content": content or None,
-                    "tool_calls": self._sanitize_tool_calls(turn["tool_calls"]),
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content or None,
+                        "tool_calls": self._sanitize_tool_calls(turn["tool_calls"]),
+                    }
+                )
             else:
-                messages.append({
-                    "role": role,
-                    "content": content,
-                })
+                messages.append(
+                    {
+                        "role": role,
+                        "content": content,
+                    }
+                )
 
         # 3. Current input (if not already the last user message)
         if current_input:
@@ -98,12 +106,14 @@ class ContextBridge:
 
         Used during the tool-call loop to avoid full pipeline recompile.
         """
-        messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "name": tool_name,
-            "content": result,
-        })
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "name": tool_name,
+                "content": result,
+            }
+        )
         return messages
 
     def append_assistant_tool_calls(
@@ -127,24 +137,28 @@ class ContextBridge:
         # Convert to API format
         formatted_calls = []
         for tc in tool_calls:
-            formatted_calls.append({
-                "id": tc["id"],
-                "type": "function",
-                "function": {
-                    "name": tc["name"],
-                    "arguments": json.dumps(tc["arguments"]),
-                },
-            })
+            formatted_calls.append(
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc["arguments"]),
+                    },
+                }
+            )
 
         # Use raw text as content so models that emit tool calls as text
         # see their own output in the conversation history.
         effective_content = content or raw_tool_call_text or None
 
-        messages.append({
-            "role": "assistant",
-            "content": effective_content,
-            "tool_calls": formatted_calls,
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": effective_content,
+                "tool_calls": formatted_calls,
+            }
+        )
         return messages
 
     @staticmethod
@@ -173,6 +187,7 @@ class ContextBridge:
                     # Likely Python str() output like "{'key': 'val'}"
                     # Try ast.literal_eval to parse, then re-serialize
                     import ast
+
                     try:
                         parsed = ast.literal_eval(args)
                         func = dict(func)

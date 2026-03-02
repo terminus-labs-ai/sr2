@@ -27,10 +27,10 @@ class ConflictDetector:
         embedding_callable=None,
     ):
         """Args:
-            store: Memory store to check against.
-            semantic_threshold: Similarity threshold for semantic conflict detection.
-            use_semantic: Whether to use semantic similarity (requires embedding_callable).
-            embedding_callable: async function(text: str) -> list[float]. Optional.
+        store: Memory store to check against.
+        semantic_threshold: Similarity threshold for semantic conflict detection.
+        use_semantic: Whether to use semantic similarity (requires embedding_callable).
+        embedding_callable: async function(text: str) -> list[float]. Optional.
         """
         self._store = store
         self._threshold = semantic_threshold

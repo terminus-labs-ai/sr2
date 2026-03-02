@@ -3,6 +3,7 @@ from sr2.config.models import PipelineConfig
 
 class ConfigValidationError(Exception):
     """Raised when config validation fails."""
+
     def __init__(self, errors: list[str]):
         self.errors = errors
         super().__init__(f"Config validation failed: {'; '.join(errors)}")
@@ -44,7 +45,7 @@ def validate_config(config: PipelineConfig) -> list[str]:
     # Check for always_new appearing BEFORE append_only
     for i, layer in enumerate(config.layers):
         if layer.cache_policy == "always_new":
-            for later_layer in config.layers[i + 1:]:
+            for later_layer in config.layers[i + 1 :]:
                 if later_layer.cache_policy == "append_only":
                     errors.append(
                         f"Layer '{layer.name}' with cache_policy 'always_new' appears before "
@@ -58,14 +59,14 @@ def validate_config(config: PipelineConfig) -> list[str]:
 
     # Warning: summarization enabled but compaction disabled
     if config.summarization.enabled and not config.compaction.enabled:
-        warnings.append("Summarization is enabled but compaction is disabled (should compact first)")
+        warnings.append(
+            "Summarization is enabled but compaction is disabled (should compact first)"
+        )
 
     # Warning: retrieval enabled but no retrieval source
     if config.retrieval.enabled:
         has_retrieval_source = any(
-            item.source == "retrieval"
-            for layer in config.layers
-            for item in layer.contents
+            item.source == "retrieval" for layer in config.layers for item in layer.contents
         )
         if not has_retrieval_source:
             warnings.append("Retrieval is enabled but no layer has source 'retrieval'")

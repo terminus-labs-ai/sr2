@@ -70,15 +70,21 @@ class Agent:
 
         # SR2 facade — owns memory, pipeline, resolvers, compaction, metrics
         # MCP resource/prompt readers are wired after MCPManager is created below
-        self._sr2 = SR2(SR2Config(
-            config_dir=config.config_dir,
-            defaults_path=config.defaults_path,
-            agent_yaml=self._agent_yaml,
-            fast_complete=lambda s, p: self._llm.fast_complete(s, p),
-            embed=self._llm.embed,
-            mcp_resource_reader=lambda uri, server_name=None: self._mcp_manager.read_resource(uri, server_name=server_name),
-            mcp_prompt_reader=lambda name, args=None, server_name=None: self._mcp_manager.get_prompt(name, args, server_name=server_name),
-        ))
+        self._sr2 = SR2(
+            SR2Config(
+                config_dir=config.config_dir,
+                defaults_path=config.defaults_path,
+                agent_yaml=self._agent_yaml,
+                fast_complete=lambda s, p: self._llm.fast_complete(s, p),
+                embed=self._llm.embed,
+                mcp_resource_reader=lambda uri, server_name=None: self._mcp_manager.read_resource(
+                    uri, server_name=server_name
+                ),
+                mcp_prompt_reader=lambda name, args=None, server_name=None: (
+                    self._mcp_manager.get_prompt(name, args, server_name=server_name)
+                ),
+            )
+        )
 
         # Tools
         self._tool_executor = tool_executor or ToolExecutor()
@@ -151,13 +157,14 @@ class Agent:
                     url=server.url,
                     transport=server.transport,
                     tools=server.tools,
-                    headers={
-                        k: self._resolve_env_vars(v)
-                        for k, v in server.headers.items()
-                    } if server.headers else None,
+                    headers={k: self._resolve_env_vars(v) for k, v in server.headers.items()}
+                    if server.headers
+                    else None,
                     env=server.env,
                     args=server.args,
-                    roots=[self._resolve_env_vars(r) for r in server.roots] if server.roots else None,
+                    roots=[self._resolve_env_vars(r) for r in server.roots]
+                    if server.roots
+                    else None,
                     resources=server.resources,
                     expose_resources_as_tools=server.expose_resources_as_tools,
                     prompts=server.prompts,
@@ -178,6 +185,7 @@ class Agent:
         self._a2a_client_tools: list = []
         for a2a_conf in self._agent_yaml.get("a2a_clients", []):
             from sr2.a2a.client import A2AClientTool, A2AToolConfig
+
             tool = A2AClientTool(
                 config=A2AToolConfig(
                     name=a2a_conf["name"],
@@ -233,7 +241,9 @@ class Agent:
                     logger.info(f"Ollama model '{model_name}' already available")
                     continue
 
-                logger.info(f"Pulling Ollama model '{model_name}' from {base_url} (this may take a while)...")
+                logger.info(
+                    f"Pulling Ollama model '{model_name}' from {base_url} (this may take a while)..."
+                )
                 async with httpx.AsyncClient(timeout=None) as client:
                     resp = await client.post(
                         f"{base_url}/api/pull",
@@ -290,13 +300,26 @@ class Agent:
             logger.info(f"MCP '{server}': registered tools {tools}")
 
         # Register MCP resource/prompt tools if any server requests it
-        from runtime.mcp.client import MCPResourceHandler, MCPListResourcesHandler, MCPGetPromptHandler
+        from runtime.mcp.client import (
+            MCPResourceHandler,
+            MCPListResourcesHandler,
+            MCPGetPromptHandler,
+        )
+
         for server in self._agent_config.mcp_servers:
-            if server.expose_resources_as_tools and not self._tool_executor.has("mcp_read_resource"):
-                self._tool_executor.register("mcp_read_resource", MCPResourceHandler(self._mcp_manager))
-                self._tool_executor.register("mcp_list_resources", MCPListResourcesHandler(self._mcp_manager))
+            if server.expose_resources_as_tools and not self._tool_executor.has(
+                "mcp_read_resource"
+            ):
+                self._tool_executor.register(
+                    "mcp_read_resource", MCPResourceHandler(self._mcp_manager)
+                )
+                self._tool_executor.register(
+                    "mcp_list_resources", MCPListResourcesHandler(self._mcp_manager)
+                )
             if server.expose_prompts_as_tools and not self._tool_executor.has("mcp_get_prompt"):
-                self._tool_executor.register("mcp_get_prompt", MCPGetPromptHandler(self._mcp_manager))
+                self._tool_executor.register(
+                    "mcp_get_prompt", MCPGetPromptHandler(self._mcp_manager)
+                )
 
         # Start all interface plugins
         for name, plugin in self._plugins.items():
@@ -351,7 +374,9 @@ class Agent:
         """
         # Session management
         logger.info(f"Agent._handle_trigger called with {trigger.plugin_name}")
-        logger.info(f"Agent._handle_trigger: lifecycle={trigger.session_lifecycle} session_name={trigger.session_name}")
+        logger.info(
+            f"Agent._handle_trigger: lifecycle={trigger.session_lifecycle} session_name={trigger.session_name}"
+        )
 
         if trigger.session_lifecycle == "ephemeral":
             session = self._sessions.create_ephemeral(trigger.session_name)
@@ -362,7 +387,9 @@ class Agent:
         # TODO: add a proper handler for special commands like __clear_session__, and expand these commands as needed
         if trigger.input_data == "__clear_session__":
             await self._sessions.destroy(trigger.session_name)
-            logger.info(f"gent._handle_trigger Session {trigger.session_name} from {trigger.plugin_name} cleared")
+            logger.info(
+                f"gent._handle_trigger Session {trigger.session_name} from {trigger.plugin_name} cleared"
+            )
             return "Session cleared."
 
         # Add input to session (if not empty — timers have no input)
@@ -420,17 +447,17 @@ class Agent:
             asyncio.create_task(self._sessions.save_session(session.id))
 
         # Post-process async
-        asyncio.create_task(self._sr2.post_process(
-            turn_number=session.turn_count,
-            role="assistant",
-            content=loop_result.response_text or "",
-            session_id=session.id,
-        ))
+        asyncio.create_task(
+            self._sr2.post_process(
+                turn_number=session.turn_count,
+                role="assistant",
+                content=loop_result.response_text or "",
+                session_id=session.id,
+            )
+        )
 
         # Prefix tracking + metrics
-        cache_report = self._sr2.compare_prefix(
-            ctx.compiled_snapshot, loop_result.cached_tokens
-        )
+        cache_report = self._sr2.compare_prefix(ctx.compiled_snapshot, loop_result.cached_tokens)
         self._sr2.collect_metrics(
             pipeline_result=ctx.pipeline_result,
             interface=trigger.interface_name,

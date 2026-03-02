@@ -18,10 +18,7 @@ class ConfigLoader:
         # Extract pipeline fields from the nested pipeline: key
         pipeline_raw = raw.get("pipeline", {})
         pipeline_fields = PipelineConfig.model_fields
-        filtered = {
-            k: v for k, v in pipeline_raw.items()
-            if k in pipeline_fields and v is not None
-        }
+        filtered = {k: v for k, v in pipeline_raw.items() if k in pipeline_fields and v is not None}
         return PipelineConfig(**filtered)
 
     def _load_with_inheritance(self, path: Path) -> dict:
@@ -50,9 +47,7 @@ class ConfigLoader:
         """Resolve an extends value to an absolute path."""
         if extends == "defaults":
             if self._defaults_path is None:
-                raise FileNotFoundError(
-                    "No defaults_path configured but config extends 'defaults'"
-                )
+                raise FileNotFoundError("No defaults_path configured but config extends 'defaults'")
             return Path(self._defaults_path).resolve()
         elif extends == "agent":
             return (current_path.parent.parent / "agent.yaml").resolve()

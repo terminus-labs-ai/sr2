@@ -49,9 +49,7 @@ class SchemaAndSampleRule:
 
         hint = None
         if config.get("recovery_hint"):
-            tool_name = (
-                inp.metadata.get("tool_name", "the tool") if inp.metadata else "the tool"
-            )
+            tool_name = inp.metadata.get("tool_name", "the tool") if inp.metadata else "the tool"
             hint = f"Re-fetch with {tool_name}"
 
         return CompactionOutput(

@@ -159,17 +159,13 @@ class MCPPromptConfig(BaseModel):
 class MCPSamplingConfig(BaseModel):
     """Sampling policy for MCP server-initiated LLM requests."""
 
-    enabled: bool = Field(
-        default=False, description="Enable sampling requests from this server."
-    )
+    enabled: bool = Field(default=False, description="Enable sampling requests from this server.")
     policy: Literal["auto_approve", "log_only", "deny"] = Field(
         default="log_only",
         description="Approval policy. 'auto_approve' runs requests silently. "
-                    "'log_only' logs and runs. 'deny' rejects all sampling requests.",
+        "'log_only' logs and runs. 'deny' rejects all sampling requests.",
     )
-    max_tokens: int = Field(
-        default=1024, ge=1, description="Max tokens per sampling request."
-    )
+    max_tokens: int = Field(default=1024, ge=1, description="Max tokens per sampling request.")
     rate_limit_per_minute: int = Field(
         default=10, ge=1, description="Max sampling requests per minute per server."
     )
@@ -189,7 +185,7 @@ class MCPServerConfig(BaseModel):
     headers: dict[str, str] | None = Field(
         default=None,
         description="HTTP headers for http/sse transport (e.g. Authorization). "
-                    "Supports ${VAR} env var substitution.",
+        "Supports ${VAR} env var substitution.",
     )
     env: dict[str, str] | None = Field(
         default=None, description="Environment variables for the server process."
@@ -198,7 +194,7 @@ class MCPServerConfig(BaseModel):
     roots: list[str] | None = Field(
         default=None,
         description="Root URIs to advertise to the server (e.g. 'file:///home/user/project'). "
-                    "Supports ${VAR} env var substitution.",
+        "Supports ${VAR} env var substitution.",
     )
     resources: list[MCPResourceConfig] | None = Field(
         default=None, description="Resources to auto-discover from this server."
@@ -222,12 +218,8 @@ class MCPServerConfig(BaseModel):
 class StreamContentConfig(BaseModel):
     """Controls what gets streamed beyond text deltas."""
 
-    tool_status: bool = Field(
-        default=True, description="Stream tool invocation status."
-    )
-    tool_results: bool = Field(
-        default=False, description="Stream tool result content."
-    )
+    tool_status: bool = Field(default=True, description="Stream tool invocation status.")
+    tool_results: bool = Field(default=False, description="Stream tool result content.")
 
 
 class RuntimeConfig(BaseModel):
@@ -259,12 +251,8 @@ class AgentYAMLConfig(BaseModel):
     agent_name: str | None = Field(default=None, description="Agent display name.")
     extends: str | None = Field(default=None, description="Parent config to inherit from.")
     system_prompt: str = Field(default="", description="System prompt for the LLM.")
-    pipeline: dict = Field(
-        default_factory=dict, description="Pipeline configuration."
-    )
-    runtime: RuntimeConfig = Field(
-        default_factory=RuntimeConfig, description="Runtime settings."
-    )
+    pipeline: dict = Field(default_factory=dict, description="Pipeline configuration.")
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig, description="Runtime settings.")
     interfaces: dict[str, InterfaceConfig] = Field(
         default_factory=dict, description="Interface plugin definitions."
     )

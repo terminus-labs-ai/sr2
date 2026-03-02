@@ -16,6 +16,6 @@ services:
 
 networks:
   web:
-    external: false 
+    external: false
   sr2:
     external: false
