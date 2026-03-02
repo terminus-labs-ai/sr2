@@ -4,7 +4,7 @@
 
 ```bash
 # Clone
-git clone https://github.com/sr2labs/sr2.git
+git clone https://github.com/terminus-labs-ai/sr2.git
 cd sr2
 
 # Install with dev dependencies

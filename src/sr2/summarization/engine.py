@@ -3,10 +3,10 @@
 import logging
 
 import json
-import re
 from dataclasses import dataclass
 
 from sr2.config.models import SummarizationConfig
+from sr2.normalization import ResponseNormalizer
 from sr2.summarization.prompts import SummarizationPromptBuilder
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ class SummarizationEngine:
         self._config = config
         self._llm = llm_callable
         self._prompt_builder = SummarizationPromptBuilder(config)
+        self._normalizer = ResponseNormalizer()
 
     async def summarize(
         self,
@@ -94,7 +95,7 @@ class SummarizationEngine:
         - JSON in markdown code fences
         - Malformed JSON -> fallback to raw text in StructuredSummary
         """
-        cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`")
+        cleaned = self._normalizer.normalize(raw)
 
         try:
             data = json.loads(cleaned)

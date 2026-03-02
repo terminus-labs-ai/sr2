@@ -115,6 +115,26 @@ def create_http_app(agent: Agent) -> FastAPI:
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
+    @app.post("/a2a/message")
+    async def a2a_message(request: Request):
+        body = await request.json()
+        task_id = body.get("task_id", f"task_{uuid.uuid4().hex[:8]}")
+        message = body.get("message", "")
+        metadata = body.get("metadata")
+
+        a2a_plugin = next(
+            (p for p in agent._plugins.values() if hasattr(p, "handle_a2a_request")),
+            None,
+        )
+        if a2a_plugin is None:
+            return JSONResponse(
+                {"task_id": task_id, "status": "failed", "result": "No A2A interface configured"},
+                status_code=404,
+            )
+
+        result = await a2a_plugin.handle_a2a_request(task_id, message, metadata)
+        return JSONResponse({"task_id": task_id, "status": "completed", "result": result})
+
     @app.get("/.well-known/agent.json")
     async def agent_card():
         card = agent._generate_agent_card()

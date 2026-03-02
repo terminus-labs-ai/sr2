@@ -39,4 +39,4 @@ The foundation: a config-driven context engineering library for AI agents.
 
 ---
 
-Have ideas? [Open an issue](https://github.com/sr2labs/sr2/issues).
+Have ideas? [Open an issue](https://github.com/terminus-labs-ai/sr2/issues).

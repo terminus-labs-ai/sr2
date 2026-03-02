@@ -174,6 +174,22 @@ class Agent:
             cls = getattr(mod, ct["class"])
             self._tool_executor.register(ct["name"], cls())
 
+        # A2A client tools — register remote agents callable as tools
+        self._a2a_client_tools: list = []
+        for a2a_conf in self._agent_yaml.get("a2a_clients", []):
+            from sr2.a2a.client import A2AClientTool, A2AToolConfig
+            tool = A2AClientTool(
+                config=A2AToolConfig(
+                    name=a2a_conf["name"],
+                    target_url=a2a_conf["url"],
+                    description=a2a_conf.get("description", ""),
+                    timeout_seconds=a2a_conf.get("timeout_seconds", 120.0),
+                ),
+                http_callable=self._make_http_callable(),
+            )
+            self._tool_executor.register(a2a_conf["name"], tool)
+            self._a2a_client_tools.append(tool)
+
     # --- Public API ---
 
     async def handle_user_message(
@@ -439,6 +455,19 @@ class Agent:
     # --- Internal helpers ---
 
     @staticmethod
+    def _make_http_callable():
+        """Create an httpx-based HTTP callable for A2A client tools."""
+        import httpx
+
+        async def _http_call(url: str, payload: dict, timeout: float) -> dict:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+
+        return _http_call
+
+    @staticmethod
     def _resolve_env_vars(value: str) -> str:
         """Replace ${VAR_NAME} with environment variable values."""
 
@@ -494,6 +523,10 @@ class Agent:
             if server.expose_prompts_as_tools:
                 schemas.extend(self._mcp_manager.get_prompt_tool_schemas())
                 break
+
+        # Add A2A client tool schemas
+        for tool in self._a2a_client_tools:
+            schemas.append(tool.tool_definition)
 
         # Add tool_definitions from agent.yaml (e.g. post_to_session)
         for tool_def in self._agent_yaml.get("tool_definitions", []):
