@@ -4,7 +4,7 @@
 
 ```
                     ┌──────────────────────────────┐
-                    │        Agent Harness          │
+                    │        Agent Runtime          │
                     │   (your code / framework)     │
                     └──────────┬───────────────────┘
                                │
@@ -22,7 +22,7 @@
                                │ CompiledContext
                     ┌──────────▼───────────────────┐
                     │         LLM Call              │
-                    │    (handled by harness)       │
+                    │    (handled by runtime)       │
                     └──────────┬───────────────────┘
                                │
                     ┌──────────▼───────────────────┐
@@ -41,7 +41,7 @@
    - Resolve content items via registered resolvers
    - Enforce token budget (trim from last layers first)
 4. **CompiledContext** returned — content string + token count + metrics
-5. **Agent harness** sends compiled context to LLM
+5. **Agent runtime** sends compiled context to LLM
 6. **PostLLMProcessor** runs async post-processing:
    - Memory extraction from the conversation turn
    - Conflict detection and resolution

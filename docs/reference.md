@@ -145,12 +145,12 @@ Deep merge, more specific wins. Use `extends:` to reference parent config.
 
 See `configs/agents/edi/` for a working example.
 
-## Harness Config (`harness:`)
+## Runtime Config (`runtime:`)
 
-The `harness` section configures the agent runtime — LLM connections, database, loop behavior, and session defaults.
+The `runtime` section configures the agent runtime — LLM connections, database, loop behavior, and session defaults.
 
 ```yaml
-harness:
+runtime:
   database:
     url: "${DATABASE_URL}"           # PostgreSQL connection string (env var substitution)
     pool_min: 2                      # Minimum connection pool size
@@ -232,7 +232,7 @@ Plugin-specific fields (`port`, `interval_seconds`, `enabled`, etc.) are passed 
 
 ## Sessions (`sessions:`)
 
-Named session configurations override the harness defaults.
+Named session configurations override the runtime defaults.
 
 ```yaml
 sessions:

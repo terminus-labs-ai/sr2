@@ -109,6 +109,45 @@ class TestSummarizationEngine:
         assert result.turn_range == "1-20"
 
     @pytest.mark.asyncio
+    async def test_think_block_json_parsed_correctly(self):
+        """<think> prefix is stripped and JSON fields parsed correctly."""
+        payload = {"key_decisions": ["Use Redis"], "facts": ["Cache hit rate 90%"], "unresolved": []}
+        response = f"<think>internal reasoning</think>\n{json.dumps(payload)}"
+
+        async def mock_llm(system: str, prompt: str) -> str:
+            return response
+
+        config = SummarizationConfig(output_format="structured")
+        engine = SummarizationEngine(config=config, llm_callable=mock_llm)
+        result = await engine.summarize("turns text", "1-10", original_tokens=500)
+
+        assert isinstance(result.summary, StructuredSummary)
+        assert result.summary.key_decisions == ["Use Redis"]
+        assert result.summary.facts == ["Cache hit rate 90%"]
+        assert result.summary.raw_text == response
+
+    @pytest.mark.asyncio
+    async def test_thinking_block_and_fence_parsed_correctly(self):
+        """<thinking> block + ```json fence both stripped and fields parsed."""
+        payload = {"key_decisions": ["Deploy to prod"], "unresolved": ["Cost estimate"]}
+        response = (
+            "<thinking>\nreasoning step 1\nreasoning step 2\n</thinking>\n"
+            f"```json\n{json.dumps(payload)}\n```"
+        )
+
+        async def mock_llm(system: str, prompt: str) -> str:
+            return response
+
+        config = SummarizationConfig(output_format="structured")
+        engine = SummarizationEngine(config=config, llm_callable=mock_llm)
+        result = await engine.summarize("turns text", "1-10", original_tokens=500)
+
+        assert isinstance(result.summary, StructuredSummary)
+        assert result.summary.key_decisions == ["Deploy to prod"]
+        assert result.summary.unresolved == ["Cost estimate"]
+        assert result.summary.raw_text == response
+
+    @pytest.mark.asyncio
     async def test_missing_fields_default_to_empty(self):
         """Missing fields in JSON default to empty lists."""
         response = json.dumps({"key_decisions": ["Only field"]})

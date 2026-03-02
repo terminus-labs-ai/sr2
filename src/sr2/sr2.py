@@ -379,13 +379,14 @@ class SR2:
             return pipeline
         return None
 
-    @staticmethod
-    def _build_resolver_registry() -> ContentResolverRegistry:
+    def _build_resolver_registry(self) -> ContentResolverRegistry:
         """Build a registry with standard resolvers."""
+        from sr2.resolvers.retrieval_resolver import RetrievalResolver
         reg = ContentResolverRegistry()
         reg.register("config", ConfigResolver())
         reg.register("input", InputResolver())
         reg.register("session", SessionResolver())
         reg.register("runtime", RuntimeResolver())
         reg.register("static_template", StaticTemplateResolver())
+        reg.register("retrieval", RetrievalResolver(self._retriever, self._matcher))
         return reg

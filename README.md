@@ -222,7 +222,7 @@ src/
 │   ├── metrics/       #   Collector, exporter, alerts
 │   └── a2a/           #   Agent-to-Agent protocol support
 │
-├── harness/           # Agent runtime (optional, uses the library)
+├── runtime/           # Agent runtime (optional, uses the library)
 │   ├── agent.py       #   Main Agent class
 │   ├── cli.py         #   CLI entry point
 │   ├── llm_client.py  #   LiteLLM wrapper
