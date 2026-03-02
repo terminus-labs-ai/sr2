@@ -37,19 +37,11 @@ class ToolStateMachine:
 
     def get_allowed_tools(self) -> list[str]:
         """Get list of currently allowed tool names."""
-        return [
-            name
-            for name in self._tools
-            if self.current_state.is_tool_allowed(name)
-        ]
+        return [name for name in self._tools if self.current_state.is_tool_allowed(name)]
 
     def get_denied_tools(self) -> list[str]:
         """Get list of currently denied tool names."""
-        return [
-            name
-            for name in self._tools
-            if not self.current_state.is_tool_allowed(name)
-        ]
+        return [name for name in self._tools if not self.current_state.is_tool_allowed(name)]
 
     def try_transition(self, trigger: str, context: dict | None = None) -> bool:
         """Attempt a state transition.

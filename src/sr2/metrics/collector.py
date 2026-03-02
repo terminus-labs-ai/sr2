@@ -42,9 +42,7 @@ class MetricCollector:
 
         # Pipeline-level metrics
         snapshot.add(MetricNames.PIPELINE_TOTAL_TOKENS, result.total_tokens, "tokens")
-        snapshot.add(
-            MetricNames.PIPELINE_TOTAL_DURATION_MS, result.total_duration_ms, "ms"
-        )
+        snapshot.add(MetricNames.PIPELINE_TOTAL_DURATION_MS, result.total_duration_ms, "ms")
 
         if result.cache_hit_rate is not None:
             snapshot.add(MetricNames.CACHE_HIT_RATE, result.cache_hit_rate, "ratio")

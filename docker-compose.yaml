@@ -10,7 +10,7 @@ services:
       - ./configs:/app/configs
     environment:
       PORT: 8008
-    
+
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
@@ -29,7 +29,7 @@ services:
       - ./.dockervols/open-webui:/app/backend/data
     depends_on:
       - sr2-edi
-      
+
   ollama:
     image: ollama/ollama:rocm
     container_name: ollama
@@ -65,7 +65,7 @@ services:
             - driver: amd
               count: 1
               capabilities: [gpu]
-    env_file: 
+    env_file:
       - path: /etc/docker/secrets/${COMPOSE_PROJECT_NAME}/.env
 
   ollama-exporter:
@@ -127,6 +127,6 @@ services:
 
 networks:
   web:
-    external: false 
+    external: false
   sr2:
     external: false

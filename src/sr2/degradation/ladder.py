@@ -9,7 +9,11 @@ DegradationLevel = Literal[
 ]
 
 DEGRADATION_ORDER: list[DegradationLevel] = [
-    "full", "skip_summarization", "skip_intent", "raw_context", "system_prompt_only",
+    "full",
+    "skip_summarization",
+    "skip_intent",
+    "raw_context",
+    "system_prompt_only",
 ]
 
 
@@ -41,6 +45,13 @@ class DegradationLadder:
             "skip_summarization": {"summarization"},
             "skip_intent": {"summarization", "intent_detection"},
             "raw_context": {"summarization", "intent_detection", "retrieval", "compaction"},
-            "system_prompt_only": {"summarization", "intent_detection", "retrieval", "compaction", "session", "memory"},
+            "system_prompt_only": {
+                "summarization",
+                "intent_detection",
+                "retrieval",
+                "compaction",
+                "session",
+                "memory",
+            },
         }
         return stage in skip_map.get(self._level, set())

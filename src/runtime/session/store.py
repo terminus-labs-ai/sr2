@@ -148,9 +148,7 @@ class PostgresSessionStore:
 
     async def load(self, session_id: str) -> Session | None:
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM sessions WHERE id = $1", session_id
-            )
+            row = await conn.fetchrow("SELECT * FROM sessions WHERE id = $1", session_id)
         if not row:
             return None
         config = SessionConfig(
@@ -168,9 +166,7 @@ class PostgresSessionStore:
 
     async def delete(self, session_id: str) -> bool:
         async with self._pool.acquire() as conn:
-            result = await conn.execute(
-                "DELETE FROM sessions WHERE id = $1", session_id
-            )
+            result = await conn.execute("DELETE FROM sessions WHERE id = $1", session_id)
         return "DELETE 1" in result
 
     async def list_active(self) -> list[str]:

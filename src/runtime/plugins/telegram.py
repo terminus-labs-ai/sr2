@@ -123,9 +123,7 @@ class _TelegramStreamState:
             # Finalize current message if one exists
             if self._current_msg:
                 try:
-                    await self._current_msg.edit_text(
-                        text[:_MSG_LIMIT], parse_mode="Markdown"
-                    )
+                    await self._current_msg.edit_text(text[:_MSG_LIMIT], parse_mode="Markdown")
                 except Exception:
                     try:
                         await self._current_msg.edit_text(text[:_MSG_LIMIT])

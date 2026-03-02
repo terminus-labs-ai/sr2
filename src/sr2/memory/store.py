@@ -21,7 +21,9 @@ class MemoryStore(Protocol):
         """Get all memories with a given key. Sorted by extracted_at desc."""
         ...
 
-    async def search_by_key_prefix(self, prefix: str, include_archived: bool = False) -> list[Memory]:
+    async def search_by_key_prefix(
+        self, prefix: str, include_archived: bool = False
+    ) -> list[Memory]:
         """Get all memories whose key starts with prefix."""
         ...
 
@@ -74,7 +76,9 @@ class InMemoryMemoryStore:
             results = [m for m in results if not m.archived]
         return sorted(results, key=lambda m: m.extracted_at, reverse=True)
 
-    async def search_by_key_prefix(self, prefix: str, include_archived: bool = False) -> list[Memory]:
+    async def search_by_key_prefix(
+        self, prefix: str, include_archived: bool = False
+    ) -> list[Memory]:
         results = [m for m in self._memories.values() if m.key.startswith(prefix)]
         if not include_archived:
             results = [m for m in results if not m.archived]
@@ -93,7 +97,10 @@ class InMemoryMemoryStore:
         return False
 
     async def search_vector(
-        self, embedding: list[float], top_k: int = 10, include_archived: bool = False,
+        self,
+        embedding: list[float],
+        top_k: int = 10,
+        include_archived: bool = False,
     ) -> list[MemorySearchResult]:
         mems = [m for m in self._memories.values() if not m.archived or include_archived]
         return [
@@ -102,7 +109,10 @@ class InMemoryMemoryStore:
         ]
 
     async def search_keyword(
-        self, query: str, top_k: int = 10, include_archived: bool = False,
+        self,
+        query: str,
+        top_k: int = 10,
+        include_archived: bool = False,
     ) -> list[MemorySearchResult]:
         query_lower = query.lower()
         results = []
@@ -130,7 +140,7 @@ class PostgresMemoryStore:
 
     def __init__(self, pool) -> None:
         """Args:
-            pool: asyncpg connection pool
+        pool: asyncpg connection pool
         """
         self._pool = pool
 
@@ -183,11 +193,21 @@ class PostgresMemoryStore:
                     access_count = EXCLUDED.access_count, conflicts_with = EXCLUDED.conflicts_with,
                     archived = EXCLUDED.archived, raw_text = EXCLUDED.raw_text
                 """,
-                data["id"], data["key"], data["value"], data["memory_type"],
-                data["stability_score"], data["confidence"], data["confidence_source"],
-                json.dumps(data["dimensions"]), data["source_conversation"],
-                data["source_turn"], data["extracted_at"], data["last_accessed"],
-                data["access_count"], data["conflicts_with"], data["archived"],
+                data["id"],
+                data["key"],
+                data["value"],
+                data["memory_type"],
+                data["stability_score"],
+                data["confidence"],
+                data["confidence_source"],
+                json.dumps(data["dimensions"]),
+                data["source_conversation"],
+                data["source_turn"],
+                data["extracted_at"],
+                data["last_accessed"],
+                data["access_count"],
+                data["conflicts_with"],
+                data["archived"],
                 data["raw_text"],
             )
 
@@ -209,7 +229,9 @@ class PostgresMemoryStore:
             rows = await conn.fetch(query, key)
             return [self._row_to_memory(r) for r in rows]
 
-    async def search_by_key_prefix(self, prefix: str, include_archived: bool = False) -> list[Memory]:
+    async def search_by_key_prefix(
+        self, prefix: str, include_archived: bool = False
+    ) -> list[Memory]:
         """Get all memories whose key starts with prefix."""
         query = "SELECT * FROM memories WHERE key LIKE $1"
         if not include_archived:
@@ -234,7 +256,10 @@ class PostgresMemoryStore:
             return result == "UPDATE 1"
 
     async def search_vector(
-        self, embedding: list[float], top_k: int = 10, include_archived: bool = False,
+        self,
+        embedding: list[float],
+        top_k: int = 10,
+        include_archived: bool = False,
     ) -> list[MemorySearchResult]:
         """Semantic search by vector embedding."""
         query = """
@@ -264,7 +289,10 @@ class PostgresMemoryStore:
             ]
 
     async def search_keyword(
-        self, query: str, top_k: int = 10, include_archived: bool = False,
+        self,
+        query: str,
+        top_k: int = 10,
+        include_archived: bool = False,
     ) -> list[MemorySearchResult]:
         """Keyword search across key and value fields."""
         sql = """

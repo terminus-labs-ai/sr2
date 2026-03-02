@@ -9,5 +9,7 @@ class SessionResolver:
         window = config.get("window")
         if window is not None:
             history = history[-window:]
-        formatted = "\n".join(f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in history)
+        formatted = "\n".join(
+            f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in history
+        )
         return ResolvedContent(key=key, content=formatted, tokens=len(formatted.split()))

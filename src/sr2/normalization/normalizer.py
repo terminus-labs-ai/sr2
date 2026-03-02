@@ -14,11 +14,15 @@ class ResponseNormalizer:
 
     def __init__(self, steps: list[NormalizationStep] | None = None):
         """Default chain: StripThinkingBlocks → StripMarkdownFences → ExtractJsonObject."""
-        self._steps = [
-            StripThinkingBlocksStep(),
-            StripMarkdownFencesStep(),
-            ExtractJsonObjectStep(),
-        ] if steps is None else steps
+        self._steps = (
+            [
+                StripThinkingBlocksStep(),
+                StripMarkdownFencesStep(),
+                ExtractJsonObjectStep(),
+            ]
+            if steps is None
+            else steps
+        )
 
     def normalize(self, raw: str) -> str:
         """Thread raw through each step in order, return final text."""

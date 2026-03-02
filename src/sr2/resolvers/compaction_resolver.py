@@ -30,14 +30,11 @@ class CompactionResolver:
         result = self._engine.compact(turns)
 
         raw_window = self._engine._config.raw_window
-        compacted_zone = (
-            result.turns[:-raw_window] if len(result.turns) > raw_window else []
-        )
+        compacted_zone = result.turns[:-raw_window] if len(result.turns) > raw_window else []
 
         content = self._format_turns(compacted_zone)
         tokens = (
-            result.compacted_tokens
-            - sum(len(t.content) // 4 for t in result.turns[-raw_window:])
+            result.compacted_tokens - sum(len(t.content) // 4 for t in result.turns[-raw_window:])
             if len(result.turns) > raw_window
             else 0
         )

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 @dataclass
 class PipelineState:
     """Snapshot of pipeline state for cache decisions."""
+
     turn_number: int = 0
     current_intent: str | None = None
     previous_intent: str | None = None
@@ -14,13 +15,13 @@ class PipelineState:
 
 class CachePolicy(Protocol):
     """Protocol for cache policies."""
+
     def should_recompute(
         self,
         layer_name: str,
         current_state: PipelineState,
         previous_state: PipelineState | None,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 class CachePolicyRegistry:

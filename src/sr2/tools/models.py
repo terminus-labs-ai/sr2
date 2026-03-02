@@ -83,9 +83,9 @@ class ToolTransitionConfig(BaseModel):
 
     from_state: str = Field(description="Source state name, or 'any'")
     to_state: str = Field(description="Target state name")
-    trigger: Literal[
-        "agent_intent", "agent_action", "pipeline_signal", "user_confirmation"
-    ] = "agent_intent"
+    trigger: Literal["agent_intent", "agent_action", "pipeline_signal", "user_confirmation"] = (
+        "agent_intent"
+    )
     condition: str = Field(default="", description="Condition expression as string")
 
 
@@ -99,7 +99,5 @@ class ToolManagementConfig(BaseModel):
         ]
     )
     transitions: list[ToolTransitionConfig] = Field(default_factory=list)
-    masking_strategy: Literal["prefill", "allowed_list", "logit_mask", "none"] = (
-        "allowed_list"
-    )
+    masking_strategy: Literal["prefill", "allowed_list", "logit_mask", "none"] = "allowed_list"
     initial_state: str = "default"

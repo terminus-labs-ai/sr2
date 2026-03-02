@@ -9,9 +9,15 @@ cd sr2
 
 # Install with dev dependencies
 pip install -e ".[dev]"
+
+# Install pre-commit hooks
+pre-commit install
 ```
 
 Requires Python 3.12+.
+
+The pre-commit hooks run `ruff check` and `ruff format --check` automatically on
+every commit so lint issues are caught before they reach CI.
 
 ## Running Tests
 

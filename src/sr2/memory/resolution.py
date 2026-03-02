@@ -27,10 +27,10 @@ class ConflictResolver:
         strategies: dict[str, str] | None = None,
     ):
         """Args:
-            store: Memory store for archival operations.
-            strategies: mapping of memory_type -> resolution strategy.
-                Default: identity=latest_wins_archive, semi_stable=latest_wins_archive,
-                         dynamic=latest_wins_discard
+        store: Memory store for archival operations.
+        strategies: mapping of memory_type -> resolution strategy.
+            Default: identity=latest_wins_archive, semi_stable=latest_wins_archive,
+                     dynamic=latest_wins_discard
         """
         self._store = store
         self._strategies = strategies or {

@@ -12,8 +12,8 @@ class DimensionalMatcher:
         known_dimensions: list[dict] | None = None,
     ):
         """Args:
-            matching_strategy: "best_fit" | "exact" | "fallback_to_generic"
-            known_dimensions: list of {"name": str, "values": list[str] | "dynamic"}
+        matching_strategy: "best_fit" | "exact" | "fallback_to_generic"
+        known_dimensions: list of {"name": str, "values": list[str] | "dynamic"}
         """
         self._strategy = matching_strategy
         self._known = known_dimensions or []
@@ -60,9 +60,7 @@ class DimensionalMatcher:
 
             # Count matching dimensions
             matches = sum(1 for k, v in dims.items() if mem_dims.get(k) == v)
-            mismatches = sum(
-                1 for k, v in dims.items() if k in mem_dims and mem_dims[k] != v
-            )
+            mismatches = sum(1 for k, v in dims.items() if k in mem_dims and mem_dims[k] != v)
 
             if mismatches > 0:
                 # Dimension mismatch — penalize heavily
@@ -82,11 +80,7 @@ class DimensionalMatcher:
         dims: dict[str, str],
     ) -> list[MemorySearchResult]:
         """Only return memories that match all specified dimensions."""
-        return [
-            r
-            for r in results
-            if all(r.memory.dimensions.get(k) == v for k, v in dims.items())
-        ]
+        return [r for r in results if all(r.memory.dimensions.get(k) == v for k, v in dims.items())]
 
     def _unscoped_only(
         self,

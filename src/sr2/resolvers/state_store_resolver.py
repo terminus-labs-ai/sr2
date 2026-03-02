@@ -10,5 +10,6 @@ class StateStoreResolver:
         value = context.agent_config.get(key, "{}")
         if not isinstance(value, str):
             import json
+
             value = json.dumps(value)
         return ResolvedContent(key=key, content=value, tokens=len(value.split()))

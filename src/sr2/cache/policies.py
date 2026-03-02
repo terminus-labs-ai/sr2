@@ -3,12 +3,14 @@ from sr2.cache.registry import CachePolicyRegistry
 
 class ImmutablePolicy:
     """Never recompute mid-session."""
+
     def should_recompute(self, layer_name, current, previous) -> bool:
         return previous is None
 
 
 class RefreshOnTopicShiftPolicy:
     """Recompute when intent changes."""
+
     def should_recompute(self, layer_name, current, previous) -> bool:
         if previous is None:
             return True
@@ -17,6 +19,7 @@ class RefreshOnTopicShiftPolicy:
 
 class RefreshOnStateChangePolicy:
     """Recompute when state hash changes."""
+
     def should_recompute(self, layer_name, current, previous) -> bool:
         if previous is None:
             return True
@@ -25,24 +28,28 @@ class RefreshOnStateChangePolicy:
 
 class AppendOnlyPolicy:
     """Always recompute (content is append-only)."""
+
     def should_recompute(self, *args) -> bool:
         return True
 
 
 class AlwaysNewPolicy:
     """Always recompute."""
+
     def should_recompute(self, *args) -> bool:
         return True
 
 
 class PerInvocationPolicy:
     """Always recompute (unique per call)."""
+
     def should_recompute(self, *args) -> bool:
         return True
 
 
 class TemplateReusePolicy:
     """Recompute only on first call."""
+
     def should_recompute(self, layer_name, current, previous) -> bool:
         return previous is None
 

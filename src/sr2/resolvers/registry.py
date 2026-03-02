@@ -5,6 +5,7 @@ from typing import Protocol, Any
 @dataclass
 class ResolverContext:
     """Context passed to every resolver."""
+
     agent_config: dict
     trigger_input: Any
     session_id: str | None = None
@@ -14,6 +15,7 @@ class ResolverContext:
 @dataclass
 class ResolvedContent:
     """Output of a content resolver."""
+
     key: str
     content: str
     tokens: int
@@ -22,13 +24,13 @@ class ResolvedContent:
 
 class ContentResolver(Protocol):
     """Protocol that all resolvers must implement."""
+
     async def resolve(
         self,
         key: str,
         config: dict,
         context: ResolverContext,
-    ) -> ResolvedContent:
-        ...
+    ) -> ResolvedContent: ...
 
 
 class ContentResolverRegistry:

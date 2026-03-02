@@ -36,7 +36,9 @@ class A2APlugin:
         """A2A doesn't proactively send. Responses go through the A2A protocol."""
         pass
 
-    async def handle_a2a_request(self, task_id: str, message: str, metadata: dict | None = None) -> str:
+    async def handle_a2a_request(
+        self, task_id: str, message: str, metadata: dict | None = None
+    ) -> str:
         """Handle an inbound A2A request. Called by the A2A server adapter."""
         session_name = self._session_config.get("name", f"a2a_{task_id}")
         if "{task_id}" in session_name:

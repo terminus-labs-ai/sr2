@@ -88,9 +88,11 @@ class SR2:
         self._conflict_detector = ConflictDetector(store=self._memory_store)
         self._conflict_resolver = ConflictResolver(store=self._memory_store)
         self._extractor = MemoryExtractor(
-            llm_callable=lambda prompt: config.fast_complete(
-                "You extract structured memories from conversations.", prompt
-            ) if config.fast_complete else None,
+            llm_callable=lambda prompt: (
+                config.fast_complete("You extract structured memories from conversations.", prompt)
+                if config.fast_complete
+                else None
+            ),
             store=self._memory_store,
         )
 
@@ -124,9 +126,13 @@ class SR2:
         self._resolver_reg = self._build_resolver_registry()
         if config.mcp_resource_reader:
             from sr2.resolvers.mcp_resource_resolver import MCPResourceResolver
-            self._resolver_reg.register("mcp_resource", MCPResourceResolver(config.mcp_resource_reader))
+
+            self._resolver_reg.register(
+                "mcp_resource", MCPResourceResolver(config.mcp_resource_reader)
+            )
         if config.mcp_prompt_reader:
             from sr2.resolvers.mcp_prompt_resolver import MCPPromptResolver
+
             self._resolver_reg.register("mcp_prompt", MCPPromptResolver(config.mcp_prompt_reader))
         self._cache_reg = create_default_cache_registry()
 
@@ -164,12 +170,14 @@ class SR2:
         # OpenTelemetry (optional — only if otel extras installed)
         try:
             from sr2.metrics.otel_exporter import OTelExporter
+
             self._otel = OTelExporter(self._collector)
         except ImportError:
             self._otel = None
 
         # Internal bridge for build_messages only
         from runtime.llm import ContextBridge
+
         self._bridge = ContextBridge()
 
     async def process(
@@ -326,9 +334,7 @@ class SR2:
             "sr2_cache_hit_rate": loop_cache_hit_rate,
         }
         if cache_report is not None:
-            extra["sr2_context_prefix_stable"] = (
-                1.0 if cache_report.prefix_stable else 0.0
-            )
+            extra["sr2_context_prefix_stable"] = 1.0 if cache_report.prefix_stable else 0.0
             extra["sr2_cache_efficiency"] = cache_report.cache_efficiency
 
         self._collector.collect(pipeline_result, interface, extra_metrics=extra)
@@ -382,6 +388,7 @@ class SR2:
     def _build_resolver_registry(self) -> ContentResolverRegistry:
         """Build a registry with standard resolvers."""
         from sr2.resolvers.retrieval_resolver import RetrievalResolver
+
         reg = ContentResolverRegistry()
         reg.register("config", ConfigResolver())
         reg.register("input", InputResolver())

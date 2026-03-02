@@ -560,4 +560,3 @@ Order layers from most stable to least stable.
 | `persistent` | Survives across triggers. Compaction/summarization apply. | ✅ PostgreSQL | User conversations |
 | `ephemeral` | Fresh per trigger. Destroyed after processing. | ❌ In-memory | Heartbeats, A2A calls |
 | `rolling` | Persistent but capped at `max_turns`. Oldest dropped. | ✅ PostgreSQL | Monitoring, log watchers |
-

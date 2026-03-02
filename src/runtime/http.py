@@ -65,9 +65,7 @@ def create_http_app(agent: Agent) -> FastAPI:
                 if isinstance(content, list):
                     # Handle content array format
                     user_message = " ".join(
-                        p.get("text", "")
-                        for p in content
-                        if p.get("type") == "text"
+                        p.get("text", "") for p in content if p.get("type") == "text"
                     )
                 else:
                     user_message = content

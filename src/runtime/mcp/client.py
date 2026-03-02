@@ -21,6 +21,7 @@ try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamablehttp_client
+
     _MCP_AVAILABLE = True
 except ImportError:
     _MCP_AVAILABLE = False
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Tool Handlers
 # ---------------------------------------------------------------------------
+
 
 class MCPToolHandler:
     """Wraps a single MCP tool as a ToolHandler for the ToolExecutor."""
@@ -71,6 +73,7 @@ class MCPToolHandler:
 # Resource Handlers (exposed as agent tools when configured)
 # ---------------------------------------------------------------------------
 
+
 class MCPResourceHandler:
     """Wraps MCP resource read as a ToolHandler for on-demand access."""
 
@@ -96,6 +99,7 @@ class MCPListResourcesHandler:
 # Prompt Handler (exposed as agent tool when configured)
 # ---------------------------------------------------------------------------
 
+
 class MCPGetPromptHandler:
     """Wraps MCP prompt retrieval as a ToolHandler."""
 
@@ -109,6 +113,7 @@ class MCPGetPromptHandler:
 # ---------------------------------------------------------------------------
 # MCPManager
 # ---------------------------------------------------------------------------
+
 
 class MCPManager:
     """Manages connections to multiple MCP servers.
@@ -239,7 +244,8 @@ class MCPManager:
                 sampling_cb = self._build_sampling_callback(config)
 
                 session = ClientSession(
-                    read, write,
+                    read,
+                    write,
                     list_roots_callback=roots_cb,
                     sampling_callback=sampling_cb,
                 )
@@ -288,9 +294,7 @@ class MCPManager:
             if config.tools is not None and tool.name not in config.tools:
                 continue
 
-            logger.debug(
-                f"MCP tool '{tool.name}': inputSchema={tool.inputSchema}"
-            )
+            logger.debug(f"MCP tool '{tool.name}': inputSchema={tool.inputSchema}")
 
             # Store schema for tool definitions
             self._discovered_tools[tool.name] = {
@@ -451,9 +455,15 @@ class MCPManager:
                 "name": p.name,
                 "description": p.description if hasattr(p, "description") else "",
                 "arguments": [
-                    {"name": a.name, "description": getattr(a, "description", ""), "required": getattr(a, "required", False)}
+                    {
+                        "name": a.name,
+                        "description": getattr(a, "description", ""),
+                        "required": getattr(a, "required", False),
+                    }
                     for a in (p.arguments or [])
-                ] if hasattr(p, "arguments") and p.arguments else [],
+                ]
+                if hasattr(p, "arguments") and p.arguments
+                else [],
             }
             prompts.append(info)
             self._prompt_server_map[p.name] = config.name
@@ -553,10 +563,8 @@ class MCPManager:
 
         async def _list_roots(context):
             from mcp import types as mcp_types
-            roots = [
-                mcp_types.Root(uri=uri, name=uri)
-                for uri in config.roots
-            ]
+
+            roots = [mcp_types.Root(uri=uri, name=uri) for uri in config.roots]
             return mcp_types.ListRootsResult(roots=roots)
 
         return _list_roots
