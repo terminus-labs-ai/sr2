@@ -58,7 +58,7 @@ class PipelineEngine:
             "Resolved pipeline config: budget=%d, layers=[%s], "
             "compaction=%s, summarization=%s (trigger=%s), kv_cache=%s",
             config.token_budget,
-            ", ".join(l.name for l in config.layers),
+            ", ".join(layer.name for layer in config.layers),
             config.compaction.enabled,
             config.summarization.enabled,
             config.summarization.trigger,

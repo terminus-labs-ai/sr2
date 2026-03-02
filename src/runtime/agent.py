@@ -8,14 +8,14 @@ from dataclasses import dataclass
 
 import yaml
 
-from sr2 import SR2, SR2Config, ProcessedContext
+from sr2 import SR2, SR2Config
 
-from runtime.config import AgentYAMLConfig, LLMModelConfig, MCPServerConfig, ModelParams
-from runtime.llm import ContextBridge, LLMClient, LLMLoop, LoopResult
+from runtime.config import AgentYAMLConfig, LLMModelConfig, MCPServerConfig
+from runtime.llm import ContextBridge, LLMClient, LLMLoop
 from runtime.mcp import MCPManager
 from runtime.plugins.base import TriggerContext
 from runtime.plugins.registry import create_default_registry
-from runtime.session import Session, SessionConfig, SessionManager
+from runtime.session import SessionConfig, SessionManager
 from runtime.tool_executor import PostToSessionTool, ToolExecutor
 
 logger = logging.getLogger(__name__)
