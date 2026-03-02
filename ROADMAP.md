@@ -18,7 +18,9 @@ The foundation: a config-driven context engineering library for AI agents.
 
 ## v0.1.x — Polish
 
+- **CI pipeline hardening** — ~~fix ruff lint failures (unused imports, incomplete logging setup, missing config docs)~~ ✅ Done
 - **HTTP interface parity** — route HTTP/OpenAI-compatible requests through the interface plugin system instead of bypassing `handle_user_message()`. Currently the agent-level `pipeline:` config is used as a fallback, but proper per-interface routing (session lifecycle enforcement, dedicated pipeline config) requires an explicit `api` interface entry.
+- **StreamContentConfig documentation** — ~~add to auto-generated config reference~~ ✅ Done
 - Docs site (GitHub Pages)
 - One-command demo stack: `docker compose up` with example agent + Prometheus + Grafana and pre-built dashboards
 - Demo video / GIF for the README

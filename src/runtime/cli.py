@@ -10,14 +10,13 @@ import argparse
 import asyncio
 import logging
 import os
-import sys
 
 import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from runtime.agent import Agent, AgentConfig
+from runtime.agent import Agent, AgentConfig  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -114,19 +113,9 @@ async def run_agent(args):
 
 def main():
     args = parse_args()
-    fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-
-    # file_h = logging.FileHandler("run.log")
-    # file_h.setFormatter(fmt)
-    # file_h.setLevel(logging.DEBUG)
-
-    # console_h = logging.StreamHandler(sys.stdout)
-    # console_h.setFormatter(fmt)
-    # console_h.setLevel(logging.INFO)
 
     logging.basicConfig(
         level=logging.INFO,
-        # handlers=[file_h, console_h],
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         force=True,
     )

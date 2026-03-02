@@ -74,6 +74,7 @@ CONFIG_SECTIONS: list[tuple[str, type | None, int]] = [
     ("Model Parameters", ModelParams, 4),
     ("Loop", RuntimeLoopConfig, 3),
     ("Session Defaults", RuntimeSessionConfig, 3),
+    ("Stream Content", StreamContentConfig, 3),
     # --- Interfaces & Plugins ---
     ("Interfaces & Plugins", None, 2),
     ("Interface", InterfaceConfig, 3),
@@ -390,10 +391,6 @@ def generate_defaults_yaml() -> str:
     # Get actual default values from instantiated models
     pipeline_defaults = PipelineConfig().model_dump()
     agent_defaults = AgentYAMLConfig().model_dump()
-
-    # Get JSON schema for metadata (descriptions, types, constraints)
-    schema = generate_json_schema()
-    defs = schema.get("$defs", {})
 
     lines: list[str] = [
         "# SR2 - Comprehensive Configuration Defaults",
