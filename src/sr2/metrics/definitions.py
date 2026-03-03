@@ -101,6 +101,29 @@ class MetricNames:
     ZONE_COMPACTED_TOKENS = "sr2_zone_compacted_tokens"
     ZONE_SUMMARIZED_TOKENS = "sr2_zone_summarized_tokens"
 
+    # Conversation lifecycle
+    CONVERSATION_TURN_COUNT = "sr2_conversation_turn_count"
+    SESSION_DURATION_SECONDS = "sr2_session_duration_seconds"
+    SESSION_MESSAGE_COUNT = "sr2_session_message_count"
+
+    # Naive vs managed comparison
+    NAIVE_TOKEN_ESTIMATE = "sr2_naive_token_estimate"
+    TOKEN_SAVINGS_CUMULATIVE = "sr2_token_savings_cumulative"
+
+    # Context health
+    BUDGET_HEADROOM_TOKENS = "sr2_budget_headroom_tokens"
+    BUDGET_HEADROOM_RATIO = "sr2_budget_headroom_ratio"
+    TRUNCATION_EVENTS = "sr2_truncation_events"
+
+    # Zone dynamics
+    ZONE_TRANSITION_EVENTS = "sr2_zone_transition_events"
+    RAW_WINDOW_UTILIZATION = "sr2_raw_window_utilization"
+
+    # Memory system
+    MEMORIES_EXTRACTED = "sr2_memories_extracted"
+    MEMORY_CONFLICTS_DETECTED = "sr2_memory_conflicts_detected"
+    MEMORY_STORE_SIZE = "sr2_memory_store_size"
+
 
 @dataclass
 class MetricThreshold:

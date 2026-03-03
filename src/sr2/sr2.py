@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -19,6 +20,7 @@ from sr2.memory.retrieval import HybridRetriever
 from sr2.memory.store import InMemoryMemoryStore
 from sr2.metrics.alerts import AlertRuleEngine
 from sr2.metrics.collector import MetricCollector
+from sr2.metrics.definitions import MetricNames
 from sr2.pipeline.conversation import ConversationManager
 from sr2.pipeline.engine import PipelineEngine
 from sr2.pipeline.post_processor import PostLLMProcessor
@@ -167,6 +169,12 @@ class SR2:
         self._collector = MetricCollector(config.agent_yaml.get("name", "agent"))
         self._alerts = AlertRuleEngine()
 
+        # Session tracking for new metrics
+        self._session_start_times: dict[str, float] = {}
+        self._session_turn_counts: dict[str, int] = {}
+        self._token_savings_cumulative: dict[str, float] = {}
+        self._token_budget = agent_config.token_budget
+
         # OpenTelemetry (optional — only if otel extras installed)
         try:
             from sr2.metrics.otel_exporter import OTelExporter
@@ -297,6 +305,13 @@ class SR2:
         except Exception as e:
             logger.warning(f"Post-processing failed: {e}")
 
+    async def get_memory_store_size(self) -> int:
+        """Get total number of non-archived memories in the store."""
+        try:
+            return await self._memory_store.count()
+        except Exception:
+            return 0
+
     def set_memory_store(self, store) -> None:
         """Rewire all memory components to use a new store."""
         self._memory_store = store
@@ -325,9 +340,11 @@ class SR2:
         loop_tool_calls: int,
         loop_cache_hit_rate: float,
         cache_report=None,
+        session_id: str = "default",
+        session_messages: list[dict] | None = None,
     ) -> None:
         """Collect metrics from a loop execution."""
-        extra = {
+        extra: dict[str, float] = {
             "sr2_loop_iterations": loop_iterations,
             "sr2_loop_total_tokens": loop_total_tokens,
             "sr2_loop_tool_calls": loop_tool_calls,
@@ -337,7 +354,74 @@ class SR2:
             extra["sr2_context_prefix_stable"] = 1.0 if cache_report.prefix_stable else 0.0
             extra["sr2_cache_efficiency"] = cache_report.cache_efficiency
 
-        self._collector.collect(pipeline_result, interface, extra_metrics=extra)
+        # --- Conversation lifecycle ---
+        # Track session start time
+        if session_id not in self._session_start_times:
+            self._session_start_times[session_id] = time.time()
+
+        # Increment turn count
+        turn_count = self._session_turn_counts.get(session_id, 0) + 1
+        self._session_turn_counts[session_id] = turn_count
+        extra[MetricNames.CONVERSATION_TURN_COUNT] = float(turn_count)
+
+        # Session duration
+        session_duration = time.time() - self._session_start_times[session_id]
+        extra[MetricNames.SESSION_DURATION_SECONDS] = session_duration
+
+        # Session message count
+        if session_messages is not None:
+            extra[MetricNames.SESSION_MESSAGE_COUNT] = float(len(session_messages))
+
+        # --- Naive vs managed comparison ---
+        # Naive token estimate: sum raw content sizes from session messages
+        if session_messages is not None:
+            naive_tokens = sum(len(str(m.get("content", ""))) // 4 for m in session_messages)
+            extra[MetricNames.NAIVE_TOKEN_ESTIMATE] = float(naive_tokens)
+
+            # Token savings cumulative
+            actual_tokens = pipeline_result.total_tokens
+            savings_this_turn = max(0.0, naive_tokens - actual_tokens)
+            cumulative = self._token_savings_cumulative.get(session_id, 0.0) + savings_this_turn
+            self._token_savings_cumulative[session_id] = cumulative
+            extra[MetricNames.TOKEN_SAVINGS_CUMULATIVE] = cumulative
+
+        # --- Context health ---
+        actual_tokens = pipeline_result.total_tokens
+        headroom = max(0, self._token_budget - actual_tokens)
+        extra[MetricNames.BUDGET_HEADROOM_TOKENS] = float(headroom)
+        extra[MetricNames.BUDGET_HEADROOM_RATIO] = (
+            headroom / self._token_budget if self._token_budget > 0 else 0.0
+        )
+
+        # Truncation events
+        extra[MetricNames.TRUNCATION_EVENTS] = float(self._engine.truncation_events)
+
+        # --- Zone dynamics ---
+        extra[MetricNames.RAW_WINDOW_UTILIZATION] = self._conversation.get_raw_window_utilization(
+            session_id
+        )
+
+        # Zone transition events (emitted as separate labeled metrics below)
+        transitions = self._conversation.get_zone_transitions(session_id)
+
+        # --- Memory system ---
+        extra[MetricNames.MEMORIES_EXTRACTED] = float(
+            self._post_processor.last_memories_extracted
+        )
+        extra[MetricNames.MEMORY_CONFLICTS_DETECTED] = float(
+            self._post_processor.last_conflicts_detected
+        )
+
+        snapshot = self._collector.collect(pipeline_result, interface, extra_metrics=extra)
+
+        # Add labeled zone transition events to the snapshot
+        for transition_type, count in transitions.items():
+            snapshot.add(
+                MetricNames.ZONE_TRANSITION_EVENTS,
+                float(count),
+                "event",
+                zone_transition=transition_type,
+            )
 
     def compare_prefix(
         self,
