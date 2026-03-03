@@ -201,6 +201,40 @@ Config inheritance: `defaults.yaml` → `agent.yaml` → `interfaces/user_messag
 
 **Metrics and alerting.** Every pipeline run produces a `PipelineResult` with per-stage timing, token counts, cache hit rates, and degradation events. Export to Prometheus. Alert on low cache hit rates or circuit breaker activations.
 
+## Benchmarks
+
+Real multi-turn sessions against Claude Opus, side-by-side: SR2 pipeline vs naive concatenation. Run them yourself from `benchmarks/`.
+
+### Coherence (50 turns, 8k token budget)
+
+| Question | Naive | Managed |
+|----------|-------|---------|
+| What database did the team decide to use? | MISS | HIT |
+| What authentication method was chosen? | MISS | HIT |
+| What message queue system was selected? | HIT | HIT |
+| What frontend framework did the team pick? | HIT | HIT |
+| What container orchestration tool was decided on? | HIT | HIT |
+| **Score** | **3/5** | **5/5** |
+
+Naive used 7,122 tokens. Managed used 3,329 tokens. **3.6x more information per token.** 100% KV-cache prefix hit rate.
+
+Context breakdown (managed):
+
+| Zone | Tokens | % |
+|------|--------|---|
+| Raw (recent, verbatim) | 1,538 | 55.2% |
+| Compacted (tool refs) | 1,249 | 44.8% |
+| Summarized (LLM digest) | 0 | 0.0% |
+
+### Cost (30 turns)
+
+| | Naive | Managed | Saved |
+|---|-------|---------|-------|
+| Input tokens | 184,456 | 88,638 | 51.9% |
+| Cost | $0.184 | $0.089 | $0.096 |
+
+**52% token reduction per session.** Multiply by however many agent sessions you run per day.
+
 ## Architecture
 
 SR2 is a **library**, not a framework. It compiles context — your code owns the LLM call, tool execution, and agent loop.
