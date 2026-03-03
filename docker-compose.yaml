@@ -102,6 +102,8 @@ services:
       - sr2
     volumes:
       - ./.dockervols/grafana:/var/lib/grafana:rw
+      - ./o11y/grafana/dashboard-provider.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./o11y/grafana/dashboards/:/var/lib/grafana/dashboards
     depends_on:
       - prometheus
     environment:
