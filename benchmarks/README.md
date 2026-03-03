@@ -1,161 +1,172 @@
-# SR2 Benchmarks
+# How I stopped my AI agents from getting dumber after 10 turns
 
-Three benchmarks that measure the value of managing the context window as a structured resource versus naive concatenation.
+TL;DR: Built an open-source context engineering library. 5/5 decision recall vs 3/5 naive on Claude Opus, 52% token reduction, 3.6x information density, 100% cache hit rate. Apache 2.0, `pip install sr2`. Link at the bottom if you want to skip the story.
 
-## Quick Start
+## The Journey (skip if you don't like storytelling)
+
+Let me preface this — I am in no way an authority on AI agent design (this is literally my first serious project in this space), just a guy with a deep hyperfocus that found an issue and went after trying to sort it out.
+
+I've been building AI agents locally for the past few months — personal assistant, task runner, coding helper, the whole shebang. This started when the whole open-source agent hype exploded. I got excited, tried one of the popular ones, and before I even sent a single message the context was already sitting at 15K+ tokens. Fresh install, no conversation, 15K gone. Then I tried another that looked promising but needed serious elbow grease to set up and was way more complex than what I needed. Stayed with another one for a couple weeks, but they hard-capped context at 30K and if you loaded too many tools into an agent — you guessed it — bye bye context.
+
+Ollama on a 7900 XTX, models running on my CPU when I need the GPU free, nothing cloud, nothing fancy. And at some point I realized that the longer a conversation went, the worse my agents got. Not like gradually worse. Like, noticeably dumber, forgetting things I told them a few turns ago, repeating tool calls they've already made, getting stuck in endless loops where the only solution was to burn the memory and start from scratch — not to mention the added frustration, of course. I've tried several different models, params, all that I could get my hands on, and while it did work to some degree, the core issue was still there.
+
+Every framework I looked at handles tool calling, orchestration, memory — cool. But what actually goes into the LLM's mouth every turn? Everything. Concatenated. System prompt, full conversation history, every tool definition in JSON (which, btw, brackets and quotes and all that JSON formatting consumes context space too) and every result in full, whatever memories got retrieved. Growing and growing until you hit the token limit and start chopping from the top. And that's when things go sideways.
+
+So I spent a lot of time trying to figure out why this was happening, and the answer turned out to be embarrassingly simple: unmanaged context window. Not just that context grows wildly during a conversation, but also a lot of bloat that gets thrown into it from the start and how the context gets chopped off once it hits its limit.
+
+I built a library to fix it. This post is about the problem, how I approached it, and what the numbers look like. If you're building agents and you've been frustrated by this, maybe it helps. If you have a better approach, I genuinely want to hear it.
+
+And just a disclaimer for those thinking "why go through all of this for context management?" — each of us builds differently. I like having data that tells me something is actually working, not just vibes. This process has been a blast and I have tangible results to show for it.
+
+&nbsp;
+
+## The problem (or: why your agent forgets everything)
+
+Here's what's happening under the hood in most agent setups. Every turn in the loop:
+
+1. Your agent gets a user message (or a heartbeat, or whatever trigger)
+2. The framework builds a context: system prompt + tools + conversation history + retrieved memories
+3. That context gets sent to the LLM
+4. LLM responds, maybe calls a tool
+5. Tool result gets appended to the conversation
+6. Go to step 1
+
+The problem is step 2. That context just keeps growing. And it's not just the messages — tool results are huge. A single `read_file` call can dump 200 lines into your history. A test run? 50+ lines of pytest output. Search results? Pages of JSON. All of that stays in your conversation history forever, taking up space, even though you probably don't need the raw content of a file you read 20 turns ago.
+
+Eventually one of two things happens: you hit your token budget and start truncating from the top (bye bye system prompt, bye bye early context that might actually matter), or you're running locally and your inference just gets slower and slower because you're processing thousands of tokens of stale tool output every single turn.
+
+And here's the part that really bugged me once I understood it: most LLM providers (and even local setups with vLLM or similar) can cache the beginning of your context between turns. If your system prompt and tool definitions are always the same bytes at the front, the provider doesn't need to reprocess them. But the moment you change anything in that prefix — move a tool definition, update a timestamp, modify an old message — that cache gets nuked and you're paying full price again.
+
+So the problem is actually threefold:
+
+1. Context grows unbounded and eventually gets truncated destructively
+2. Stale tool outputs* waste tokens every turn
+3. Naive context assembly destroys your cache efficiency
+
+_*Stale tool outputs include those things the agent attempted that failed_
+
+&nbsp;
+
+## How I approached it
+
+I spent a while looking for a library that handled this. Couldn't find one that did what I wanted, so I started building. The core idea ended up being pretty simple once I figured it out:
+
+**Treat the context window like zones, not a single blob.**
+
+Instead of one big list of messages, I split conversation history into three zones:
+
+1. **Raw** — the last N turns, kept completely verbatim. Recent context needs to be exact.
+2. **Compacted** — older turns where the big stuff (tool outputs, file reads, search results) gets compressed down to a reference. "→ 200 lines. Sample: [first 3 lines]... Recovery: Re-fetch with read_file." The agent can always get the original back if it needs it. Nothing is lost permanently.
+3. **Summarized** — the oldest context, where an LLM digests everything down to what actually matters: decisions that were made, things that are still unresolved, preferences the user expressed. Routine "ok done" confirmations and dead-end explorations get dropped.
+
+As turns age, they move through zones automatically. New stuff stays exact. Old stuff gets progressively compressed. Nothing ever just gets chopped off the top.
+
+On top of that, the full context assembly is done through a layered pipeline:
+
+```
+Layer 1: core      (system prompt + tools)     → never changes
+Layer 2: memory    (retrieved memories)         → rarely changes  
+Layer 3: conversation (three-zone history)      → changes every turn
+```
+
+Ordered most-stable to least-stable. The stuff that never changes is always first, so it's always the cache prefix. The stuff that changes every turn is last. This is the layout that makes the cache actually work.
+
+Everything declarative, defined in YAML config, no context management code in the agent logic itself.
+
+**Two-model strategy.** The main agent loop uses your big model (whatever you're running for reasoning and tool use), but summarization and other background tasks use a small fast model. On my setup that means the 7900 XTX runs the main model and the CPU handles the small one for summarization. You're not burning expensive inference on compressing old context — that's grunt work for a smaller model. Both are configurable per-interface in the YAML.
+
+**Flexible layers.** What if you don't want conversation history? What if you want it stateless? The layers are fully customizable — pick and choose what goes where. A cron/heartbeat agent can run with just the core layer, no conversation at all. Same library, different config.
+
+&nbsp;
+
+## The numbers
+
+_Yeah, this is nice and all, but it's all talk._ I'm the type that needs to see data to believe something is working, so I built benchmarks that run directly against your LLM provider (LiteLLM SDK powered, so it fits whatever you use). Real multi-turn sessions, real tool calls, real token counts. Side-by-side: same conversation through the SR2 pipeline vs naive concatenation (what most frameworks do). All in the repo for you to run yourself.
+
+### Coherence benchmark (Claude Opus, 50 turns)
+
+This one asks the LLM to recall decisions made earlier in the conversation. The naive approach truncates from the top when it runs out of space. SR2 compacts and summarizes instead.
+
+| Question | Naive | Managed |
+|----------|-------|---------|
+| What database did the team decide to use? | ❌ MISS | ✅ HIT |
+| What authentication method was chosen? | ❌ MISS | ✅ HIT |
+| What message queue system was selected? | ✅ HIT | ✅ HIT |
+| What frontend framework did the team pick? | ✅ HIT | ✅ HIT |
+| What container orchestration tool was decided on? | ✅ HIT | ✅ HIT |
+| **Score** | **3/5** | **5/5** |
+
+Naive used 7,122 tokens. Managed used 3,329 tokens. That's **3.6x more information per token**.
+
+The naive approach lost the two earliest decisions because they got truncated when the context grew past the budget. SR2 kept all five because compaction compressed the old tool outputs instead of throwing them away.
+
+### Cost benchmark (Claude Opus, 30 turns)
+
+| | Naive | Managed | Saved |
+|---|-------|---------|-------|
+| Input tokens | 184,456 | 88,638 | 51.9% |
+| Cost | $0.184 | $0.089 | $0.096 |
+
+**52% token reduction, $0.096 saved per session.** Multiply that by however many agent sessions you run per day.
+
+### Token savings benchmark (simulated, 30 turns)
+
+With default configs, nothing tweaked:
+
+- **74% fewer total tokens** processed over 30 turns
+- **80% smaller context window** by the final turn (1,938 vs 9,545 tokens)
+- **100% KV-cache prefix stability** — core and memory layers had identical bytes every turn
+- **25% average compaction** on tool outputs
+- **139μs avg compile overhead** — 0.028% of a 500ms LLM call
+
+The growth curve is the thing that convinced me this was worth releasing. Naive context grows linearly — every turn adds more, nothing ever shrinks. Managed context plateaus because compaction and summarization keep it bounded. The longer the conversation goes, the bigger the gap gets.
+
+&nbsp;
+
+## What it is and what it isn't
+
+SR2 is a Python library. Apache 2.0, open source. `pip install sr2` and you get the core: pydantic, pyyaml, litellm, nothing else.
+
+It is NOT a framework. It doesn't own your agent loop, your LLM calls, or your tool execution. You give it a config and some context, it gives you back a compiled string and a token count. That's it. What you do with that is your business. It works with anything through LiteLLM — OpenAI, Anthropic, Ollama, whatever you're running.
+
+The repo does include an optional agent runtime with Telegram, HTTP, and CLI interfaces if you want something batteries-included, but the core library is just the context pipeline.
+
+&nbsp;
+
+## Some things I'm proud of
+
+**Observability out of the box.** I love data. There's no arguing against data. So every pipeline run produces metrics — cache hit rates, compaction ratios, token counts per layer, circuit breaker events, the whole thing. The repo ships with a `docker-compose.yaml` that spins up Prometheus and Grafana pre-wired to the metrics exporter. `docker compose up` and you have dashboards. Not "here's how to set up monitoring" — actual dashboards, ready to go. Because if you can't see what your context pipeline is doing, how do you know it's working?
+
+**Graceful degradation.** Each layer has a circuit breaker. If your retrieval service fails 3 times in a row, the breaker opens and that layer gets skipped. Agent keeps running with reduced context instead of crashing. Core layer is never skipped.
+
+**Per-interface configs.** Same agent, different context strategies per trigger. Telegram chat gets 48K tokens with full compaction. A cron heartbeat gets 3K, stripped down. An API call gets 8K, stateless. All YAML, no code changes. They can even have different memories altogether — your very own multi-persona agent just by creating a few YAML config files.
+
+**Tool state machine.** Instead of adding/removing tools dynamically (which destroys your cache), tool availability is controlled through states and masking. The tool definitions stay stable in the prefix, you just control which ones the model can actually select.
+
+**Config inheritance.** `defaults.yaml` → `agent.yaml` → `interfaces/telegram.yaml`. Deep merge, more specific wins. If you've used Helm, same energy.
+
+&nbsp;
+
+## Long ways to go still
+
+This is only the very first iteration. There's still a lot of fixes and improvements to come. I haven't tested against a bunch of different models yet — starting small with llama and expanding from there (probably glm-4.7-flash next), since model output varies. Community feedback will shape where this goes.
+
+&nbsp;
+
+## Try it
 
 ```bash
-# Token savings — no API key needed
-uv run python benchmarks/token_savings.py
-
-# Coherence — requires an LLM API key
-OPENAI_API_KEY=sk-... uv run python benchmarks/coherence.py --model gpt-4o-mini
-
-# Cost — requires an LLM API key
-OPENAI_API_KEY=sk-... uv run python benchmarks/cost.py --models gpt-4o-mini
+pip install sr2
 ```
 
-All three benchmarks use real SR2 library components (compaction engine, conversation manager, pipeline engine, resolver registry). Nothing is stubbed or simulated.
+GitHub: [github.com/terminus-labs-ai/sr2](https://github.com/terminus-labs-ai/sr2)
 
-### Running with Ollama
+688 tests, docs for everything, an example agent you can run with Ollama, and the benchmark scripts so you can run them yourself.
 
-The coherence and cost benchmarks use the OpenAI SDK, which is compatible with Ollama's API. Point it at your local instance:
+This is v0.1.0. I'm one person, it's early. But the pipeline works, the architecture is solid, and I've been running my own agents on it daily.
 
-```bash
-# Make sure Ollama is running and has a model pulled
-ollama pull llama3.1
+If you're building agents and have dealt with this problem, I'd love to hear how you approached it. Are you just concatenating and hoping for the best? Built your own solution? Found a library I missed? Let me know.
 
-# Set environment variables to route the OpenAI SDK to Ollama
-export OPENAI_API_KEY=ollama
-export OPENAI_BASE_URL=http://localhost:11434/v1
+&nbsp;
 
-# Run benchmarks against a local model
-uv run python benchmarks/token_savings.py
-
-uv run python benchmarks/coherence.py --model llama3.1
-
-uv run python benchmarks/cost.py --models llama3.1
-```
-
-Any model available via `ollama list` works. Smaller models (e.g., `llama3.1`, `mistral`, `qwen2.5`) run faster; larger ones (e.g., `llama3.1:70b`) give better coherence results.
-
-**Note:** The cost benchmark reports dollar amounts using hardcoded pricing for OpenAI/Anthropic models. With Ollama (free, local inference), the dollar figures won't be meaningful — focus on the token count comparison and savings percentage instead.
-
----
-
-## Benchmark 1: Token Savings
-
-```bash
-uv run python benchmarks/token_savings.py [--turns N] [--raw-window N] [--budget N]
-```
-
-**What it does:** Runs a multi-turn coding agent conversation through two tracks in parallel:
-
-- **Naive track** — concatenates system prompt + tool definitions + full history every turn, the way most agents work out of the box.
-- **Managed track** — feeds each turn through `ConversationManager` (three-zone compaction) and `PipelineEngine` (layered context compilation).
-
-No LLM calls. Runs in under a second.
-
-**What the results tell you:**
-
-| Metric | What it means |
-|---|---|
-| Cumulative token savings | Total input tokens saved across the entire session. Directly proportional to API cost. |
-| Budget compliance | How many turns exceed the token budget. Naive has no budget concept — it just grows. Managed respects the configured limit. Try `--budget 4000` to see naive blow past at 2.4x while managed stays under. |
-| KV-cache prefix hit rate | Percentage of turns where the core + memory layers (the prefix) were byte-identical to the previous turn. 100% means the provider can reuse its KV cache for that prefix on every call. |
-| Pipeline overhead | Compile time per turn in microseconds, framed as a percentage of a typical LLM round-trip. Usually <0.02% — negligible. |
-| Per-turn table | Shows how naive context grows linearly while managed context stays bounded. Early turns may show managed > naive because managed includes retrieved memories. |
-| Compaction events | When tool outputs got compacted (schema-and-sample), showing original vs compacted token counts. |
-| Layer distribution | Final turn's context broken down by layer: core (system prompt + tools), memory (retrieved context), conversation (three-zone history). |
-| Three-zone breakdown | How the conversation layer splits across raw (recent verbatim turns), compacted (tool outputs reduced to references), and summarized (LLM-digested older history). Summarization shows 0 in this benchmark because there's no LLM — see the coherence benchmark for summarization in action. |
-| Growth chart | ASCII visualization of naive vs managed context size over time. Naive grows linearly; managed stays flat. |
-
----
-
-## Benchmark 2: Coherence
-
-```bash
-uv run python benchmarks/coherence.py [--model MODEL] [--turns N] [--budget N]
-```
-
-**What it does:** Generates a 50-turn conversation with "anchor decisions" planted at known turns (e.g., "Let's use PostgreSQL" at turn 5, "We'll go with JWT auth" at turn 15). Then builds the final context two ways:
-
-- **Naive** — system prompt + as many recent messages as fit in the budget, dropping oldest first.
-- **Managed** — full SR2 pipeline with compaction and LLM-powered summarization.
-
-Sends 5 recall questions to the LLM (e.g., "What database did the team decide to use?") with each context and scores keyword matches.
-
-**What the results tell you:**
-
-| Metric | What it means |
-|---|---|
-| Three-zone breakdown | Shows the final managed context split across raw, compacted, and summarized zones. Unlike the token savings benchmark, this one actually uses LLM-powered summarization, so you'll see the summarized zone doing real work. |
-| HIT / MISS per question | Whether the LLM could recall each anchor decision from the provided context. Naive truncation drops old messages, so early decisions are lost. Managed context preserves them through summarization. |
-| Score (e.g., 1/5 vs 5/5) | Total recall accuracy. The gap between naive and managed is the coherence advantage. |
-| Information density | Recalls per 1,000 tokens. Managed context packs more relevant information into fewer tokens. A higher density means better use of the context window. |
-| KV-cache prefix hit rate | Same as token savings — proves the stable prefix held up even with summarization running. |
-
-**Requires:** `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Without a key, prints a skip message and exits 0. Works with Ollama via `OPENAI_BASE_URL` (see Quick Start above).
-
-**Supported models:** Any OpenAI, Anthropic, or Ollama model. Defaults to `gpt-4o-mini` (OpenAI) or `claude-sonnet` (Anthropic).
-
----
-
-## Benchmark 3: Cost
-
-```bash
-uv run python benchmarks/cost.py [--models MODEL1,MODEL2] [--turns N]
-```
-
-**What it does:** Runs the same per-turn comparison as token savings, but instead of estimating tokens locally, sends both naive and managed contexts to a real API with `max_tokens=1` and records `usage.prompt_tokens` (or `usage.input_tokens` for Anthropic) — the actual billed count from the provider's tokenizer.
-
-Sums across all turns to get total session cost.
-
-**What the results tell you:**
-
-| Metric | What it means |
-|---|---|
-| Naive Input / Managed | Actual billed prompt tokens (cumulative across all turns), not estimates. |
-| Saved % | Real cost reduction as measured by the provider's billing. |
-| Cost Naive / Cost Managed | Dollar amounts using published per-token pricing. |
-| KV-cache prefix hit rate | Prefix stability measured alongside real API calls. |
-
-**Requires:** `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Without a key, prints a skip message and exits 0. Works with Ollama via `OPENAI_BASE_URL` (see Quick Start above).
-
-**Note:** This benchmark makes `2 * num_turns` API calls per model. With the default 30 turns and `max_tokens=1`, cost is negligible (fractions of a cent) but it does take a minute or two to run.
-
----
-
-## Understanding KV-Cache Prefix Hit Rate
-
-This metric appears in all three benchmarks and deserves explanation.
-
-LLM providers cache the internal computation (key-value pairs) for token sequences they've already processed. When consecutive API calls share the same prefix, the provider can skip recomputing those tokens — the "cache hit" saves both latency and (with some providers) cost.
-
-SR2's layered architecture puts stable content first:
-
-```
-[ core: system prompt + tools ][ memory: retrieved context ][ conversation: 3-zone history ]
-```
-
-Core and memory rarely change between turns. The conversation layer (the suffix) changes every turn, but that's fine — the prefix is already cached. A 100% prefix hit rate means every single turn reused the cached prefix computation.
-
-Naive concatenation doesn't guarantee any particular ordering, so even small changes to early content invalidate the entire cache.
-
----
-
-## File Structure
-
-```
-benchmarks/
-    README.md                    # This file
-    token_savings.py             # Benchmark 1: no LLM needed
-    coherence.py                 # Benchmark 2: requires LLM
-    cost.py                      # Benchmark 3: requires LLM
-    context_benchmark.py         # Legacy standalone simulation (deprecated)
-    _shared/
-        __init__.py              # sys.path setup
-        conversation_data.py     # Conversation generation and anchor decisions
-        pipeline_factory.py      # Factory to wire up real SR2 components
-        reporting.py             # Terminal formatting utilities
-```
+*If you know Mass Effect and are wondering — yes, the name is a Mass Effect reference. I name all my agents after characters from the series (EDI, Liara, Tali), judge me, I don't care. It was either this or naming them after Dragon Ball characters and I think I made the right call.*
