@@ -243,11 +243,13 @@ class PipelineEngine:
             if resolved:
                 tokens = sum(c.tokens for c in resolved)
                 result.add_stage(timer.result(status="degraded", tokens=tokens, fallback=True))
+                logger.info(f"Layer {layer.name} degraded to {tokens} tokens.")
                 return resolved
             return None
 
         tokens = sum(c.tokens for c in resolved)
         result.add_stage(timer.result(status="success", tokens=tokens))
+        logger.info(f"Layer {layer.name} successfully resolved to {tokens} tokens.")
         return resolved
 
     async def _resolve_item(

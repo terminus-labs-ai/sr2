@@ -14,7 +14,7 @@ dependencies = [
 # --- Runtime extras (pick what your agent needs) ---
 runtime = [
     "fastapi>=0.110",
-    "uvicorn>=0.27",
+    "uvicorn[standard]>=0.27",
 ]
 telegram = ["python-telegram-bot>=21.0"]
 postgres = ["asyncpg>=0.29"]

@@ -123,9 +123,7 @@ class ManagedContextResult:
     zone_summarized_tokens: int
 
 
-async def _build_managed_context(
-    turns, token_budget: int, llm_callable
-) -> ManagedContextResult:
+async def _build_managed_context(turns, token_budget: int, llm_callable) -> ManagedContextResult:
     """Build managed context using real SR2 pipeline with compaction + summarization.
 
     Compiles per-turn so we can track KV-cache prefix stability and zone breakdown.
@@ -283,10 +281,14 @@ async def run_benchmark(
     managed_density = (managed_hits / managed_tokens * 1000) if managed_tokens else 0
 
     print_section("INFORMATION DENSITY")
-    print(f"  Naive:    {naive_hits} recalls in {naive_tokens:,} tokens  "
-          f"= {naive_density:.2f} recalls/1k tokens")
-    print(f"  Managed:  {managed_hits} recalls in {managed_tokens:,} tokens  "
-          f"= {managed_density:.2f} recalls/1k tokens")
+    print(
+        f"  Naive:    {naive_hits} recalls in {naive_tokens:,} tokens  "
+        f"= {naive_density:.2f} recalls/1k tokens"
+    )
+    print(
+        f"  Managed:  {managed_hits} recalls in {managed_tokens:,} tokens  "
+        f"= {managed_density:.2f} recalls/1k tokens"
+    )
     if managed_density > naive_density and naive_density > 0:
         print(f"  -> {managed_density / naive_density:.1f}x more information per token")
     elif managed_density > 0 and naive_density == 0:
