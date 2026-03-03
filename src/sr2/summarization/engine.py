@@ -78,7 +78,7 @@ class SummarizationEngine:
         summary_tokens = len(str(summary)) // 4
 
         logger.info(
-            "Summarization completed - went from {original_tokens} to {summary_tokens}, throughout {turn_range} turns"
+            f"Summarization completed - went from {original_tokens} to {summary_tokens}, throughout {turn_range} turns"
         )
         return SummarizationResult(
             summary=summary,

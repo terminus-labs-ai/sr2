@@ -118,7 +118,7 @@ class CompactionEngine:
 
         all_turns = compactable + protected
         logger.info(
-            "Compaction completed - went from {original_tokens} to {compacted_tokens}, compacted {turns_compacted}/{all_turns} turns"
+            f"Compaction completed - went from {original_tokens} to {compacted_tokens}, compacted {turns_compacted}/{all_turns} turns"
         )
 
         return CompactionResult(

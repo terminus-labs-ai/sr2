@@ -1,0 +1,8 @@
+# sr2/.dockerignore
+
+.dockervols/
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
