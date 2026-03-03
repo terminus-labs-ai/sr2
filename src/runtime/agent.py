@@ -466,6 +466,10 @@ class Agent:
             loop_tool_calls=len(loop_result.tool_calls),
             loop_cache_hit_rate=loop_result.cache_hit_rate,
             cache_report=cache_report,
+            session_id=session.id,
+            session_messages=session.turns,
+            session_turn_count=session.user_message_count,
+            session_created_at=session.created_at.timestamp(),
         )
 
         # Clean up ephemeral session

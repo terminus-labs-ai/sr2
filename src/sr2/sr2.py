@@ -342,8 +342,17 @@ class SR2:
         cache_report=None,
         session_id: str = "default",
         session_messages: list[dict] | None = None,
+        session_turn_count: int | None = None,
+        session_created_at: float | None = None,
     ) -> None:
-        """Collect metrics from a loop execution."""
+        """Collect metrics from a loop execution.
+
+        Args:
+            session_turn_count: Actual turn count from the session (user messages).
+                If provided, used directly instead of an internal counter.
+            session_created_at: Session creation time as a Unix timestamp.
+                If provided, used for accurate session duration.
+        """
         extra: dict[str, float] = {
             "sr2_loop_iterations": loop_iterations,
             "sr2_loop_total_tokens": loop_total_tokens,
@@ -355,18 +364,23 @@ class SR2:
             extra["sr2_cache_efficiency"] = cache_report.cache_efficiency
 
         # --- Conversation lifecycle ---
-        # Track session start time
-        if session_id not in self._session_start_times:
-            self._session_start_times[session_id] = time.time()
+        # Turn count: prefer the real session value, fall back to internal counter
+        if session_turn_count is not None:
+            extra[MetricNames.CONVERSATION_TURN_COUNT] = float(session_turn_count)
+        else:
+            count = self._session_turn_counts.get(session_id, 0) + 1
+            self._session_turn_counts[session_id] = count
+            extra[MetricNames.CONVERSATION_TURN_COUNT] = float(count)
 
-        # Increment turn count
-        turn_count = self._session_turn_counts.get(session_id, 0) + 1
-        self._session_turn_counts[session_id] = turn_count
-        extra[MetricNames.CONVERSATION_TURN_COUNT] = float(turn_count)
-
-        # Session duration
-        session_duration = time.time() - self._session_start_times[session_id]
-        extra[MetricNames.SESSION_DURATION_SECONDS] = session_duration
+        # Session duration: prefer real session creation time
+        if session_created_at is not None:
+            extra[MetricNames.SESSION_DURATION_SECONDS] = time.time() - session_created_at
+        else:
+            if session_id not in self._session_start_times:
+                self._session_start_times[session_id] = time.time()
+            extra[MetricNames.SESSION_DURATION_SECONDS] = (
+                time.time() - self._session_start_times[session_id]
+            )
 
         # Session message count
         if session_messages is not None:
