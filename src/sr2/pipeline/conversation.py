@@ -41,6 +41,8 @@ class ConversationManager:
         self._raw_window = raw_window
         self._compacted_max = compacted_max_tokens
         self._zones_by_session: dict[str, ConversationZones] = {}
+        # Track zone transition counts per session for metrics
+        self._zone_transitions: dict[str, dict[str, int]] = {}
 
     def _get_zones(self, session_id: str) -> ConversationZones:
         """Get or create zones for a session."""
@@ -64,6 +66,7 @@ class ConversationManager:
         3. Keep only last raw_window turns in raw zone
         """
         zones = self._get_zones(session_id)
+        raw_count_before = len(zones.raw)
         all_turns = zones.compacted + zones.raw
         if len(all_turns) <= self._raw_window:
             return None
@@ -76,6 +79,12 @@ class ConversationManager:
         else:
             zones.compacted = []
             zones.raw = result.turns
+
+        # Track zone transitions (messages that moved from raw to compacted)
+        transitioned = max(0, raw_count_before - len(zones.raw))
+        if transitioned > 0:
+            transitions = self._zone_transitions.setdefault(session_id, {})
+            transitions["raw_to_compacted"] = transitions.get("raw_to_compacted", 0) + transitioned
 
         return result
 
@@ -117,8 +126,17 @@ class ConversationManager:
         else:
             summary_text = str(result.summary)
 
+        # Track zone transitions (compacted messages summarized)
+        compacted_count = len(zones.compacted)
+
         zones.summarized.append(summary_text)
         zones.compacted = []
+
+        if compacted_count > 0:
+            transitions = self._zone_transitions.setdefault(session_id, {})
+            transitions["compacted_to_summarized"] = (
+                transitions.get("compacted_to_summarized", 0) + compacted_count
+            )
 
         return result
 
@@ -127,6 +145,23 @@ class ConversationManager:
         zones = self._get_zones(session_id)
         return zones.compacted + zones.raw
 
+    @property
+    def raw_window(self) -> int:
+        """The configured raw window size."""
+        return self._raw_window
+
+    def get_raw_window_utilization(self, session_id: str = "default") -> float:
+        """Get the raw window utilization ratio (0.0 to 1.0)."""
+        zones = self._get_zones(session_id)
+        if self._raw_window <= 0:
+            return 0.0
+        return min(1.0, len(zones.raw) / self._raw_window)
+
+    def get_zone_transitions(self, session_id: str = "default") -> dict[str, int]:
+        """Get cumulative zone transition counts for a session."""
+        return dict(self._zone_transitions.get(session_id, {}))
+
     def destroy_session(self, session_id: str) -> None:
         """Clean up zones for a destroyed session."""
         self._zones_by_session.pop(session_id, None)
+        self._zone_transitions.pop(session_id, None)

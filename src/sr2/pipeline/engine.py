@@ -48,6 +48,7 @@ class PipelineEngine:
         self._prefix_tracker = PrefixTracker()
         self._layer_string_cache: dict[str, str] = {}
         self._config_logged = False
+        self.truncation_events: int = 0
 
     def _log_resolved_config(self, config: PipelineConfig) -> None:
         """Log the fully resolved config once at INFO level."""
@@ -274,6 +275,8 @@ class PipelineEngine:
         total = sum(c.tokens for contents in layers.values() for c in contents)
         if total <= budget:
             return layers
+
+        self.truncation_events += 1
 
         excess = total - budget
         layer_names = list(layers.keys())

@@ -33,6 +33,9 @@ class PostLLMProcessor:
         self._extractor = memory_extractor
         self._detector = conflict_detector
         self._resolver = conflict_resolver
+        # Counters for memory metrics (per-invocation, reset on each process call)
+        self.last_memories_extracted: int = 0
+        self.last_conflicts_detected: int = 0
 
     async def process(
         self,
@@ -42,6 +45,10 @@ class PostLLMProcessor:
         """Run all post-LLM steps. Each step is independent — failures don't block others."""
         result = PipelineResult(config_used="post_llm")
         session_id = conversation_id or "default"
+
+        # Reset per-invocation counters
+        self.last_memories_extracted = 0
+        self.last_conflicts_detected = 0
 
         # 1. Add turn to conversation
         self._conv.add_turn(latest_turn, session_id=session_id)
@@ -94,10 +101,12 @@ class PostLLMProcessor:
             conversation_id=conversation_id,
             turn_number=turn.turn_number,
         )
+        self.last_memories_extracted = len(extraction.memories)
         if self._detector and self._resolver:
             for mem in extraction.memories:
                 conflicts = await self._detector.detect(mem)
                 if conflicts:
+                    self.last_conflicts_detected += len(conflicts)
                     await self._resolver.resolve_all(conflicts)
 
     async def _run_compaction(self, session_id: str) -> None:

@@ -30,6 +30,11 @@ _COUNTERS = frozenset(
         MetricNames.CIRCUIT_BREAKER_ACTIVATIONS,
         MetricNames.FULL_DEGRADATION_EVENTS,
         MetricNames.DENIED_TOOL_ATTEMPTS,
+        MetricNames.TOKEN_SAVINGS_CUMULATIVE,
+        MetricNames.TRUNCATION_EVENTS,
+        MetricNames.ZONE_TRANSITION_EVENTS,
+        MetricNames.MEMORIES_EXTRACTED,
+        MetricNames.MEMORY_CONFLICTS_DETECTED,
     }
 )
 
@@ -55,6 +60,14 @@ _GAUGES = frozenset(
         MetricNames.ZONE_RAW_TOKENS,
         MetricNames.ZONE_COMPACTED_TOKENS,
         MetricNames.ZONE_SUMMARIZED_TOKENS,
+        MetricNames.CONVERSATION_TURN_COUNT,
+        MetricNames.SESSION_DURATION_SECONDS,
+        MetricNames.SESSION_MESSAGE_COUNT,
+        MetricNames.NAIVE_TOKEN_ESTIMATE,
+        MetricNames.BUDGET_HEADROOM_TOKENS,
+        MetricNames.BUDGET_HEADROOM_RATIO,
+        MetricNames.RAW_WINDOW_UTILIZATION,
+        MetricNames.MEMORY_STORE_SIZE,
     }
 )
 
@@ -68,6 +81,15 @@ _UNITS: dict[str, str] = {
     MetricNames.ZONE_RAW_TOKENS: "tokens",
     MetricNames.ZONE_COMPACTED_TOKENS: "tokens",
     MetricNames.ZONE_SUMMARIZED_TOKENS: "tokens",
+    MetricNames.CONVERSATION_TURN_COUNT: "turns",
+    MetricNames.SESSION_DURATION_SECONDS: "seconds",
+    MetricNames.SESSION_MESSAGE_COUNT: "messages",
+    MetricNames.NAIVE_TOKEN_ESTIMATE: "tokens",
+    MetricNames.TOKEN_SAVINGS_CUMULATIVE: "tokens",
+    MetricNames.BUDGET_HEADROOM_TOKENS: "tokens",
+    MetricNames.MEMORIES_EXTRACTED: "memories",
+    MetricNames.MEMORY_CONFLICTS_DETECTED: "conflicts",
+    MetricNames.MEMORY_STORE_SIZE: "memories",
 }
 
 
