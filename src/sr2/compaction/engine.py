@@ -38,6 +38,11 @@ class CompactionEngine:
         self._config = config
         self._rule_map = self._build_rule_map()
 
+    @property
+    def raw_window(self) -> int:
+        """Number of recent turns kept in full detail."""
+        return self._config.raw_window
+
     def _build_rule_map(self) -> dict[str, tuple]:
         """Map content_type -> (rule_config, rule_instance)."""
         result = {}

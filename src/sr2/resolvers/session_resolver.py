@@ -1,4 +1,4 @@
-from sr2.resolvers.registry import ResolverContext, ResolvedContent
+from sr2.resolvers.registry import ResolverContext, ResolvedContent, estimate_tokens
 
 
 class SessionResolver:
@@ -12,4 +12,4 @@ class SessionResolver:
         formatted = "\n".join(
             f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in history
         )
-        return ResolvedContent(key=key, content=formatted, tokens=len(formatted.split()))
+        return ResolvedContent(key=key, content=formatted, tokens=estimate_tokens(formatted))

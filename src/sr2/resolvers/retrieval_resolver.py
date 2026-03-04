@@ -2,7 +2,7 @@
 
 from sr2.memory.dimensions import DimensionalMatcher
 from sr2.memory.retrieval import HybridRetriever
-from sr2.resolvers.registry import ResolvedContent, ResolverContext
+from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_tokens
 
 
 class RetrievalResolver:
@@ -41,7 +41,7 @@ class RetrievalResolver:
             results = self._matcher.filter(results, current_dims)
 
         content = self._format_memories(results)
-        tokens = len(content) // 4
+        tokens = estimate_tokens(content)
 
         return ResolvedContent(
             key=key,

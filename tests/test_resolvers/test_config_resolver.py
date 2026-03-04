@@ -1,7 +1,7 @@
 import pytest
 
 from sr2.resolvers.config_resolver import ConfigResolver
-from sr2.resolvers.registry import ResolvedContent, ResolverContext
+from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_tokens
 
 
 @pytest.mark.asyncio
@@ -18,7 +18,7 @@ async def test_resolve_existing_key():
     assert isinstance(result, ResolvedContent)
     assert result.key == "system_prompt"
     assert result.content == "You are helpful."
-    assert result.tokens == 3
+    assert result.tokens == estimate_tokens("You are helpful.")
 
 
 @pytest.mark.asyncio
@@ -45,8 +45,8 @@ async def test_non_string_values_converted():
 
     result = await resolver.resolve("max_tokens", {}, ctx)
     assert result.content == "4096"
-    assert result.tokens == 1
+    assert result.tokens == estimate_tokens("4096")
 
     result_bool = await resolver.resolve("enabled", {}, ctx)
     assert result_bool.content == "True"
-    assert result_bool.tokens == 1
+    assert result_bool.tokens == estimate_tokens("True")

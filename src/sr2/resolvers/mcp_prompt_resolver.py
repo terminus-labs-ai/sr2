@@ -6,7 +6,7 @@ keeping the sr2 package independent of the runtime MCP client.
 
 from typing import Callable
 
-from sr2.resolvers.registry import ResolvedContent, ResolverContext
+from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_tokens
 
 
 class MCPPromptResolver:
@@ -30,6 +30,6 @@ class MCPPromptResolver:
         return ResolvedContent(
             key=key,
             content=content,
-            tokens=len(content.split()),
+            tokens=estimate_tokens(content),
             metadata={"source": "mcp_prompt", "server": server},
         )

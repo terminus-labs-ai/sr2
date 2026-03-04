@@ -2,6 +2,15 @@ from dataclasses import dataclass
 from typing import Protocol, Any
 
 
+def estimate_tokens(text: str) -> int:
+    """Estimate token count from text using character-based heuristic.
+
+    Uses len(text) // 4 which approximates subword tokenization better
+    than word counting for mixed content (code, URLs, structured text).
+    """
+    return len(text) // 4
+
+
 @dataclass
 class ResolverContext:
     """Context passed to every resolver."""

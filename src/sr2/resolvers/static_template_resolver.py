@@ -1,4 +1,4 @@
-from sr2.resolvers.registry import ResolverContext, ResolvedContent
+from sr2.resolvers.registry import ResolverContext, ResolvedContent, estimate_tokens
 
 
 class StaticTemplateResolver:
@@ -8,4 +8,4 @@ class StaticTemplateResolver:
         if "template" not in config:
             raise KeyError("StaticTemplateResolver requires 'template' field in config")
         value = config["template"]
-        return ResolvedContent(key=key, content=value, tokens=len(value.split()))
+        return ResolvedContent(key=key, content=value, tokens=estimate_tokens(value))

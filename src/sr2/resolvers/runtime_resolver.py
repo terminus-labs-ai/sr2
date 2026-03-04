@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sr2.resolvers.registry import ResolverContext, ResolvedContent
+from sr2.resolvers.registry import ResolverContext, ResolvedContent, estimate_tokens
 
 
 class RuntimeResolver:
@@ -10,4 +10,4 @@ class RuntimeResolver:
             value = datetime.now(timezone.utc).isoformat()
         else:
             raise KeyError(f"Unknown runtime key: {key}")
-        return ResolvedContent(key=key, content=value, tokens=len(value.split()))
+        return ResolvedContent(key=key, content=value, tokens=estimate_tokens(value))
