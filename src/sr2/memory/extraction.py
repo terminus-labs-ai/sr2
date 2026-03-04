@@ -1,10 +1,13 @@
 """Post-LLM memory extraction from conversation turns."""
 
 import json
+import logging
 import re
 
-from sr2.memory.schema import STABILITY_DEFAULTS, ExtractionResult, Memory
+from sr2.memory.schema import CONFIDENCE_SCORES, STABILITY_DEFAULTS, ExtractionResult, Memory
 from sr2.memory.store import MemoryStore
+
+logger = logging.getLogger(__name__)
 
 # Patterns that indicate tool/system artifact content — not worth memorising
 _TOOL_ARTIFACT_KEYS = re.compile(
@@ -141,9 +144,11 @@ Conversation turn:
         try:
             items = json.loads(cleaned)
         except json.JSONDecodeError:
+            logger.warning("Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200])
             return []
 
         if not isinstance(items, list):
+            logger.warning("Memory extraction failed: expected JSON array, got %s", type(items).__name__)
             return []
 
         memories = []
@@ -173,13 +178,18 @@ Conversation turn:
             if mem_type not in STABILITY_DEFAULTS:
                 mem_type = "semi_stable"
 
+            conf_source = item.get("confidence_source", "contextual_mention")
+            if conf_source not in CONFIDENCE_SCORES:
+                conf_source = "contextual_mention"
+
             memories.append(
                 Memory(
                     key=key,
                     value=value,
                     memory_type=mem_type,
                     stability_score=STABILITY_DEFAULTS.get(mem_type, 0.7),
-                    confidence_source=item.get("confidence_source", "contextual_mention"),
+                    confidence=CONFIDENCE_SCORES[conf_source],
+                    confidence_source=conf_source,
                     source_conversation=conversation_id,
                     source_turn=turn_number,
                     raw_text=None,
