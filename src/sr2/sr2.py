@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from sr2.cache.policies import create_default_cache_registry
+from sr2.degradation.circuit_breaker import CircuitBreaker
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
 from sr2.config.loader import ConfigLoader
 from sr2.config.models import LLMModelOverride
@@ -139,12 +140,20 @@ class SR2:
             self._resolver_reg.register("mcp_prompt", MCPPromptResolver(config.mcp_prompt_reader))
         self._cache_reg = create_default_cache_registry()
 
-        # Pipeline
-        self._engine = PipelineEngine(self._resolver_reg, self._cache_reg)
-
         # Compaction + Summarization
         agent_yaml_path = os.path.join(config.config_dir, "agent.yaml")
         agent_config = self._loader.load(agent_yaml_path)
+
+        # Pipeline — wire CircuitBreaker from config
+        deg = agent_config.degradation
+        self._engine = PipelineEngine(
+            self._resolver_reg,
+            self._cache_reg,
+            circuit_breaker=CircuitBreaker(
+                threshold=deg.circuit_breaker_threshold,
+                cooldown_seconds=deg.circuit_breaker_cooldown_minutes * 60,
+            ),
+        )
 
         # Wire key_schema to extractor now that agent_config is loaded
         key_schema = [s.model_dump() for s in agent_config.memory.key_schema]
