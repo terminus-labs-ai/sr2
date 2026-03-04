@@ -7,7 +7,7 @@ from sr2.compaction.engine import (
     CompactionResult,
     ConversationTurn,
 )
-from sr2.summarization.engine import SummarizationEngine, SummarizationResult
+from sr2.summarization.engine import StructuredSummary, SummarizationEngine, SummarizationResult
 
 
 @dataclass
@@ -127,7 +127,7 @@ class ConversationManager:
             original_tokens=summarized_tokens,
         )
 
-        if hasattr(result.summary, "summary_of_turns"):
+        if isinstance(result.summary, StructuredSummary):
             from sr2.resolvers.summarization_resolver import SummarizationResolver
 
             summary_text = SummarizationResolver.format_structured_summary(result.summary)

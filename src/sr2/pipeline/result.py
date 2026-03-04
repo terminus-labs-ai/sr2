@@ -62,15 +62,15 @@ class StageTimer:
     def result(
         self,
         status: Literal["success", "degraded", "failed"],
-        tokens: int = 0,
-        fallback: bool = False,
+        tokens_used: int = 0,
+        fallback_used: bool = False,
         error: str | None = None,
     ) -> StageResult:
         return StageResult(
             stage_name=self.stage_name,
             status=status,
-            fallback_used=fallback,
-            tokens_used=tokens,
+            fallback_used=fallback_used,
+            tokens_used=tokens_used,
             duration_ms=self.duration_ms,
             error=error,
         )
