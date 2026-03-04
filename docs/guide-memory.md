@@ -209,7 +209,7 @@ Default. All memories live in a Python dict. Fast, no dependencies, but lost on 
 Persistent storage using PostgreSQL. Requires `asyncpg`:
 
 ```bash
-pip install sr2[postgres]
+pip install -e ".[postgres]"
 ```
 
 Set up via the SR2 facade:

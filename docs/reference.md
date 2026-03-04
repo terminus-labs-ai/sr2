@@ -453,7 +453,7 @@ Policies:
 
 ### Troubleshooting
 
-- **"mcp package not installed"** — Install with `pip install sr2[mcp]` or `uv sync --extra mcp`
+- **"mcp package not installed"** — Install with `pip install -e ".[mcp]"` or `uv sync --extra mcp`
 - **Server fails to connect** — The agent logs the error and continues without that server's tools. Other servers are unaffected.
 - **Tool not showing up** — Check that the tool name in `tools:` matches exactly what the server reports. Run the server standalone to see its tool list.
 - **Resources/prompts not discovered** — The server must support these capabilities. Check logs for "does not support resources/prompts" debug messages.

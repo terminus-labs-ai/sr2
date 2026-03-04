@@ -5,7 +5,9 @@ This guide takes you from zero to a working SR2 pipeline in under 5 minutes. No 
 ## Install
 
 ```bash
-pip install sr2
+git clone https://github.com/terminus-labs-ai/sr2.git
+cd sr2
+pip install -e .
 ```
 
 This gives you the core library: config models, pipeline engine, resolvers, compaction, and caching. No heavy dependencies beyond Pydantic and PyYAML.
