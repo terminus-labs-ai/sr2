@@ -8,7 +8,6 @@ class PipelineState:
 
     turn_number: int = 0
     current_intent: str | None = None
-    previous_intent: str | None = None
     state_hash: str | None = None
     previous_state_hash: str | None = None
 

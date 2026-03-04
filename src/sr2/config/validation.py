@@ -32,17 +32,6 @@ def validate_config(config: PipelineConfig) -> list[str]:
         )
 
     # Hard error: cache-killing layout — always_new before append_only
-    cache_policies_seen: list[str] = []
-    for layer in config.layers:
-        if layer.cache_policy == "always_new" and "append_only" in cache_policies_seen:
-            pass  # always_new AFTER append_only is fine
-        if layer.cache_policy == "append_only" and any(
-            p == "always_new" for p in cache_policies_seen
-        ):
-            pass  # This case doesn't trigger error
-        cache_policies_seen.append(layer.cache_policy)
-
-    # Check for always_new appearing BEFORE append_only
     for i, layer in enumerate(config.layers):
         if layer.cache_policy == "always_new":
             for later_layer in config.layers[i + 1 :]:
