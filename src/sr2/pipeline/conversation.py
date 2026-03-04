@@ -93,9 +93,9 @@ class ConversationManager:
 
         1. Calculate compacted zone tokens
         2. Check if summarization should trigger
-        3. If yes: summarize the compacted zone
+        3. If yes: summarize the compacted zone (excluding preserve_recent_turns)
         4. Move summary to summarized zone
-        5. Clear the compacted zone
+        5. Keep preserved turns in the compacted zone
         """
         if not self._summarization:
             return None
@@ -108,15 +108,23 @@ class ConversationManager:
         if not zones.compacted:
             return None
 
-        turns_text = "\n".join(f"{t.role}: {t.content}" for t in zones.compacted)
-        first_turn = zones.compacted[0].turn_number
-        last_turn = zones.compacted[-1].turn_number
+        # Exclude preserve_recent_turns from summarization
+        preserve_n = self._summarization.preserve_recent_turns
+        if preserve_n >= len(zones.compacted):
+            return None
+        to_summarize = zones.compacted[:-preserve_n] if preserve_n > 0 else zones.compacted
+        to_preserve = zones.compacted[-preserve_n:] if preserve_n > 0 else []
+
+        turns_text = "\n".join(f"{t.role}: {t.content}" for t in to_summarize)
+        first_turn = to_summarize[0].turn_number
+        last_turn = to_summarize[-1].turn_number
         turn_range = f"{first_turn}-{last_turn}"
+        summarized_tokens = sum(len(t.content) // 4 for t in to_summarize)
 
         result = await self._summarization.summarize(
             turns_text=turns_text,
             turn_range=turn_range,
-            original_tokens=compacted_tokens,
+            original_tokens=summarized_tokens,
         )
 
         if hasattr(result.summary, "summary_of_turns"):
@@ -127,10 +135,10 @@ class ConversationManager:
             summary_text = str(result.summary)
 
         # Track zone transitions (compacted messages summarized)
-        compacted_count = len(zones.compacted)
+        compacted_count = len(to_summarize)
 
         zones.summarized.append(summary_text)
-        zones.compacted = []
+        zones.compacted = to_preserve
 
         if compacted_count > 0:
             transitions = self._zone_transitions.setdefault(session_id, {})

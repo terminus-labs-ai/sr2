@@ -52,6 +52,11 @@ class SummarizationEngine:
         self._prompt_builder = SummarizationPromptBuilder(config)
         self._normalizer = ResponseNormalizer()
 
+    @property
+    def preserve_recent_turns(self) -> int:
+        """Number of recent compacted turns to exclude from summarization."""
+        return self._config.preserve_recent_turns
+
     async def summarize(
         self,
         turns_text: str,
@@ -69,6 +74,15 @@ class SummarizationEngine:
         prompt = self._prompt_builder.build_prompt(turns_text, turn_range)
 
         raw_response = await self._llm(system, prompt)
+
+        if raw_response is None:
+            logger.warning("Summarization LLM returned None — skipping")
+            return SummarizationResult(
+                summary=turns_text[:200],
+                original_tokens=original_tokens,
+                summary_tokens=original_tokens,
+                turn_range=turn_range,
+            )
 
         if self._config.output_format == "structured":
             summary = self._parse_structured(raw_response, turn_range)
@@ -123,8 +137,10 @@ class SummarizationEngine:
     def should_trigger(self, compacted_tokens: int, max_tokens: int) -> bool:
         """Check if summarization should trigger based on config.
 
-        Returns True if compacted_tokens exceeds threshold * max_tokens.
+        Returns True if enabled and compacted_tokens exceeds threshold * max_tokens.
         """
+        if not self._config.enabled:
+            return False
         if self._config.trigger == "token_threshold":
             return compacted_tokens > (self._config.threshold * max_tokens)
         return False
