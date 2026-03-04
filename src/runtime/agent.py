@@ -16,7 +16,7 @@ from runtime.mcp import MCPManager
 from runtime.plugins.base import TriggerContext
 from runtime.plugins.registry import create_default_registry
 from runtime.session import SessionConfig, SessionManager
-from runtime.tool_executor import PostToSessionTool, ToolExecutor
+from runtime.tool_executor import PostToSessionTool, SaveMemoryTool, ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,12 @@ class Agent:
         self._tool_executor.register(
             "post_to_session",
             PostToSessionTool(self._sessions, self._session_to_plugin),
+        )
+        # _current_session_id is set per-trigger so the tool can tag memories correctly
+        self._current_session_id: str | None = None
+        self._tool_executor.register(
+            "save_memory",
+            SaveMemoryTool(self._sr2, session_resolver=lambda: self._current_session_id),
         )
 
         # MCP — from agent.yaml
@@ -382,6 +388,7 @@ class Agent:
             session = self._sessions.create_ephemeral(trigger.session_name)
         else:
             session = await self._sessions.get_or_create(trigger.session_name)
+        self._current_session_id = session.id
 
         # Special commands
         # TODO: add a proper handler for special commands like __clear_session__, and expand these commands as needed
@@ -453,6 +460,7 @@ class Agent:
                 role="assistant",
                 content=loop_result.response_text or "",
                 session_id=session.id,
+                user_message=str(trigger.input_data) if trigger.input_data else None,
             )
         )
 

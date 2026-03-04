@@ -70,6 +70,36 @@ class SimpleTool:
         return await self._func(**kwargs)
 
 
+class SaveMemoryTool:
+    """Built-in tool that writes a memory directly to the store.
+
+    Bypasses LLM extraction — use this when the user explicitly asks
+    the agent to remember something specific.
+    """
+
+    def __init__(self, sr2_facade, session_resolver=None):
+        self._sr2 = sr2_facade
+        self._session_resolver = session_resolver  # callable() -> current session_id
+
+    async def execute(
+        self,
+        key: str = "",
+        value: str = "",
+        memory_type: str = "semi_stable",
+        **kwargs,
+    ) -> str:
+        if not key or not value:
+            return "Error: 'key' and 'value' are required."
+        session_id = self._session_resolver() if self._session_resolver else None
+        await self._sr2.save_memory(
+            key=key,
+            value=value,
+            memory_type=memory_type,
+            source_conversation=session_id,
+        )
+        return f"Remembered: [{key}] = {value}"
+
+
 class PostToSessionTool:
     """Built-in tool that writes a message to a named session.
 
