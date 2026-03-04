@@ -1,6 +1,7 @@
 """Memory storage backends: protocol, in-memory (testing), and PostgreSQL."""
 
 import json
+import re
 from typing import Protocol
 
 from sr2.memory.schema import Memory, MemorySearchResult
@@ -9,7 +10,7 @@ from sr2.memory.schema import Memory, MemorySearchResult
 class MemoryStore(Protocol):
     """Protocol for memory storage backends."""
 
-    async def save(self, memory: Memory) -> None:
+    async def save(self, memory: Memory, embedding: list[float] | None = None) -> None:
         """Save a memory. If ID exists, update it."""
         ...
 
@@ -64,7 +65,7 @@ class InMemoryMemoryStore:
     def __init__(self) -> None:
         self._memories: dict[str, Memory] = {}
 
-    async def save(self, memory: Memory) -> None:
+    async def save(self, memory: Memory, embedding: list[float] | None = None) -> None:
         self._memories[memory.id] = memory
 
     async def get(self, memory_id: str) -> Memory | None:
@@ -166,24 +167,34 @@ class PostgresMemoryStore:
                     conflicts_with TEXT,
                     archived BOOLEAN NOT NULL DEFAULT FALSE,
                     raw_text TEXT,
-                    embedding vector(1536)
+                    embedding vector
                 );
                 CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
                 CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories(archived);
                 CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
             """)
+            # Migrate existing tables that were created with a fixed-dimension vector column
+            # (e.g. vector(1536)) to unbounded vector so any embedding model can be used.
+            # Try unconditionally — harmless if already unbounded.
+            try:
+                await conn.execute(
+                    "ALTER TABLE memories ALTER COLUMN embedding TYPE vector"
+                )
+            except Exception:
+                pass
 
-    async def save(self, memory: Memory) -> None:
+    async def save(self, memory: Memory, embedding: list[float] | None = None) -> None:
         """Save a memory. If ID exists, update it."""
         data = memory.model_dump()
+        embed_str = str(embedding) if embedding is not None else None
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO memories (id, key, value, memory_type, stability_score,
                     confidence, confidence_source, dimensions, source_conversation,
                     source_turn, extracted_at, last_accessed, access_count,
-                    conflicts_with, archived, raw_text)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                    conflicts_with, archived, raw_text, embedding)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::vector)
                 ON CONFLICT (id) DO UPDATE SET
                     key = EXCLUDED.key, value = EXCLUDED.value,
                     memory_type = EXCLUDED.memory_type, stability_score = EXCLUDED.stability_score,
@@ -191,7 +202,8 @@ class PostgresMemoryStore:
                     dimensions = EXCLUDED.dimensions, source_conversation = EXCLUDED.source_conversation,
                     source_turn = EXCLUDED.source_turn, last_accessed = EXCLUDED.last_accessed,
                     access_count = EXCLUDED.access_count, conflicts_with = EXCLUDED.conflicts_with,
-                    archived = EXCLUDED.archived, raw_text = EXCLUDED.raw_text
+                    archived = EXCLUDED.archived, raw_text = EXCLUDED.raw_text,
+                    embedding = COALESCE(EXCLUDED.embedding, memories.embedding)
                 """,
                 data["id"],
                 data["key"],
@@ -209,6 +221,7 @@ class PostgresMemoryStore:
                 data["conflicts_with"],
                 data["archived"],
                 data["raw_text"],
+                embed_str,
             )
 
     async def get(self, memory_id: str) -> Memory | None:
@@ -294,16 +307,28 @@ class PostgresMemoryStore:
         top_k: int = 10,
         include_archived: bool = False,
     ) -> list[MemorySearchResult]:
-        """Keyword search across key and value fields."""
-        sql = """
-            SELECT * FROM memories
-            WHERE (key ILIKE '%' || $1 || '%' OR value ILIKE '%' || $1 || '%')
+        """Keyword search across key and value fields.
+
+        Splits the query into individual words so that conversational messages
+        (e.g. "Hey Miranda, what are my tasks?") can match memory values that
+        contain any of the meaningful words rather than requiring the entire
+        message to appear as a substring.
         """
+        words = list({w.lower() for w in re.split(r"[\s,!?.;:'\"]+", query) if len(w) >= 3})
+        if not words:
+            words = [query.strip().lower()]
+
+        word_patterns = [f"%{w}%" for w in words]
+        conditions = " OR ".join(
+            f"(key ILIKE ${i + 1} OR value ILIKE ${i + 1})" for i in range(len(words))
+        )
+        sql = f"SELECT * FROM memories WHERE ({conditions})"
         if not include_archived:
             sql += " AND archived = false"
-        sql += " LIMIT $2"
+        sql += f" LIMIT ${len(words) + 1}"
+
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, query, top_k)
+            rows = await conn.fetch(sql, *word_patterns, top_k)
             return [
                 MemorySearchResult(
                     memory=self._row_to_memory(r),
@@ -312,6 +337,26 @@ class PostgresMemoryStore:
                 )
                 for r in rows
             ]
+
+    async def list_without_embeddings(self, include_archived: bool = False) -> list[Memory]:
+        """Return all memories that have no embedding stored."""
+        sql = "SELECT * FROM memories WHERE embedding IS NULL"
+        if not include_archived:
+            sql += " AND archived = false"
+        sql += " ORDER BY extracted_at ASC"
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+            return [self._row_to_memory(r) for r in rows]
+
+    async def update_embedding(self, memory_id: str, embedding: list[float]) -> bool:
+        """Store an embedding for an existing memory. Returns True if the row existed."""
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE memories SET embedding = $1::vector WHERE id = $2",
+                str(embedding),
+                memory_id,
+            )
+            return result == "UPDATE 1"
 
     async def count(self, include_archived: bool = False) -> int:
         """Count total memories."""

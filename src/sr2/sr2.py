@@ -96,6 +96,7 @@ class SR2:
                 else None
             ),
             store=self._memory_store,
+            embed_callable=config.embed,
         )
 
         # Config
@@ -144,6 +145,12 @@ class SR2:
         # Compaction + Summarization
         agent_yaml_path = os.path.join(config.config_dir, "agent.yaml")
         agent_config = self._loader.load(agent_yaml_path)
+
+        # Wire key_schema to extractor now that agent_config is loaded
+        key_schema = [s.model_dump() for s in agent_config.memory.key_schema]
+        if key_schema:
+            self._extractor._key_schema = key_schema
+
         self._compaction_engine = CompactionEngine(agent_config.compaction)
         self._summarization_engine = SummarizationEngine(
             config=agent_config.summarization,
@@ -293,17 +300,57 @@ class SR2:
         role: str,
         content: str,
         session_id: str,
+        user_message: str | None = None,
     ) -> None:
-        """Fire-and-forget post-LLM processing (memory extraction, compaction)."""
+        """Fire-and-forget post-LLM processing (memory extraction, compaction).
+
+        user_message: the raw user input for this turn. When provided it is
+        prepended to content so the extractor sees the full exchange — this is
+        critical for capturing explicit "remember X" commands that only appear
+        in the user's message, not in the assistant's reply.
+        """
         try:
+            extract_content = content
+            if user_message:
+                extract_content = f"User: {user_message}\n\nAssistant: {content}"
             turn = ConversationTurn(
                 turn_number=turn_number,
                 role=role,
-                content=content,
+                content=extract_content,
             )
             await self._post_processor.process(turn, session_id)
         except Exception as e:
             logger.warning(f"Post-processing failed: {e}")
+
+    async def save_memory(
+        self,
+        key: str,
+        value: str,
+        memory_type: str = "semi_stable",
+        source_conversation: str | None = None,
+    ) -> None:
+        """Directly persist a memory, bypassing LLM extraction.
+
+        Used by the save_memory tool so explicit 'remember X' commands
+        are stored with high confidence and no inference step.
+        """
+        from sr2.memory.schema import STABILITY_DEFAULTS, Memory
+
+        mem = Memory(
+            key=key,
+            value=value,
+            memory_type=memory_type if memory_type in STABILITY_DEFAULTS else "semi_stable",
+            stability_score=STABILITY_DEFAULTS.get(memory_type, 0.7),
+            confidence_source="explicit_statement",
+            source_conversation=source_conversation,
+        )
+        embedding = None
+        if self._config.embed:
+            try:
+                embedding = await self._config.embed(f"{key}: {value}")
+            except Exception:
+                pass
+        await self._memory_store.save(mem, embedding=embedding)
 
     async def get_memory_store_size(self) -> int:
         """Get total number of non-archived memories in the store."""

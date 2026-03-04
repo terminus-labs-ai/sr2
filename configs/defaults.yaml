@@ -155,6 +155,17 @@ pipeline:
     # request.
     circuit_breaker_cooldown_minutes: 5
 
+  # Memory extraction settings
+  memory:
+    # Key prefix schema for memory extraction. Guides the LLM to use consistent,
+    # dot-notation keys.
+    key_schema: []
+    # Example entry:
+      # - prefix: <required>
+      #   description: ""
+      #   examples: []
+
+
   # Context window layers, ordered from most stable to least stable
   layers: []
   # Example entry:
