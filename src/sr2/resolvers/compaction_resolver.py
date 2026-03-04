@@ -1,7 +1,7 @@
 """Content resolver that returns compacted conversation history."""
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.resolvers.registry import ResolvedContent, ResolverContext
+from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_tokens
 
 
 class CompactionResolver:
@@ -29,12 +29,12 @@ class CompactionResolver:
 
         result = self._engine.compact(turns)
 
-        raw_window = self._engine._config.raw_window
+        raw_window = self._engine.raw_window
         compacted_zone = result.turns[:-raw_window] if len(result.turns) > raw_window else []
 
         content = self._format_turns(compacted_zone)
         tokens = (
-            result.compacted_tokens - sum(len(t.content) // 4 for t in result.turns[-raw_window:])
+            result.compacted_tokens - sum(estimate_tokens(t.content) for t in result.turns[-raw_window:])
             if len(result.turns) > raw_window
             else 0
         )

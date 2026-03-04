@@ -1,4 +1,4 @@
-from sr2.resolvers.registry import ResolverContext, ResolvedContent
+from sr2.resolvers.registry import ResolverContext, ResolvedContent, estimate_tokens
 
 
 class InputResolver:
@@ -11,4 +11,4 @@ class InputResolver:
             value = str(context.trigger_input[key])
         else:
             value = str(context.trigger_input)
-        return ResolvedContent(key=key, content=value, tokens=len(value.split()))
+        return ResolvedContent(key=key, content=value, tokens=estimate_tokens(value))

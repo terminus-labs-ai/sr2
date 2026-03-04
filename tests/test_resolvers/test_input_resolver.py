@@ -1,7 +1,7 @@
 import pytest
 
 from sr2.resolvers.input_resolver import InputResolver
-from sr2.resolvers.registry import ResolvedContent, ResolverContext
+from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_tokens
 
 
 @pytest.mark.asyncio
@@ -18,7 +18,7 @@ async def test_dict_input_reads_key():
     assert isinstance(result, ResolvedContent)
     assert result.key == "user_message"
     assert result.content == "Hello world"
-    assert result.tokens == 2
+    assert result.tokens == estimate_tokens("Hello world")
 
 
 @pytest.mark.asyncio
@@ -46,7 +46,7 @@ async def test_string_input_returns_directly():
     result = await resolver.resolve("any_key", {}, ctx)
 
     assert result.content == "Hello world from user"
-    assert result.tokens == 4
+    assert result.tokens == estimate_tokens("Hello world from user")
 
 
 @pytest.mark.asyncio
@@ -61,4 +61,4 @@ async def test_non_string_input_converts():
     result = await resolver.resolve("value", {}, ctx)
 
     assert result.content == "42"
-    assert result.tokens == 1
+    assert result.tokens == estimate_tokens("42")

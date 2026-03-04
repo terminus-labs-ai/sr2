@@ -1,6 +1,6 @@
 """Content resolver that returns previously generated summaries."""
 
-from sr2.resolvers.registry import ResolvedContent, ResolverContext
+from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_tokens
 from sr2.summarization.engine import StructuredSummary
 
 
@@ -30,21 +30,22 @@ class SummarizationResolver:
         if not self._summaries:
             return ResolvedContent(key=key, content="", tokens=0)
 
-        content = "\n---\n".join(self._summaries)
-        tokens = len(content) // 4
+        summaries = list(self._summaries)
+        content = "\n---\n".join(summaries)
+        tokens = estimate_tokens(content)
         max_tokens = config.get("max_tokens")
 
         if max_tokens and tokens > max_tokens:
-            while tokens > max_tokens and len(self._summaries) > 1:
-                self._summaries.pop(0)
-                content = "\n---\n".join(self._summaries)
-                tokens = len(content) // 4
+            while tokens > max_tokens and len(summaries) > 1:
+                summaries.pop(0)
+                content = "\n---\n".join(summaries)
+                tokens = estimate_tokens(content)
 
         return ResolvedContent(
             key=key,
             content=content,
             tokens=tokens,
-            metadata={"summary_count": len(self._summaries)},
+            metadata={"summary_count": len(summaries)},
         )
 
     @staticmethod
