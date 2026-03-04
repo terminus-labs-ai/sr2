@@ -1,6 +1,7 @@
 """Agent class — the main entry point for the SR2 Runtime."""
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -391,13 +392,11 @@ class Agent:
         self._current_session_id = session.id
 
         # Special commands
-        # TODO: add a proper handler for special commands like __clear_session__, and expand these commands as needed
-        if trigger.input_data == "__clear_session__":
-            await self._sessions.destroy(trigger.session_name)
-            logger.info(
-                f"gent._handle_trigger Session {trigger.session_name} from {trigger.plugin_name} cleared"
-            )
-            return "Session cleared."
+        special = self._handle_special_command(trigger, session)
+        if special is not None:
+            if asyncio.iscoroutine(special):
+                return await special
+            return special
 
         # Add input to session (if not empty — timers have no input)
         # TODO: messages might come from other sources that are not the user. i.e. a2a
@@ -490,6 +489,78 @@ class Agent:
             asyncio.create_task(_delayed_destroy())
 
         return loop_result.response_text or ""
+
+    # --- Special command dispatcher ---
+
+    def _handle_special_command(self, trigger: TriggerContext, session) -> str | None:
+        """Handle plugin special commands. Returns response string or None if not a special command."""
+        cmd = trigger.input_data or ""
+
+        if cmd == "__clear_session__":
+            async def _clear():
+                await self._sessions.destroy(trigger.session_name)
+                logger.info(
+                    f"Agent._handle_trigger Session {trigger.session_name} "
+                    f"from {trigger.plugin_name} cleared"
+                )
+                return "Session cleared."
+            return _clear()
+
+        if cmd == "__get_status__":
+            status: dict = {
+                "agent_name": self._name,
+                "active_sessions": self._sessions.active_sessions,
+                "mcp_servers": list(self._mcp_manager._sessions.keys()),
+            }
+            # Add current session info
+            if session:
+                status["session"] = {
+                    "name": session.id,
+                    "turn_count": session.turn_count,
+                    "user_message_count": session.user_message_count,
+                    "created_at": session.created_at.isoformat(),
+                    "last_activity": session.last_activity.isoformat(),
+                }
+            return json.dumps(status)
+
+        if cmd == "__list_sessions__":
+            sessions_info = []
+            for sid in self._sessions.active_sessions:
+                s = self._sessions.get(sid)
+                if s:
+                    sessions_info.append({
+                        "id": s.id,
+                        "turn_count": s.turn_count,
+                        "user_message_count": s.user_message_count,
+                        "created_at": s.created_at.isoformat(),
+                        "last_activity": s.last_activity.isoformat(),
+                    })
+            return json.dumps(sessions_info)
+
+        if cmd.startswith("__set_active_session__:"):
+            session_name = cmd.split(":", 1)[1]
+            async def _set():
+                state_id = f"_plugin_state_{trigger.interface_name}"
+                state_session = await self._sessions.get_or_create(state_id)
+                state_session.metadata["active_session"] = session_name
+                if self._sessions._store:
+                    await self._sessions.save_session(state_id)
+                return json.dumps({"active_session": session_name})
+            return _set()
+
+        if cmd == "__get_active_session__":
+            async def _get():
+                state_id = f"_plugin_state_{trigger.interface_name}"
+                state_session = self._sessions.get(state_id)
+                if not state_session and self._sessions._store:
+                    state_session = await self._sessions._store.load(state_id)
+                    if state_session:
+                        self._sessions._sessions[state_id] = state_session
+                active = state_session.metadata.get("active_session") if state_session else None
+                return json.dumps({"active_session": active})
+            return _get()
+
+        return None
 
     # --- Internal helpers ---
 

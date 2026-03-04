@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import time
 
 from runtime.plugins.base import TriggerContext
@@ -21,6 +23,70 @@ logger = logging.getLogger(__name__)
 # Telegram message limit is 4096 chars; leave margin for formatting
 _MSG_LIMIT = 4000
 _EDIT_INTERVAL = 0.8  # seconds between edit_text calls
+
+
+def _md_to_telegram_html(text: str) -> str:
+    """Convert common Markdown to Telegram-safe HTML.
+
+    Handles fenced code blocks, inline code, bold, italic, links,
+    and escapes HTML entities in non-formatted text.
+    """
+
+    # Collect protected spans (start, end, replacement) so we don't double-process
+    protected: list[tuple[int, int, str]] = []
+
+    # 1. Fenced code blocks: ```lang\ncode\n```
+    for m in re.finditer(r"```(?:\w*)\n(.*?)```", text, re.DOTALL):
+        code = m.group(1).rstrip("\n")
+        escaped_code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        protected.append((m.start(), m.end(), f"<pre><code>{escaped_code}</code></pre>"))
+
+    # 2. Inline code: `code`
+    for m in re.finditer(r"`([^`\n]+)`", text):
+        if any(s <= m.start() < e for s, e, _ in protected):
+            continue
+        escaped_code = m.group(1).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        protected.append((m.start(), m.end(), f"<code>{escaped_code}</code>"))
+
+    # 3. Links: [text](url)
+    for m in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", text):
+        if any(s <= m.start() < e for s, e, _ in protected):
+            continue
+        link_text = m.group(1).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        protected.append((m.start(), m.end(), f'<a href="{m.group(2)}">{link_text}</a>'))
+
+    # 4. Bold: **text** or __text__
+    for m in re.finditer(r"(\*\*|__)(.+?)\1", text):
+        if any(s <= m.start() < e for s, e, _ in protected):
+            continue
+        protected.append((m.start(), m.end(), f"<b>{m.group(2)}</b>"))
+
+    # 5. Italic: *text* or _text_ (single, not double)
+    for m in re.finditer(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", text):
+        if any(s <= m.start() < e for s, e, _ in protected):
+            continue
+        content = m.group(1) or m.group(2)
+        protected.append((m.start(), m.end(), f"<i>{content}</i>"))
+
+    # Sort by start position and build result
+    protected.sort(key=lambda x: x[0])
+
+    parts: list[str] = []
+    pos = 0
+    for start, end, replacement in protected:
+        if start < pos:
+            continue  # overlapping — skip
+        # Escape plain text between protected spans
+        plain = text[pos:start]
+        parts.append(plain.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        parts.append(replacement)
+        pos = end
+
+    # Remaining plain text
+    plain = text[pos:]
+    parts.append(plain.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    return "".join(parts)
 
 
 class _TelegramStreamState:
@@ -123,7 +189,9 @@ class _TelegramStreamState:
             # Finalize current message if one exists
             if self._current_msg:
                 try:
-                    await self._current_msg.edit_text(text[:_MSG_LIMIT], parse_mode="Markdown")
+                    await self._current_msg.edit_text(
+                        _md_to_telegram_html(text[:_MSG_LIMIT]), parse_mode="HTML"
+                    )
                 except Exception:
                     try:
                         await self._current_msg.edit_text(text[:_MSG_LIMIT])
@@ -145,7 +213,9 @@ class _TelegramStreamState:
         else:
             # Edit existing message
             try:
-                await self._current_msg.edit_text(text, parse_mode="Markdown")
+                await self._current_msg.edit_text(
+                    _md_to_telegram_html(text), parse_mode="HTML"
+                )
             except Exception:
                 try:
                     await self._current_msg.edit_text(text)
@@ -154,9 +224,11 @@ class _TelegramStreamState:
         self._last_edit = time.monotonic()
 
     async def _safe_send(self, text: str):
-        """Send a reply, falling back from Markdown to plain text."""
+        """Send a reply, falling back from HTML to plain text."""
         try:
-            return await self._reply_to.reply_text(text, parse_mode="Markdown")
+            return await self._reply_to.reply_text(
+                _md_to_telegram_html(text), parse_mode="HTML"
+            )
         except Exception:
             try:
                 return await self._reply_to.reply_text(text)
@@ -229,11 +301,36 @@ class TelegramPlugin:
 
         self._app.add_handler(CommandHandler("status", self._cmd_status))
         self._app.add_handler(CommandHandler("forget", self._cmd_forget))
+        self._app.add_handler(CommandHandler("newsession", self._cmd_newsession))
+        self._app.add_handler(CommandHandler("resume", self._cmd_resume))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_message))
 
         await self._app.initialize()
         await self._app.start()
         await self._app.updater.start_polling()
+
+        # Restore last active session
+        try:
+            trigger = TriggerContext(
+                interface_name=self._name,
+                plugin_name="telegram",
+                session_name="_plugin_state_restore",
+                session_lifecycle="ephemeral",
+                input_data="__get_active_session__",
+                metadata={"command": "get_active_session"},
+            )
+            resp = await self._callback(trigger)
+            if resp:
+                data = json.loads(resp)
+                if data.get("active_session"):
+                    self._session_config["name"] = data["active_session"]
+                    logger.info(
+                        f"Telegram plugin '{self._name}' restored active session: "
+                        f"{data['active_session']}"
+                    )
+        except Exception as e:
+            logger.debug(f"Could not restore active session: {e}")
+
         logger.info(f"Telegram plugin '{self._name}' started")
 
     async def stop(self) -> None:
@@ -252,7 +349,9 @@ class TelegramPlugin:
         for uid in self._allowed_users:
             for chunk in _TelegramStreamState._split_text(content, _MSG_LIMIT):
                 try:
-                    await self._bot.send_message(chat_id=uid, text=chunk, parse_mode="Markdown")
+                    await self._bot.send_message(
+                        chat_id=uid, text=_md_to_telegram_html(chunk), parse_mode="HTML"
+                    )
                 except Exception:
                     try:
                         await self._bot.send_message(chat_id=uid, text=chunk)
@@ -305,7 +404,51 @@ class TelegramPlugin:
             await self._safe_reply(update.message, response)
 
     async def _cmd_status(self, update, context) -> None:
-        await update.message.reply_text("Online.")
+        """Show agent status with session metrics."""
+        user_id = update.message.from_user.id
+        session_name = self._session_config.get("name", f"telegram_{user_id}")
+        trigger = TriggerContext(
+            interface_name=self._name,
+            plugin_name="telegram",
+            session_name=session_name,
+            session_lifecycle="persistent",
+            input_data="__get_status__",
+            metadata={"command": "status"},
+        )
+        try:
+            resp = await self._callback(trigger)
+            data = json.loads(resp)
+
+            lines = [f"<b>{data.get('agent_name', 'Agent')}</b> — Online"]
+
+            sess = data.get("session")
+            if sess:
+                lines.append("")
+                lines.append(f"<b>Current session:</b> <code>{sess['name']}</code>")
+                lines.append(f"  Turns: {sess['turn_count']}")
+                lines.append(f"  User messages: {sess['user_message_count']}")
+                lines.append(f"  Created: {sess['created_at'][:19]}")
+                lines.append(f"  Last activity: {sess['last_activity'][:19]}")
+
+            active = data.get("active_sessions", [])
+            if active:
+                lines.append("")
+                lines.append(f"<b>Active sessions ({len(active)}):</b>")
+                for s in active:
+                    marker = " (current)" if sess and s == sess["name"] else ""
+                    lines.append(f"  • <code>{s}</code>{marker}")
+
+            mcp = data.get("mcp_servers", [])
+            if mcp:
+                lines.append("")
+                lines.append(f"<b>MCP servers ({len(mcp)}):</b>")
+                for s in mcp:
+                    lines.append(f"  • {s}")
+
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            logger.exception(f"Status command failed: {e}")
+            await update.message.reply_text("Online.")
 
     async def _cmd_forget(self, update, context) -> None:
         """Clear the session for this user."""
@@ -322,14 +465,90 @@ class TelegramPlugin:
         await self._callback(trigger)
         await update.message.reply_text("Session cleared.")
 
+    async def _cmd_newsession(self, update, context) -> None:
+        """Start a new session, clearing the current one."""
+        user_id = update.message.from_user.id
+        session_name = self._session_config.get("name", f"telegram_{user_id}")
+        trigger = TriggerContext(
+            interface_name=self._name,
+            plugin_name="telegram",
+            session_name=session_name,
+            session_lifecycle="persistent",
+            input_data="__clear_session__",
+            metadata={"command": "newsession"},
+        )
+        await self._callback(trigger)
+        await update.message.reply_text("New session started.")
+
+    async def _cmd_resume(self, update, context) -> None:
+        """List or switch to an existing session."""
+        args = (context.args or []) if context else []
+
+        if args:
+            # Switch to the specified session
+            target = args[0]
+            self._session_config["name"] = target
+
+            # Persist the choice
+            trigger = TriggerContext(
+                interface_name=self._name,
+                plugin_name="telegram",
+                session_name="_plugin_state_resume",
+                session_lifecycle="ephemeral",
+                input_data=f"__set_active_session__:{target}",
+                metadata={"command": "resume"},
+            )
+            await self._callback(trigger)
+            await update.message.reply_text(
+                f"Switched to session <code>{target}</code>.", parse_mode="HTML"
+            )
+            return
+
+        # No args — list available sessions
+        user_id = update.message.from_user.id
+        session_name = self._session_config.get("name", f"telegram_{user_id}")
+        trigger = TriggerContext(
+            interface_name=self._name,
+            plugin_name="telegram",
+            session_name=session_name,
+            session_lifecycle="persistent",
+            input_data="__list_sessions__",
+            metadata={"command": "resume"},
+        )
+        try:
+            resp = await self._callback(trigger)
+            sessions = json.loads(resp)
+
+            if not sessions:
+                await update.message.reply_text("No active sessions.")
+                return
+
+            lines = ["<b>Available sessions:</b>"]
+            for s in sessions:
+                marker = " (current)" if s["id"] == session_name else ""
+                lines.append(
+                    f"  • <code>{s['id']}</code>{marker}\n"
+                    f"    Turns: {s['turn_count']} | "
+                    f"Last: {s['last_activity'][:19]}"
+                )
+            lines.append("")
+            lines.append("Use /resume &lt;name&gt; to switch.")
+
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as e:
+            logger.exception(f"Resume command failed: {e}")
+            await update.message.reply_text("Could not list sessions.")
+
     async def _safe_reply(self, message, text: str) -> None:
-        """Send with Markdown, fall back to plain text on parse failure.
+        """Send with HTML, fall back to plain text on parse failure.
 
         Splits long messages into chunks to stay within Telegram's 4096 char limit.
         """
         for chunk in _TelegramStreamState._split_text(text, _MSG_LIMIT):
             try:
-                await message.reply_text(chunk, parse_mode="Markdown")
+                await message.reply_text(
+                    _md_to_telegram_html(chunk), parse_mode="HTML"
+                )
             except Exception:
                 try:
                     await message.reply_text(chunk)
