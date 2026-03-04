@@ -243,13 +243,13 @@ class PipelineEngine:
         if had_required_failure:
             if resolved:
                 tokens = sum(c.tokens for c in resolved)
-                result.add_stage(timer.result(status="degraded", tokens=tokens, fallback=True))
+                result.add_stage(timer.result(status="degraded", tokens_used=tokens, fallback_used=True))
                 logger.info(f"Layer {layer.name} degraded to {tokens} tokens.")
                 return resolved
             return None
 
         tokens = sum(c.tokens for c in resolved)
-        result.add_stage(timer.result(status="success", tokens=tokens))
+        result.add_stage(timer.result(status="success", tokens_used=tokens))
         logger.info(f"Layer {layer.name} successfully resolved to {tokens} tokens.")
         return resolved
 
@@ -295,8 +295,8 @@ class PipelineEngine:
                     contents.pop(i)
                 else:
                     new_tokens = item.tokens - excess
-                    ratio = new_tokens / item.tokens if item.tokens > 0 else 0
-                    new_content = item.content[: int(len(item.content) * ratio)]
+                    char_limit = max(0, new_tokens * 4)
+                    new_content = item.content[:char_limit]
                     contents[i] = ResolvedContent(
                         key=item.key,
                         content=new_content,

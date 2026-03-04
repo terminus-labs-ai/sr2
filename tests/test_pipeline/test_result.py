@@ -35,7 +35,7 @@ class TestStageTimer:
     def test_timer_result_produces_correct_stage_result(self):
         with StageTimer("summarize") as timer:
             time.sleep(0.01)
-        sr = timer.result(status="success", tokens=42, fallback=False, error=None)
+        sr = timer.result(status="success", tokens_used=42, fallback_used=False, error=None)
         assert isinstance(sr, StageResult)
         assert sr.stage_name == "summarize"
         assert sr.status == "success"

@@ -22,6 +22,7 @@ class CacheReport:
     changed_layers: list[str] = field(default_factory=list)
     expected_cached_tokens: int = 0
     actual_cached_tokens: int = 0
+    first_invocation: bool = False
 
     @property
     def cache_efficiency(self) -> float:
@@ -72,6 +73,7 @@ class PrefixTracker:
                 changed_layers=[],
                 expected_cached_tokens=current.prefix_tokens,
                 actual_cached_tokens=actual_cached_tokens,
+                first_invocation=True,
             )
 
         # Identify changed layers

@@ -86,7 +86,7 @@ class PostLLMProcessor:
             await coro(*args)
             result.add_stage(StageResult(stage_name=name, status="success"))
         except Exception as e:
-            logger.warning(f"Post-LLM stage '{name}' failed: {e}")
+            logger.warning(f"Post-LLM stage '{name}' failed: {e}", exc_info=True)
             result.add_stage(StageResult(stage_name=name, status="failed", error=str(e)))
 
     async def _extract_memories(

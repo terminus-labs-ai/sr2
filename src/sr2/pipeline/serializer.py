@@ -31,8 +31,9 @@ class ContextSerializer:
         """
         sections = []
         for layer_str in layers.values():
-            if layer_str:
-                sections.append(layer_str)
+            stripped = layer_str.rstrip()
+            if stripped:
+                sections.append(stripped)
         return "\n\n".join(sections)
 
     def hash_content(self, content: str) -> str:

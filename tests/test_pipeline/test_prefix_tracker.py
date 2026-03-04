@@ -5,7 +5,7 @@ from sr2.pipeline.prefix_tracker import PrefixTracker, PrefixSnapshot
 
 class TestPrefixTracker:
     def test_first_call_no_comparison(self):
-        """First call returns prefix_stable=True with no changed layers."""
+        """First call returns prefix_stable=True with first_invocation=True."""
         tracker = PrefixTracker()
         snap = PrefixSnapshot(
             full_hash="abc123", layer_hashes={"core": "h1"}, prefix_tokens=100
@@ -13,6 +13,7 @@ class TestPrefixTracker:
         report = tracker.compare(snap, actual_cached_tokens=0)
 
         assert report.prefix_stable is True
+        assert report.first_invocation is True
         assert report.changed_layers == []
         assert report.expected_cached_tokens == 100
         assert report.actual_cached_tokens == 0
@@ -31,6 +32,7 @@ class TestPrefixTracker:
         report = tracker.compare(snap2, actual_cached_tokens=180)
 
         assert report.prefix_stable is True
+        assert report.first_invocation is False
         assert report.changed_layers == []
         assert report.expected_cached_tokens == 200
         assert report.actual_cached_tokens == 180
