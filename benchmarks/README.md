@@ -1,6 +1,6 @@
 # How I stopped my AI agents from getting dumber after 10 turns
 
-TL;DR: Built an open-source context engineering library. 5/5 decision recall vs 3/5 naive on Claude Opus, 52% token reduction, 3.6x information density, 100% cache hit rate. Apache 2.0, `pip install sr2`. Link at the bottom if you want to skip the story.
+TL;DR: Built an open-source context engineering library. 5/5 decision recall vs 3/5 naive on Claude Opus, 52% token reduction, 3.6x information density, 100% cache hit rate. Apache 2.0, [github.com/terminus-labs-ai/sr2](https://github.com/terminus-labs-ai/sr2). Link at the bottom if you want to skip the story.
 
 ## The Journey (skip if you don't like storytelling)
 
@@ -125,7 +125,7 @@ The growth curve is the thing that convinced me this was worth releasing. Naive 
 
 ## What it is and what it isn't
 
-SR2 is a Python library. Apache 2.0, open source. `pip install sr2` and you get the core: pydantic, pyyaml, litellm, nothing else.
+SR2 is a Python library. Apache 2.0, open source. Clone the repo and `pip install -e .` — you get the core: pydantic, pyyaml, litellm, nothing else.
 
 It is NOT a framework. It doesn't own your agent loop, your LLM calls, or your tool execution. You give it a config and some context, it gives you back a compiled string and a token count. That's it. What you do with that is your business. It works with anything through LiteLLM — OpenAI, Anthropic, Ollama, whatever you're running.
 
@@ -156,7 +156,9 @@ This is only the very first iteration. There's still a lot of fixes and improvem
 ## Try it
 
 ```bash
-pip install sr2
+git clone https://github.com/terminus-labs-ai/sr2.git
+cd sr2
+pip install -e .
 ```
 
 GitHub: [github.com/terminus-labs-ai/sr2](https://github.com/terminus-labs-ai/sr2)
