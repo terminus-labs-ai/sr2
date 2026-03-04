@@ -5,9 +5,9 @@ import logging
 import re
 
 from sr2.memory.schema import CONFIDENCE_SCORES, STABILITY_DEFAULTS, ExtractionResult, Memory
+from sr2.memory.store import MemoryStore
 
 logger = logging.getLogger(__name__)
-from sr2.memory.store import MemoryStore
 
 # Patterns that indicate tool/system artifact content — not worth memorising
 _TOOL_ARTIFACT_KEYS = re.compile(
