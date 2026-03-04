@@ -225,6 +225,21 @@ class LLMConfig(BaseModel):
     )
 
 
+class KeySchemaEntry(BaseModel):
+    prefix: str = Field(description="Key prefix, e.g. 'user.preference'")
+    description: str = Field(default="", description="Human-readable description of this prefix")
+    examples: list[str] = Field(default_factory=list, description="Example keys for LLM guidance")
+    model_config = {"extra": "allow"}
+
+
+class MemoryConfig(BaseModel):
+    key_schema: list[KeySchemaEntry] = Field(
+        default_factory=list,
+        description="Key prefix schema for memory extraction. Guides the LLM to use "
+        "consistent, dot-notation keys.",
+    )
+
+
 class PipelineConfig(BaseModel):
     """Root config model. Represents a fully resolved interface config."""
 
@@ -278,6 +293,9 @@ class PipelineConfig(BaseModel):
     )
     degradation: DegradationConfig = Field(
         default_factory=DegradationConfig, description="Circuit breaker and degradation settings"
+    )
+    memory: MemoryConfig = Field(
+        default_factory=MemoryConfig, description="Memory extraction settings"
     )
     layers: list[LayerConfig] = Field(
         default_factory=list,
