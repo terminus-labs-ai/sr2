@@ -100,9 +100,17 @@ class MemoryExtractor:
         """Build the extraction prompt."""
         schema_text = ""
         if self._key_schema:
-            schema_text = "Use these key prefixes:\n"
+            schema_text = "Keys MUST use one of these dot-notation prefixes:\n"
             for s in self._key_schema:
-                schema_text += f"  - {s['prefix']}: e.g. {', '.join(s.get('examples', []))}\n"
+                entry = f"  - {s['prefix']}"
+                if s.get("description"):
+                    entry += f": {s['description']}"
+                if s.get("examples"):
+                    entry += f" (e.g. {', '.join(s['examples'])})"
+                schema_text += entry + "\n"
+            schema_text += (
+                "Format: <prefix>.<specific_attribute> in lowercase with dots, no spaces.\n"
+            )
 
         return f"""Extract durable, personal facts from this conversation turn.
 Output ONLY a JSON array. No markdown, no explanation.

@@ -145,6 +145,12 @@ class SR2:
         # Compaction + Summarization
         agent_yaml_path = os.path.join(config.config_dir, "agent.yaml")
         agent_config = self._loader.load(agent_yaml_path)
+
+        # Wire key_schema to extractor now that agent_config is loaded
+        key_schema = [s.model_dump() for s in agent_config.memory.key_schema]
+        if key_schema:
+            self._extractor._key_schema = key_schema
+
         self._compaction_engine = CompactionEngine(agent_config.compaction)
         self._summarization_engine = SummarizationEngine(
             config=agent_config.summarization,
