@@ -501,10 +501,11 @@ class Agent:
         if cmd == "__get_status__":
             status: dict = {
                 "agent_name": self._name,
+                "model": self._agent_config.runtime.llm.model.name,
                 "active_sessions": self._sessions.active_sessions,
                 "mcp_servers": list(self._mcp_manager._sessions.keys()),
             }
-            # Add current session info
+            # Current session info
             if session:
                 status["session"] = {
                     "name": session.id,
@@ -513,6 +514,32 @@ class Agent:
                     "created_at": session.created_at.isoformat(),
                     "last_activity": session.last_activity.isoformat(),
                 }
+            # Latest metrics from SR2 collector
+            try:
+                from sr2.metrics.definitions import MetricNames
+                snapshots = self._sr2._collector.get_latest(1)
+                if snapshots:
+                    snap = snapshots[0]
+                    metrics: dict = {}
+                    for name, key in [
+                        ("total_tokens", MetricNames.PIPELINE_TOTAL_TOKENS),
+                        ("budget_headroom_tokens", MetricNames.BUDGET_HEADROOM_TOKENS),
+                        ("budget_headroom_ratio", MetricNames.BUDGET_HEADROOM_RATIO),
+                        ("cache_hit_rate", MetricNames.CACHE_HIT_RATE),
+                        ("naive_token_estimate", MetricNames.NAIVE_TOKEN_ESTIMATE),
+                        ("token_savings_cumulative", MetricNames.TOKEN_SAVINGS_CUMULATIVE),
+                        ("truncation_events", MetricNames.TRUNCATION_EVENTS),
+                        ("raw_window_utilization", MetricNames.RAW_WINDOW_UTILIZATION),
+                        ("loop_iterations", "sr2_loop_iterations"),
+                        ("loop_tool_calls", "sr2_loop_tool_calls"),
+                    ]:
+                        m = snap.get(key)
+                        if m is not None:
+                            metrics[name] = m.value
+                    status["metrics"] = metrics
+                    status["token_budget"] = self._sr2._token_budget
+            except Exception as e:
+                logger.debug(f"Could not collect metrics for status: {e}")
             return json.dumps(status)
 
         if cmd == "__list_sessions__":
