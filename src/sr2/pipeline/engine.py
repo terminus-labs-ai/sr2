@@ -102,6 +102,11 @@ class PipelineEngine:
                 should_recompute = policy.should_recompute(
                     layer.name, current_state, self._previous_state
                 )
+            else:
+                logger.warning(
+                    f"Unknown cache policy '{layer.cache_policy}' for layer "
+                    f"'{layer.name}', defaulting to recompute"
+                )
 
             if not should_recompute and layer.name in self._layer_cache:
                 # Cache hit — reuse cached objects and serialized string
