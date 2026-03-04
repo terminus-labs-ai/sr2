@@ -419,25 +419,71 @@ class TelegramPlugin:
             resp = await self._callback(trigger)
             data = json.loads(resp)
 
-            lines = [f"<b>{data.get('agent_name', 'Agent')}</b> — Online"]
+            model = data.get("model", "unknown")
+            lines = [
+                f"<b>{data.get('agent_name', 'Agent')}</b> — Online",
+                f"Model: <code>{model}</code>",
+            ]
 
+            # Context & token metrics
+            m = data.get("metrics", {})
+            budget = data.get("token_budget")
+            if m:
+                lines.append("")
+                lines.append("<b>Context:</b>")
+                total = m.get("total_tokens")
+                if total is not None and budget:
+                    pct = total / budget * 100 if budget else 0
+                    lines.append(f"  Tokens: {int(total):,} / {int(budget):,} ({pct:.0f}%)")
+                elif total is not None:
+                    lines.append(f"  Tokens: {int(total):,}")
+                headroom = m.get("budget_headroom_ratio")
+                if headroom is not None:
+                    lines.append(f"  Headroom: {headroom * 100:.0f}%")
+                cache = m.get("cache_hit_rate")
+                if cache is not None:
+                    lines.append(f"  Cache hit rate: {cache * 100:.0f}%")
+                window = m.get("raw_window_utilization")
+                if window is not None:
+                    lines.append(f"  Window utilization: {window * 100:.0f}%")
+                trunc = m.get("truncation_events")
+                if trunc is not None and trunc > 0:
+                    lines.append(f"  Truncation events: {int(trunc)}")
+                savings = m.get("token_savings_cumulative")
+                if savings is not None and savings > 0:
+                    lines.append(f"  Token savings (cumulative): {int(savings):,}")
+
+            # Session info
             sess = data.get("session")
             if sess:
                 lines.append("")
-                lines.append(f"<b>Current session:</b> <code>{sess['name']}</code>")
-                lines.append(f"  Turns: {sess['turn_count']}")
-                lines.append(f"  User messages: {sess['user_message_count']}")
+                lines.append(f"<b>Session:</b> <code>{sess['name']}</code>")
+                lines.append(f"  Turns: {sess['turn_count']} ({sess['user_message_count']} user)")
                 lines.append(f"  Created: {sess['created_at'][:19]}")
                 lines.append(f"  Last activity: {sess['last_activity'][:19]}")
+                if m:
+                    iters = m.get("loop_iterations")
+                    tools = m.get("loop_tool_calls")
+                    if iters is not None or tools is not None:
+                        parts = []
+                        if iters is not None:
+                            parts.append(f"{int(iters)} loop iters")
+                        if tools is not None:
+                            parts.append(f"{int(tools)} tool calls")
+                        lines.append(f"  Last turn: {', '.join(parts)}")
 
+            # Other sessions
             active = data.get("active_sessions", [])
-            if active:
+            if active and len(active) > 1:
                 lines.append("")
                 lines.append(f"<b>Active sessions ({len(active)}):</b>")
                 for s in active:
+                    if s.startswith("_plugin_state_"):
+                        continue
                     marker = " (current)" if sess and s == sess["name"] else ""
                     lines.append(f"  • <code>{s}</code>{marker}")
 
+            # MCP
             mcp = data.get("mcp_servers", [])
             if mcp:
                 lines.append("")
