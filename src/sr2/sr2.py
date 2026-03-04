@@ -162,6 +162,7 @@ class SR2:
             compaction_engine=self._compaction_engine,
             summarization_engine=self._summarization_engine,
             raw_window=agent_config.compaction.raw_window,
+            compacted_max_tokens=agent_config.token_budget // 2,
         )
 
         # Post-LLM processor
