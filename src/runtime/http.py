@@ -1,6 +1,6 @@
 """Generic HTTP endpoints for any agent."""
 
-import time
+import logging
 import uuid
 from pathlib import Path
 
@@ -9,7 +9,37 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from runtime.agent import Agent
 
+logger = logging.getLogger(__name__)
+
 _STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _find_http_plugin(agent: Agent):
+    """Find the HTTP plugin instance from agent._plugins.
+
+    Returns the plugin if found, otherwise None.
+    """
+    for plugin in agent._plugins.values():
+        from runtime.plugins.http import HTTPPlugin
+
+        if isinstance(plugin, HTTPPlugin):
+            return plugin
+    return None
+
+
+def _create_default_http_plugin(agent: Agent):
+    """Create a default HTTPPlugin for backwards compatibility.
+
+    Used when no explicit HTTP interface is configured in the agent YAML
+    but the agent is started with --http.
+    """
+    from runtime.plugins.http import HTTPPlugin
+
+    return HTTPPlugin(
+        interface_name="http",
+        config={"agent_name": agent._name.lower()},
+        agent_callback=agent._handle_trigger,
+    )
 
 
 def create_http_app(agent: Agent) -> FastAPI:
@@ -26,76 +56,22 @@ def create_http_app(agent: Agent) -> FastAPI:
     """
     app = FastAPI(title=f"{agent._name} Agent")
 
-    @app.post("/chat")
-    async def chat(request: Request):
-        body = await request.json()
-        response = await agent.handle_user_message(
-            message=body.get("message", ""),
-            session_id=body.get("session_id", "http_default"),
-        )
-        return {"response": response}
+    # --- Plugin-provided routes (chat, OpenAI-compat) ---
+    http_plugin = _find_http_plugin(agent)
+    if http_plugin is None:
+        logger.info("No HTTP plugin configured; creating default for backwards compatibility")
+        http_plugin = _create_default_http_plugin(agent)
 
-    # -- OpenAI-compatible endpoints (for Open WebUI, etc.) --
+    # Ensure the plugin knows the agent name for model IDs
+    http_plugin._agent_name = agent._name.lower()
 
-    @app.get("/v1/models")
-    async def openai_models():
-        model_id = f"sr2-{agent._name.lower()}"
-        return {
-            "object": "list",
-            "data": [
-                {
-                    "id": model_id,
-                    "object": "model",
-                    "created": 0,
-                    "owned_by": "sr2",
-                }
-            ],
-        }
+    routes = http_plugin.get_routes()
 
-    @app.post("/v1/chat/completions")
-    async def openai_chat(request: Request):
-        body = await request.json()
-        messages = body.get("messages", [])
+    app.post("/chat")(routes["chat"])
+    app.post("/v1/chat/completions")(routes["openai_chat"])
+    app.get("/v1/models")(routes["openai_models"])
 
-        # Extract the last user message
-        user_message = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    # Handle content array format
-                    user_message = " ".join(
-                        p.get("text", "") for p in content if p.get("type") == "text"
-                    )
-                else:
-                    user_message = content
-                break
-
-        # Use model field as a session namespace so different
-        # "model" selections in Open WebUI get separate sessions
-        session_id = f"openai_{body.get('model', 'default')}"
-
-        response = await agent.handle_user_message(
-            message=user_message,
-            session_id=session_id,
-        )
-
-        return {
-            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": body.get("model", f"sr2-{agent._name.lower()}"),
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": response},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        }
-
-    # -- Standard endpoints --
+    # --- Infrastructure endpoints (agent-level, not interface-specific) ---
 
     @app.get("/health")
     async def health():

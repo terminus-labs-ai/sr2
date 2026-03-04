@@ -171,6 +171,7 @@ class TestHTTPPlugin:
         # Mock FastAPI Request
         mock_request = AsyncMock()
         mock_request.json.return_value = {"message": "hello", "session_id": "sess_42"}
+        mock_request.headers = {}
 
         resp = await routes["chat"](mock_request)
         assert cb.call_count == 1
