@@ -65,7 +65,7 @@ Config is in `pyproject.toml`: Python 3.12 target, 100-char line length.
 
 ```
 src/
-├── sr2/           # The library (pip install sr2)
+├── sr2/           # The library (pip install -e .)
 │   ├── config/        Config models, loader, validation
 │   ├── pipeline/      Engine, router, conversation manager
 │   ├── resolvers/     Content resolvers

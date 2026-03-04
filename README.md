@@ -50,17 +50,20 @@ Layers are ordered most-stable to least-stable. The system prompt never changes,
 ## Install
 
 ```bash
+git clone https://github.com/terminus-labs-ai/sr2.git
+cd sr2
+
 # Core library (pydantic + pyyaml + litellm, nothing else)
-pip install sr2
+pip install -e .
 
 # With the agent runtime (FastAPI + uvicorn)
-pip install sr2[runtime]
+pip install -e ".[runtime]"
 
 # Everything
-pip install sr2[all]
+pip install -e ".[all]"
 
 # Development
-pip install sr2[dev]
+pip install -e ".[dev]"
 ```
 
 ## Quick Start
@@ -243,7 +246,7 @@ The repo includes an **agent runtime** (`src/runtime/`) that wires the library i
 
 ```
 src/
-├── sr2/           # The library (this is what you pip install)
+├── sr2/           # The library (pip install -e .)
 │   ├── config/        #   Config models, loader, validation, schema gen
 │   ├── pipeline/      #   Engine, router, conversation manager, post-processor
 │   ├── resolvers/     #   Content resolvers (config, input, session, retrieval, etc.)

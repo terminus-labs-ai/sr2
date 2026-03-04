@@ -5,7 +5,9 @@ Runnable examples demonstrating SR2's core features. No LLM API key or database 
 ## Setup
 
 ```bash
-pip install sr2
+git clone https://github.com/terminus-labs-ai/sr2.git
+cd sr2
+pip install -e .
 ```
 
 ## Examples
