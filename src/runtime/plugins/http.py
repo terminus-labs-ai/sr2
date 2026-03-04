@@ -65,7 +65,7 @@ class HTTPPlugin:
     def get_routes(self):
         """Return FastAPI route handlers for the Agent to mount."""
         from fastapi import Request
-        from fastapi.responses import JSONResponse, StreamingResponse
+        from fastapi.responses import JSONResponse
 
         async def chat(request: Request):
             body = await request.json()
