@@ -56,6 +56,26 @@ class TestResponseNormalizerDefaultChain:
         result = normalizer.normalize(raw)
         assert result == "plain text response"
 
+    def test_json_array_with_preamble(self):
+        """Extracts JSON array from preamble text."""
+        normalizer = ResponseNormalizer()
+        raw = 'Here are the results:\n[{"a": 1}, {"b": 2}]'
+        assert normalizer.normalize(raw) == '[{"a": 1}, {"b": 2}]'
+
+    def test_uppercase_json_fence(self):
+        """Strips ```JSON (uppercase) fence."""
+        normalizer = ResponseNormalizer()
+        raw = '```JSON\n{"a": 1}\n```'
+        assert normalizer.normalize(raw) == '{"a": 1}'
+
+    def test_python_fence_not_stripped(self):
+        """Non-JSON fences are left intact and don't corrupt content."""
+        normalizer = ResponseNormalizer()
+        raw = '```python\nprint("hello")\n```'
+        result = normalizer.normalize(raw)
+        assert "python" in result
+        assert "print" in result
+
 
 class TestResponseNormalizerCustomChain:
     """Tests for ResponseNormalizer with a custom step chain."""

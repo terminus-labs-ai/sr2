@@ -38,23 +38,43 @@ class StripThinkingBlocksStep:
 
 
 class StripMarkdownFencesStep:
-    """Removes ```json / ``` opening and closing fences."""
+    """Removes markdown code fences (```json, ```JSON, ```jsonc, plain ```, etc.)."""
 
-    _PATTERN = re.compile(r"^```(?:json)?\s*|```\s*$", re.MULTILINE)
+    _PATTERN = re.compile(
+        r"^```(?:jsonc?|JSON)?\s*\n(.*?)^```\s*$",
+        re.MULTILINE | re.DOTALL,
+    )
 
     def normalize(self, inp: NormalizationInput) -> NormalizationOutput:
-        result = self._PATTERN.sub("", inp.text).strip()
+        result = self._PATTERN.sub(r"\1", inp.text).strip()
         return NormalizationOutput(text=result, was_modified=result != inp.text)
 
 
 class ExtractJsonObjectStep:
-    """Slices text from first '{' to last '}'; returns unchanged if no braces."""
+    """Extracts the outermost JSON object or array from surrounding text."""
 
     def normalize(self, inp: NormalizationInput) -> NormalizationOutput:
-        start = inp.text.find("{")
-        end = inp.text.rfind("}")
-        if start == -1 or end == -1:
+        obj_start = inp.text.find("{")
+        obj_end = inp.text.rfind("}")
+        arr_start = inp.text.find("[")
+        arr_end = inp.text.rfind("]")
+
+        has_obj = obj_start != -1 and obj_end != -1 and obj_end > obj_start
+        has_arr = arr_start != -1 and arr_end != -1 and arr_end > arr_start
+
+        if has_obj and has_arr:
+            # Pick whichever starts first (outermost)
+            if arr_start < obj_start:
+                start, end = arr_start, arr_end
+            else:
+                start, end = obj_start, obj_end
+        elif has_obj:
+            start, end = obj_start, obj_end
+        elif has_arr:
+            start, end = arr_start, arr_end
+        else:
             return NormalizationOutput(text=inp.text, was_modified=False)
+
         result = inp.text[start : end + 1]
         return NormalizationOutput(text=result, was_modified=result != inp.text)
 
