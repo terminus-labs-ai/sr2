@@ -101,8 +101,10 @@ class TestCompactionEngine:
         result = engine.compact(turns)
 
         assert result.turns_compacted == 1
-        assert turns[0].compacted is True
-        assert "lines" in turns[0].content
+        # Original turn is not mutated; compacted turn is in result.turns
+        assert turns[0].compacted is False
+        assert result.turns[0].compacted is True
+        assert "lines" in result.turns[0].content
 
     def test_unknown_content_type_not_compacted(self):
         """Turn with unknown content_type is not compacted."""
@@ -169,7 +171,7 @@ class TestCompactionEngine:
         ]
 
         result1 = engine.compact(turns)
-        result2 = engine.compact(turns)
+        result2 = engine.compact(result1.turns)
 
         assert result2.turns_compacted == 0  # Already compacted
         assert result1.compacted_tokens == result2.compacted_tokens

@@ -102,10 +102,18 @@ class CompactionEngine:
             output = rule.compact(inp, rule_config.model_dump())
 
             if output.was_compacted:
-                turn.content = output.content
+                compacted_content = output.content
                 if output.recovery_hint:
-                    turn.content += f"\n  Recovery: {output.recovery_hint}"
-                turn.compacted = True
+                    compacted_content += f"\n  Recovery: {output.recovery_hint}"
+                new_turn = ConversationTurn(
+                    turn_number=turn.turn_number,
+                    role=turn.role,
+                    content=compacted_content,
+                    content_type=turn.content_type,
+                    metadata=turn.metadata,
+                    compacted=True,
+                )
+                compactable[compactable.index(turn)] = new_turn
                 compacted_tokens += output.tokens
                 turns_compacted += 1
             else:
@@ -118,7 +126,7 @@ class CompactionEngine:
 
         all_turns = compactable + protected
         logger.info(
-            f"Compaction completed - went from {original_tokens} to {compacted_tokens}, compacted {turns_compacted}/{all_turns} turns"
+            f"Compaction completed - went from {original_tokens} to {compacted_tokens}, compacted {turns_compacted}/{len(all_turns)} turns"
         )
 
         return CompactionResult(

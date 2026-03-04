@@ -47,6 +47,12 @@ class SchemaAndSampleRule:
         summary = f"\u2192 {len(lines)} lines. Sample:\n{sample}..."
         est_tokens = len(summary) // 4
 
+        # Truncate content if it exceeds the token budget
+        if est_tokens > max_tokens:
+            max_chars = max_tokens * 4
+            summary = summary[:max_chars] + "..."
+            est_tokens = max_tokens
+
         hint = None
         if config.get("recovery_hint"):
             tool_name = inp.metadata.get("tool_name", "the tool") if inp.metadata else "the tool"
@@ -54,7 +60,7 @@ class SchemaAndSampleRule:
 
         return CompactionOutput(
             content=summary,
-            tokens=min(est_tokens, max_tokens),
+            tokens=est_tokens,
             was_compacted=True,
             recovery_hint=hint,
         )
@@ -66,18 +72,23 @@ class ReferenceRule:
     def compact(self, inp: CompactionInput, config: dict) -> CompactionOutput:
         meta = inp.metadata or {}
         path = meta.get("file_path", "unknown")
-        line_count = meta.get("line_count", "?")
-        language = meta.get("language", "")
-        size = meta.get("size", "")
+        include_metadata = config.get("include_metadata")
+
+        # If include_metadata is specified, only show those fields
+        metadata_fields = {
+            "line_count": lambda: f"{meta.get('line_count', '?')} lines" if meta.get("line_count") else None,
+            "language": lambda: meta.get("language") or None,
+            "size": lambda: meta.get("size") or None,
+        }
 
         parts = [f"\u2192 Saved to {path}"]
         detail_parts = []
-        if line_count != "?":
-            detail_parts.append(f"{line_count} lines")
-        if language:
-            detail_parts.append(language)
-        if size:
-            detail_parts.append(size)
+        fields_to_check = include_metadata if include_metadata else list(metadata_fields.keys())
+        for field in fields_to_check:
+            if field in metadata_fields:
+                value = metadata_fields[field]()
+                if value:
+                    detail_parts.append(value)
         if detail_parts:
             parts[0] += f" ({', '.join(detail_parts)})"
 
