@@ -81,9 +81,10 @@ class HybridRetriever:
         if max_tokens is not None:
             results = self._cap_by_tokens(results, max_tokens)
 
-        # Touch accessed memories
+        # Touch accessed memories and persist updates
         for r in results:
             r.memory.touch()
+            await self._store.save(r.memory)
 
         return results
 
@@ -101,11 +102,11 @@ class HybridRetriever:
 
             # Weighted combination
             base = r.relevance_score
-            r.relevance_score = (
+            r.relevance_score = min(1.0, max(0.0,
                 base * (1 - self._weights["recency"] - self._weights["frequency"])
                 + recency_score * self._weights["recency"]
                 + frequency_score * self._weights["frequency"]
-            )
+            ))
         return results
 
     def _cap_by_tokens(

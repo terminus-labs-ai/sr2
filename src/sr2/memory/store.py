@@ -186,7 +186,11 @@ class PostgresMemoryStore:
     async def save(self, memory: Memory, embedding: list[float] | None = None) -> None:
         """Save a memory. If ID exists, update it."""
         data = memory.model_dump()
-        embed_str = str(embedding) if embedding is not None else None
+        embed_str = (
+            "[" + ",".join(str(v) for v in embedding) + "]"
+            if embedding is not None
+            else None
+        )
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
@@ -275,23 +279,23 @@ class PostgresMemoryStore:
         include_archived: bool = False,
     ) -> list[MemorySearchResult]:
         """Semantic search by vector embedding."""
-        query = """
-            SELECT *, 1 - (embedding <=> $1::vector) as similarity
-            FROM memories WHERE archived = $2 AND embedding IS NOT NULL
-            ORDER BY embedding <=> $1::vector LIMIT $3
-        """
-        archived_filter = None if include_archived else False
+        embed_str = "[" + ",".join(str(v) for v in embedding) + "]"
         if include_archived:
             query = """
                 SELECT *, 1 - (embedding <=> $1::vector) as similarity
                 FROM memories WHERE embedding IS NOT NULL
                 ORDER BY embedding <=> $1::vector LIMIT $2
             """
+            params = [embed_str, top_k]
+        else:
+            query = """
+                SELECT *, 1 - (embedding <=> $1::vector) as similarity
+                FROM memories WHERE archived = false AND embedding IS NOT NULL
+                ORDER BY embedding <=> $1::vector LIMIT $2
+            """
+            params = [embed_str, top_k]
         async with self._pool.acquire() as conn:
-            if include_archived:
-                rows = await conn.fetch(query, str(embedding), top_k)
-            else:
-                rows = await conn.fetch(query, str(embedding), archived_filter, top_k)
+            rows = await conn.fetch(query, *params)
             return [
                 MemorySearchResult(
                     memory=self._row_to_memory(r),
@@ -350,10 +354,11 @@ class PostgresMemoryStore:
 
     async def update_embedding(self, memory_id: str, embedding: list[float]) -> bool:
         """Store an embedding for an existing memory. Returns True if the row existed."""
+        embed_str = "[" + ",".join(str(v) for v in embedding) + "]"
         async with self._pool.acquire() as conn:
             result = await conn.execute(
                 "UPDATE memories SET embedding = $1::vector WHERE id = $2",
-                str(embedding),
+                embed_str,
                 memory_id,
             )
             return result == "UPDATE 1"
