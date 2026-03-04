@@ -76,6 +76,12 @@ pipeline:
           source: retrieval
           max_tokens: 4000
           optional: true
+
+    - name: runtime
+      cache_policy: always_new
+      contents:
+        - key: current_timestamp
+          source: runtime
   tool_masking:
     strategy: prefill
 

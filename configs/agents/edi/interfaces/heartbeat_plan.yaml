@@ -32,7 +32,7 @@ pipeline:
         - key: system_prompt
           source: config
 
-    - name: trigger
+    - name: runtime
       cache_policy: always_new
       contents:
         - key: current_timestamp

@@ -33,15 +33,12 @@ class ContextBridge:
         """
         messages = []
 
-        # 1. System message: core + memory layers
+        # 1. System message: all compiled layers (ordered most→least stable)
         system_parts = []
-        core = self._get_layer_content(compiled, "core")
-        if core:
-            system_parts.append(core)
-
-        memory = self._get_layer_content(compiled, "memory")
-        if memory:
-            system_parts.append(memory)
+        for layer_name in compiled.layers:
+            part = self._get_layer_content(compiled, layer_name)
+            if part:
+                system_parts.append(part)
 
         if system_parts:
             messages.append(

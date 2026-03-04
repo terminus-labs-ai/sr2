@@ -5,8 +5,8 @@ from sr2.resolvers.registry import ResolvedContent, ResolverContext
 
 
 @pytest.mark.asyncio
-async def test_current_timestamp_iso_format():
-    """'current_timestamp' returns ISO format string."""
+async def test_current_timestamp_format():
+    """'current_timestamp' returns labeled datetime string."""
     resolver = RuntimeResolver()
     ctx = ResolverContext(agent_config={}, trigger_input="hello")
 
@@ -14,8 +14,7 @@ async def test_current_timestamp_iso_format():
 
     assert isinstance(result, ResolvedContent)
     assert result.key == "current_timestamp"
-    # ISO format includes 'T' separator between date and time
-    assert "T" in result.content
+    assert result.content.startswith("Current date and time (UTC):")
 
 
 @pytest.mark.asyncio
