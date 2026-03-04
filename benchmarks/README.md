@@ -1,174 +1,339 @@
-# How I stopped my AI agents from getting dumber after 10 turns
+# SR2
 
-TL;DR: Built an open-source context engineering library. 5/5 decision recall vs 3/5 naive on Claude Opus, 52% token reduction, 3.6x information density, 100% cache hit rate. Apache 2.0, [github.com/terminus-labs-ai/sr2](https://github.com/terminus-labs-ai/sr2). Link at the bottom if you want to skip the story.
+**Context engineering for AI agents.** Manages the full lifecycle of what goes into your LLM's context window — so you stop losing cache hits, blowing token budgets, and shipping agents that forget what happened 10 turns ago.
 
-## The Journey (skip if you don't like storytelling)
+---
 
-Let me preface this — I am in no way an authority on AI agent design (this is literally my first serious project in this space), just a guy with a deep hyperfocus that found an issue and went after trying to sort it out.
+## The Problem
 
-I've been building AI agents locally for the past few months — personal assistant, task runner, coding helper, the whole shebang. This started when the whole open-source agent hype exploded. I got excited, tried one of the popular ones, and before I even sent a single message the context was already sitting at 15K+ tokens. Fresh install, no conversation, 15K gone. Then I tried another that looked promising but needed serious elbow grease to set up and was way more complex than what I needed. Stayed with another one for a couple weeks, but they hard-capped context at 30K and if you loaded too many tools into an agent — you guessed it — bye bye context.
+Your agent framework handles tool calling and orchestration. Nobody's managing the context window.
 
-Ollama on a 7900 XTX, models running on my CPU when I need the GPU free, nothing cloud, nothing fancy. And at some point I realized that the longer a conversation went, the worse my agents got. Not like gradually worse. Like, noticeably dumber, forgetting things I told them a few turns ago, repeating tool calls they've already made, getting stuck in endless loops where the only solution was to burn the memory and start from scratch — not to mention the added frustration, of course. I've tried several different models, params, all that I could get my hands on, and while it did work to some degree, the core issue was still there.
+Every turn, your agent stuffs more conversation history, tool results, retrieved memories, and system prompts into a growing blob of text. Eventually you hit the token limit and start truncating from the top — destroying your KV-cache prefix, evicting the system prompt, and losing critical context. Your agent gets worse the longer the conversation goes.
 
-Every framework I looked at handles tool calling, orchestration, memory — cool. But what actually goes into the LLM's mouth every turn? Everything. Concatenated. System prompt, full conversation history, every tool definition in JSON (which, btw, brackets and quotes and all that JSON formatting consumes context space too) and every result in full, whatever memories got retrieved. Growing and growing until you hit the token limit and start chopping from the top. And that's when things go sideways.
+SR2 treats the context window as a managed resource. It compiles context through a config-driven pipeline with caching, compaction, summarization, and graceful degradation — so your agent stays coherent at turn 200 the same way it was at turn 2.
 
-So I spent a lot of time trying to figure out why this was happening, and the answer turned out to be embarrassingly simple: unmanaged context window. Not just that context grows wildly during a conversation, but also a lot of bloat that gets thrown into it from the start and how the context gets chopped off once it hits its limit.
-
-I built a library to fix it. This post is about the problem, how I approached it, and what the numbers look like. If you're building agents and you've been frustrated by this, maybe it helps. If you have a better approach, I genuinely want to hear it.
-
-And just a disclaimer for those thinking "why go through all of this for context management?" — each of us builds differently. I like having data that tells me something is actually working, not just vibes. This process has been a blast and I have tangible results to show for it.
-
-&nbsp;
-
-## The problem (or: why your agent forgets everything)
-
-Here's what's happening under the hood in most agent setups. Every turn in the loop:
-
-1. Your agent gets a user message (or a heartbeat, or whatever trigger)
-2. The framework builds a context: system prompt + tools + conversation history + retrieved memories
-3. That context gets sent to the LLM
-4. LLM responds, maybe calls a tool
-5. Tool result gets appended to the conversation
-6. Go to step 1
-
-The problem is step 2. That context just keeps growing. And it's not just the messages — tool results are huge. A single `read_file` call can dump 200 lines into your history. A test run? 50+ lines of pytest output. Search results? Pages of JSON. All of that stays in your conversation history forever, taking up space, even though you probably don't need the raw content of a file you read 20 turns ago.
-
-Eventually one of two things happens: you hit your token budget and start truncating from the top (bye bye system prompt, bye bye early context that might actually matter), or you're running locally and your inference just gets slower and slower because you're processing thousands of tokens of stale tool output every single turn.
-
-And here's the part that really bugged me once I understood it: most LLM providers (and even local setups with vLLM or similar) can cache the beginning of your context between turns. If your system prompt and tool definitions are always the same bytes at the front, the provider doesn't need to reprocess them. But the moment you change anything in that prefix — move a tool definition, update a timestamp, modify an old message — that cache gets nuked and you're paying full price again.
-
-So the problem is actually threefold:
-
-1. Context grows unbounded and eventually gets truncated destructively
-2. Stale tool outputs* waste tokens every turn
-3. Naive context assembly destroys your cache efficiency
-
-_*Stale tool outputs include those things the agent attempted that failed_
-
-&nbsp;
-
-## How I approached it
-
-I spent a while looking for a library that handled this. Couldn't find one that did what I wanted, so I started building. The core idea ended up being pretty simple once I figured it out:
-
-**Treat the context window like zones, not a single blob.**
-
-Instead of one big list of messages, I split conversation history into three zones:
-
-1. **Raw** — the last N turns, kept completely verbatim. Recent context needs to be exact.
-2. **Compacted** — older turns where the big stuff (tool outputs, file reads, search results) gets compressed down to a reference. "→ 200 lines. Sample: [first 3 lines]... Recovery: Re-fetch with read_file." The agent can always get the original back if it needs it. Nothing is lost permanently.
-3. **Summarized** — the oldest context, where an LLM digests everything down to what actually matters: decisions that were made, things that are still unresolved, preferences the user expressed. Routine "ok done" confirmations and dead-end explorations get dropped.
-
-As turns age, they move through zones automatically. New stuff stays exact. Old stuff gets progressively compressed. Nothing ever just gets chopped off the top.
-
-On top of that, the full context assembly is done through a layered pipeline:
+## How It Works
 
 ```
-Layer 1: core      (system prompt + tools)     → never changes
-Layer 2: memory    (retrieved memories)         → rarely changes  
-Layer 3: conversation (three-zone history)      → changes every turn
+  Trigger arrives (user message, heartbeat, A2A call)
+         │
+         ▼
+  ┌─────────────────┐
+  │ InterfaceRouter  │  ← picks the right pipeline config
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │  PipelineEngine  │  ← resolves layers, checks cache, enforces budget
+  │                  │
+  │  Layer 1: core   │  immutable  (system prompt, tools)
+  │  Layer 2: memory │  append     (retrieved memories, summaries)
+  │  Layer 3: conv   │  append     (session history, user input)
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │ CompiledContext  │  ← content string + token count + cache metadata
+  └────────┬────────┘
+           │
+           ▼
+      Your LLM call
+           │
+           ▼
+  ┌─────────────────┐
+  │ PostLLMProcessor │  ← async: extract memories, compact, summarize
+  └─────────────────┘
 ```
 
-Ordered most-stable to least-stable. The stuff that never changes is always first, so it's always the cache prefix. The stuff that changes every turn is last. This is the layout that makes the cache actually work.
+Layers are ordered most-stable to least-stable. The system prompt never changes, so it's always the KV-cache prefix. Conversation history changes every turn, so it's last. This means your LLM provider caches the expensive prefix and you only pay to process new tokens.
 
-Everything declarative, defined in YAML config, no context management code in the agent logic itself.
+## Install
 
-**Two-model strategy.** The main agent loop uses your big model (whatever you're running for reasoning and tool use), but summarization and other background tasks use a small fast model. On my setup that means the 7900 XTX runs the main model and the CPU handles the small one for summarization. You're not burning expensive inference on compressing old context — that's grunt work for a smaller model. Both are configurable per-interface in the YAML.
+```bash
+# Core library (pydantic + pyyaml + litellm, nothing else)
+pip install sr2
 
-**Flexible layers.** What if you don't want conversation history? What if you want it stateless? The layers are fully customizable — pick and choose what goes where. A cron/heartbeat agent can run with just the core layer, no conversation at all. Same library, different config.
+# With the agent runtime (FastAPI + uvicorn)
+pip install sr2[runtime]
 
-&nbsp;
+# Everything
+pip install sr2[all]
 
-## The numbers
+# Development
+pip install sr2[dev]
+```
 
-_Yeah, this is nice and all, but it's all talk._ I'm the type that needs to see data to believe something is working, so I built benchmarks that run directly against your LLM provider (LiteLLM SDK powered, so it fits whatever you use). Real multi-turn sessions, real tool calls, real token counts. Side-by-side: same conversation through the SR2 pipeline vs naive concatenation (what most frameworks do). All in the repo for you to run yourself.
+## Quick Start
 
-### Coherence benchmark (Claude Opus, 50 turns)
+```python
+import asyncio
+from sr2.config.models import PipelineConfig
+from sr2.pipeline.engine import PipelineEngine
+from sr2.resolvers.registry import ContentResolverRegistry, ResolverContext
+from sr2.resolvers.config_resolver import ConfigResolver
+from sr2.resolvers.input_resolver import InputResolver
+from sr2.cache.policies import create_default_cache_registry
 
-This one asks the LLM to recall decisions made earlier in the conversation. The naive approach truncates from the top when it runs out of space. SR2 compacts and summarizes instead.
+
+async def main():
+    # 1. Register resolvers (they fetch content for each layer item)
+    registry = ContentResolverRegistry()
+    registry.register("config", ConfigResolver())
+    registry.register("input", InputResolver())
+
+    # 2. Create the engine
+    engine = PipelineEngine(registry, create_default_cache_registry())
+
+    # 3. Define your context layout
+    config = PipelineConfig(
+        token_budget=8000,
+        layers=[
+            {
+                "name": "core",
+                "cache_policy": "immutable",
+                "contents": [
+                    {"key": "system_prompt", "source": "config"},
+                ],
+            },
+            {
+                "name": "conversation",
+                "cache_policy": "append_only",
+                "contents": [
+                    {"key": "user_input", "source": "input"},
+                ],
+            },
+        ],
+    )
+
+    # 4. Compile context
+    result = await engine.compile(
+        config,
+        ResolverContext(
+            agent_config={"system_prompt": "You are a helpful assistant."},
+            trigger_input="What's the weather like?",
+        ),
+    )
+
+    print(result.content)
+    # -> "You are a helpful assistant.\n\nWhat's the weather like?"
+    print(f"Tokens: {result.tokens}")
+    print(f"Pipeline status: {result.pipeline_result.overall_status}")
+
+
+asyncio.run(main())
+```
+
+That's the minimal case — two layers, no caching tricks. In production you'd add memory retrieval, conversation history with compaction, summarization triggers, and per-interface configs. See the [configuration reference](docs/configuration.md) for the full surface area.
+
+## Config-Driven Context Layout
+
+Everything is YAML. No context management code in your agent logic.
+
+```yaml
+# configs/defaults.yaml — library defaults, all fields have defaults
+token_budget: 32000
+pre_rot_threshold: 0.25
+
+compaction:
+  enabled: true
+  raw_window: 5
+  rules:
+    - type: tool_output
+      strategy: schema_and_sample
+      max_compacted_tokens: 80
+      recovery_hint: true
+    - type: file_content
+      strategy: reference
+
+summarization:
+  enabled: true
+  trigger: token_threshold
+  threshold: 0.75
+  preserve:
+    - decisions_and_reasoning
+    - unresolved_issues
+    - user_preferences_expressed
+
+layers:
+  - name: core
+    cache_policy: immutable          # never recompute mid-session
+    contents:
+      - key: system_prompt
+        source: config
+      - key: tools
+        source: config
+
+  - name: memory
+    cache_policy: append_only
+    contents:
+      - key: retrieved_context
+        source: retrieval
+        optional: true
+
+  - name: conversation
+    cache_policy: append_only
+    contents:
+      - key: session_history
+        source: session
+      - key: user_input
+        source: input
+```
+
+Config inheritance: `defaults.yaml` → `agent.yaml` → `interfaces/user_message.yaml`. Deep merge, more specific wins.
+
+## Key Features
+
+**Three-zone conversation management.** Raw turns (verbatim recent history) → compacted turns (tool outputs replaced with references) → summarized zone (structured summary of oldest context). Your agent never loses important decisions even at turn 200.
+
+**KV-cache optimization.** Layers are ordered for prefix stability. Immutable content stays at the top so your LLM provider's KV-cache can reuse it across turns. The prefix tracker measures actual cache efficiency so you can see if your layout is working.
+
+**Compaction rules.** Tool outputs get replaced with "→ 47 lines. Sample: ..." plus a recovery hint. File contents become path references. Code execution results become exit code + first 3 lines. The agent can re-fetch anything it needs.
+
+**Automatic summarization.** When the compacted zone exceeds a threshold, an LLM call produces a structured summary preserving decisions, unresolved issues, and user preferences. Routine confirmations and dead-end explorations are discarded.
+
+**Graceful degradation.** Per-layer circuit breakers. If retrieval fails 3 times in a row, the breaker opens and that layer is skipped — the agent keeps running with reduced context rather than crashing. The core layer (system prompt) is never skipped.
+
+**Per-interface pipeline configs.** A Telegram chat gets 48k tokens with full compaction/summarization. A heartbeat timer gets 3k tokens with everything disabled. An A2A call gets 8k tokens, stateless. Same agent, different context strategies per trigger type.
+
+**Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search.
+
+**Tool state machine.** Dynamic tool masking with named states and transitions. Start in "default" (all tools), transition to "planning" (read-only tools), back to "execution" (write tools enabled). Supports allowed-list, prefill, and logit-mask strategies.
+
+**Metrics and alerting.** Every pipeline run produces a `PipelineResult` with per-stage timing, token counts, cache hit rates, and degradation events. Export to Prometheus. Alert on low cache hit rates or circuit breaker activations.
+
+## Benchmarks
+
+Real multi-turn sessions against Claude Opus, side-by-side: SR2 pipeline vs naive concatenation. Run them yourself from `benchmarks/`.
+
+### Coherence (50 turns, 8k token budget)
 
 | Question | Naive | Managed |
 |----------|-------|---------|
-| What database did the team decide to use? | ❌ MISS | ✅ HIT |
-| What authentication method was chosen? | ❌ MISS | ✅ HIT |
-| What message queue system was selected? | ✅ HIT | ✅ HIT |
-| What frontend framework did the team pick? | ✅ HIT | ✅ HIT |
-| What container orchestration tool was decided on? | ✅ HIT | ✅ HIT |
+| What database did the team decide to use? | MISS | HIT |
+| What authentication method was chosen? | MISS | HIT |
+| What message queue system was selected? | HIT | HIT |
+| What frontend framework did the team pick? | HIT | HIT |
+| What container orchestration tool was decided on? | HIT | HIT |
 | **Score** | **3/5** | **5/5** |
 
-Naive used 7,122 tokens. Managed used 3,329 tokens. That's **3.6x more information per token**.
+Naive used 7,122 tokens. Managed used 3,329 tokens. **3.6x more information per token.** 100% KV-cache prefix hit rate.
 
-The naive approach lost the two earliest decisions because they got truncated when the context grew past the budget. SR2 kept all five because compaction compressed the old tool outputs instead of throwing them away.
+Context breakdown (managed):
 
-### Cost benchmark (Claude Opus, 30 turns)
+| Zone | Tokens | % |
+|------|--------|---|
+| Raw (recent, verbatim) | 1,538 | 55.2% |
+| Compacted (tool refs) | 1,249 | 44.8% |
+| Summarized (LLM digest) | 0 | 0.0% |
+
+### Cost (30 turns)
 
 | | Naive | Managed | Saved |
 |---|-------|---------|-------|
 | Input tokens | 184,456 | 88,638 | 51.9% |
 | Cost | $0.184 | $0.089 | $0.096 |
 
-**52% token reduction, $0.096 saved per session.** Multiply that by however many agent sessions you run per day.
+**52% token reduction per session.** Multiply by however many agent sessions you run per day.
 
-### Token savings benchmark (simulated, 30 turns)
+## Architecture
 
-With default configs, nothing tweaked:
+SR2 is a **library**, not a framework. It compiles context — your code owns the LLM call, tool execution, and agent loop.
 
-- **74% fewer total tokens** processed over 30 turns
-- **80% smaller context window** by the final turn (1,938 vs 9,545 tokens)
-- **100% KV-cache prefix stability** — core and memory layers had identical bytes every turn
-- **25% average compaction** on tool outputs
-- **139μs avg compile overhead** — 0.028% of a 500ms LLM call
+The repo includes an **agent runtime** (`src/runtime/`) that wires the library into a working agent with an LLM loop, session management, Telegram/HTTP/timer plugins, and MCP tool integration. Use it as-is or as a reference for your own integration.
 
-The growth curve is the thing that convinced me this was worth releasing. Naive context grows linearly — every turn adds more, nothing ever shrinks. Managed context plateaus because compaction and summarization keep it bounded. The longer the conversation goes, the bigger the gap gets.
-
-&nbsp;
-
-## What it is and what it isn't
-
-SR2 is a Python library. Apache 2.0, open source. Clone the repo and `pip install -e .` — you get the core: pydantic, pyyaml, litellm, nothing else.
-
-It is NOT a framework. It doesn't own your agent loop, your LLM calls, or your tool execution. You give it a config and some context, it gives you back a compiled string and a token count. That's it. What you do with that is your business. It works with anything through LiteLLM — OpenAI, Anthropic, Ollama, whatever you're running.
-
-The repo does include an optional agent runtime with Telegram, HTTP, and CLI interfaces if you want something batteries-included, but the core library is just the context pipeline.
-
-&nbsp;
-
-## Some things I'm proud of
-
-**Observability out of the box.** I love data. There's no arguing against data. So every pipeline run produces metrics — cache hit rates, compaction ratios, token counts per layer, circuit breaker events, the whole thing. The repo ships with a `docker-compose.yaml` that spins up Prometheus and Grafana pre-wired to the metrics exporter. `docker compose up` and you have dashboards. Not "here's how to set up monitoring" — actual dashboards, ready to go. Because if you can't see what your context pipeline is doing, how do you know it's working?
-
-**Graceful degradation.** Each layer has a circuit breaker. If your retrieval service fails 3 times in a row, the breaker opens and that layer gets skipped. Agent keeps running with reduced context instead of crashing. Core layer is never skipped.
-
-**Per-interface configs.** Same agent, different context strategies per trigger. Telegram chat gets 48K tokens with full compaction. A cron heartbeat gets 3K, stripped down. An API call gets 8K, stateless. All YAML, no code changes. They can even have different memories altogether — your very own multi-persona agent just by creating a few YAML config files.
-
-**Tool state machine.** Instead of adding/removing tools dynamically (which destroys your cache), tool availability is controlled through states and masking. The tool definitions stay stable in the prefix, you just control which ones the model can actually select.
-
-**Config inheritance.** `defaults.yaml` → `agent.yaml` → `interfaces/telegram.yaml`. Deep merge, more specific wins. If you've used Helm, same energy.
-
-&nbsp;
-
-## Long ways to go still
-
-This is only the very first iteration. There's still a lot of fixes and improvements to come. I haven't tested against a bunch of different models yet — starting small with llama and expanding from there (probably glm-4.7-flash next), since model output varies. Community feedback will shape where this goes.
-
-&nbsp;
-
-## Try it
-
-```bash
-git clone https://github.com/terminus-labs-ai/sr2.git
-cd sr2
-pip install -e .
+```
+src/
+├── sr2/           # The library (this is what you pip install)
+│   ├── config/        #   Config models, loader, validation, schema gen
+│   ├── pipeline/      #   Engine, router, conversation manager, post-processor
+│   ├── resolvers/     #   Content resolvers (config, input, session, retrieval, etc.)
+│   ├── cache/         #   Cache policies and registry
+│   ├── compaction/    #   Rule-based content compaction
+│   ├── summarization/ #   LLM-powered conversation summarization
+│   ├── memory/        #   Extraction, retrieval, conflicts, resolution
+│   ├── degradation/   #   Circuit breaker and degradation ladder
+│   ├── tools/         #   Tool definitions, state machine, masking strategies
+│   ├── metrics/       #   Collector, exporter, alerts
+│   └── a2a/           #   Agent-to-Agent protocol support
+│
+├── runtime/           # Agent runtime (optional, uses the library)
+│   ├── agent.py       #   Main Agent class
+│   ├── cli.py         #   CLI entry point
+│   ├── llm_client.py  #   LiteLLM wrapper
+│   ├── loop.py        #   Agentic LLM loop
+│   ├── plugins/       #   Interface plugins (telegram, http, timer, a2a)
+│   └── session.py     #   Session management with lifecycle policies
+│
+configs/               # Example configs
+│   ├── defaults.yaml  #   Library defaults
+│   └── agents/edi/    #   Example agent
+│
+tests/                 # 688 tests
+│   ├── test_config/
+│   ├── test_pipeline/
+│   ├── test_memory/
+│   ├── test_compaction/
+│   └── ...
 ```
 
-GitHub: [github.com/terminus-labs-ai/sr2](https://github.com/terminus-labs-ai/sr2)
+## Running the Example Agent
 
-688 tests, docs for everything, an example agent you can run with Ollama, and the benchmark scripts so you can run them yourself.
+The repo includes an example agent as a working reference.
 
-This is v0.1.0. I'm one person, it's early. But the pipeline works, the architecture is solid, and I've been running my own agents on it daily.
+```bash
+# Install everything
+pip install -e ".[all]"
 
-If you're building agents and have dealt with this problem, I'd love to hear how you approached it. Are you just concatenating and hoping for the best? Built your own solution? Found a library I missed? Let me know.
+# Run with HTTP API
+sr2-agent configs/agents/edi --http --port 8008
 
-&nbsp;
+# Open the chat UI
+open http://localhost:8008
 
-*If you know Mass Effect and are wondering — yes, the name is a Mass Effect reference. I name all my agents after characters from the series (EDI, Liara, Tali), judge me, I don't care. It was either this or naming them after Dragon Ball characters and I think I made the right call.*
+# Or talk to it via curl
+curl -X POST http://localhost:8008/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello!", "session_id": "default"}'
+```
+
+The agent also exposes OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/models`) so you can connect [Open WebUI](https://github.com/open-webui/open-webui) or any OpenAI-compatible client directly to it. See the [Quick Reference](docs/reference.md) for setup details.
+
+The example agent requires Ollama running locally (see `configs/agents/edi/agent.yaml` for model config). Swap the model strings to use any LiteLLM-supported provider.
+
+## Development
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/ --ignore=tests/integration/ -v
+
+# Run integration tests (requires PostgreSQL)
+docker compose -f docker-compose.test.yml up -d
+RUN_INTEGRATION=1 pytest tests/integration/ -v
+docker compose -f docker-compose.test.yml down
+
+# Lint
+ruff check src/
+ruff format src/
+
+# Generate config docs from Pydantic models
+python -m schema_gen --format md > docs/configuration.md
+```
+
+## Documentation
+
+- **[Getting Started](docs/getting-started.md)** — Install to working pipeline in 5 minutes
+- **[Quick Reference](docs/reference.md)** — CLI commands, config structure, key directories
+- **[Configuration Reference](docs/configuration.md)** — Every config field, auto-generated from Pydantic models
+- **[Architecture Overview](docs/architecture.md)** — Pipeline flow, three-zone conversation, multi-agent
+- **[Memory System](docs/guide-memory.md)** — Extraction, conflict resolution, retrieval
+- **[Compaction](docs/guide-compaction.md)** — Five strategies for compressing tool outputs
+- **[Tool Masking](docs/guide-tool-masking.md)** — Dynamic tool visibility with state machines
+- **[Observability](docs/observability.md)** — Prometheus and OpenTelemetry setup
+- **[Troubleshooting](docs/troubleshooting.md)** — Common errors, debugging, FAQ
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE) for details.
