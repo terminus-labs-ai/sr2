@@ -82,6 +82,21 @@ class TestStripMarkdownFencesStep:
         result = StripMarkdownFencesStep().normalize(NormalizationInput(text=raw))
         assert result.was_modified is True
 
+    def test_removes_uppercase_json_fence(self):
+        """Removes ```JSON (uppercase) fence."""
+        raw = '```JSON\n{"key": "value"}\n```'
+        assert self._run(raw) == '{"key": "value"}'
+
+    def test_removes_jsonc_fence(self):
+        """Removes ```jsonc fence."""
+        raw = '```jsonc\n{"key": "value"}\n```'
+        assert self._run(raw) == '{"key": "value"}'
+
+    def test_ignores_non_json_fence(self):
+        """Does not strip fences with non-JSON language tags like ```python."""
+        raw = '```python\nprint("hello")\n```'
+        assert self._run(raw) == raw
+
 
 class TestExtractJsonObjectStep:
     """Tests for ExtractJsonObjectStep."""
@@ -124,6 +139,35 @@ class TestExtractJsonObjectStep:
         raw = 'preamble {"a": 1}'
         result = ExtractJsonObjectStep().normalize(NormalizationInput(text=raw))
         assert result.was_modified is True
+
+    def test_extracts_json_array(self):
+        """Extracts a JSON array from surrounding text."""
+        raw = 'Here is the list: [{"a": 1}, {"b": 2}]'
+        assert self._run(raw) == '[{"a": 1}, {"b": 2}]'
+
+    def test_clean_json_array_unchanged(self):
+        """Clean JSON array passes through unchanged."""
+        raw = '[{"a": 1}]'
+        result = ExtractJsonObjectStep().normalize(NormalizationInput(text=raw))
+        assert result.text == raw
+        assert result.was_modified is False
+
+    def test_array_before_object_picks_array(self):
+        """When array starts before object, extracts the array."""
+        raw = 'result: [{"a": 1}]'
+        assert self._run(raw) == '[{"a": 1}]'
+
+    def test_object_before_array_picks_object(self):
+        """When object starts before array, extracts the object."""
+        raw = 'result: {"items": [1, 2, 3]}'
+        assert self._run(raw) == '{"items": [1, 2, 3]}'
+
+    def test_no_brackets_or_braces_unchanged(self):
+        """Text with neither braces nor brackets is unchanged."""
+        raw = "just plain text"
+        result = ExtractJsonObjectStep().normalize(NormalizationInput(text=raw))
+        assert result.text == raw
+        assert result.was_modified is False
 
 
 class TestGetStep:
