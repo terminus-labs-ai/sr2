@@ -34,6 +34,11 @@ The foundation: a config-driven context engineering library for AI agents.
 ### Remaining
 
 - **HTTP interface parity** — route HTTP/OpenAI-compatible requests through the interface plugin system instead of bypassing `handle_user_message()`. Currently the agent-level `pipeline:` config is used as a fallback, but proper per-interface routing (session lifecycle enforcement, dedicated pipeline config) requires an explicit `api` interface entry.
+- **Remaining metrics instrumentation** — four defined metrics still lack data sources and need new tracking infrastructure:
+  - `sr2_task_completion_rate` — track pipeline success/failure ratio over time (needs an invocation outcome counter)
+  - `sr2_response_quality` — proxy quality signal from memory extraction success, user feedback, or LLM-as-judge scoring
+  - `sr2_compaction_recovery_rate` — count how often compacted content with recovery hints is re-fetched (needs a counter in the compaction resolver)
+  - `sr2_summarization_frequency` — track how often `should_trigger()` fires vs total invocations (needs a call counter on `SummarizationEngine`)
 - Docs site (GitHub Pages)
 - Demo video / GIF for the README
 
