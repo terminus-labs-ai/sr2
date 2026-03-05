@@ -142,6 +142,20 @@ class TestMemoryExtractor:
         assert "user.identity.name" in prompt
 
     @pytest.mark.asyncio
+    async def test_json_wrapped_in_prose(self, store):
+        """JSON array wrapped in prose text is still extracted."""
+        response = 'Here are the extracted memories:\n[{"key": "user.name", "value": "Alice"}]\nHope that helps!'
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("I'm Alice")
+
+        assert len(result.memories) == 1
+        assert result.memories[0].key == "user.name"
+
+    @pytest.mark.asyncio
     async def test_empty_conversation(self, store):
         """Empty conversation turn → LLM returns [] → empty result."""
         async def mock_llm(prompt: str) -> str:
