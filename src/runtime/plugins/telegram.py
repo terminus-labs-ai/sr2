@@ -25,50 +25,62 @@ _MSG_LIMIT = 4000
 _EDIT_INTERVAL = 0.8  # seconds between edit_text calls
 
 
+def _esc(text: str) -> str:
+    """Escape HTML entities for Telegram."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _md_to_telegram_html(text: str) -> str:
     """Convert common Markdown to Telegram-safe HTML.
 
-    Handles fenced code blocks, inline code, bold, italic, links,
-    and escapes HTML entities in non-formatted text.
+    Handles fenced code blocks, inline code, bold, italic, strikethrough,
+    links, headers, bullet/numbered lists, blockquotes, and escapes HTML
+    entities in non-formatted text.
     """
 
     # Collect protected spans (start, end, replacement) so we don't double-process
     protected: list[tuple[int, int, str]] = []
 
+    def _overlaps(start: int) -> bool:
+        return any(s <= start < e for s, e, _ in protected)
+
     # 1. Fenced code blocks: ```lang\ncode\n```
     for m in re.finditer(r"```(?:\w*)\n(.*?)```", text, re.DOTALL):
         code = m.group(1).rstrip("\n")
-        escaped_code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        protected.append((m.start(), m.end(), f"<pre><code>{escaped_code}</code></pre>"))
+        protected.append((m.start(), m.end(), f"<pre><code>{_esc(code)}</code></pre>"))
 
     # 2. Inline code: `code`
     for m in re.finditer(r"`([^`\n]+)`", text):
-        if any(s <= m.start() < e for s, e, _ in protected):
+        if _overlaps(m.start()):
             continue
-        escaped_code = m.group(1).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        protected.append((m.start(), m.end(), f"<code>{escaped_code}</code>"))
+        protected.append((m.start(), m.end(), f"<code>{_esc(m.group(1))}</code>"))
 
     # 3. Links: [text](url)
     for m in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", text):
-        if any(s <= m.start() < e for s, e, _ in protected):
+        if _overlaps(m.start()):
             continue
-        link_text = m.group(1).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        protected.append((m.start(), m.end(), f'<a href="{m.group(2)}">{link_text}</a>'))
+        protected.append((m.start(), m.end(), f'<a href="{m.group(2)}">{_esc(m.group(1))}</a>'))
 
     # 4. Bold: **text** or __text__
     for m in re.finditer(r"(\*\*|__)(.+?)\1", text):
-        if any(s <= m.start() < e for s, e, _ in protected):
+        if _overlaps(m.start()):
             continue
-        protected.append((m.start(), m.end(), f"<b>{m.group(2)}</b>"))
+        protected.append((m.start(), m.end(), f"<b>{_esc(m.group(2))}</b>"))
 
-    # 5. Italic: *text* or _text_ (single, not double)
+    # 5. Strikethrough: ~~text~~
+    for m in re.finditer(r"~~(.+?)~~", text):
+        if _overlaps(m.start()):
+            continue
+        protected.append((m.start(), m.end(), f"<s>{_esc(m.group(1))}</s>"))
+
+    # 6. Italic: *text* or _text_ (single, not double)
     for m in re.finditer(
         r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", text
     ):
-        if any(s <= m.start() < e for s, e, _ in protected):
+        if _overlaps(m.start()):
             continue
         content = m.group(1) or m.group(2)
-        protected.append((m.start(), m.end(), f"<i>{content}</i>"))
+        protected.append((m.start(), m.end(), f"<i>{_esc(content)}</i>"))
 
     # Sort by start position and build result
     protected.sort(key=lambda x: x[0])
@@ -80,15 +92,30 @@ def _md_to_telegram_html(text: str) -> str:
             continue  # overlapping — skip
         # Escape plain text between protected spans
         plain = text[pos:start]
-        parts.append(plain.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        parts.append(_esc(plain))
         parts.append(replacement)
         pos = end
 
     # Remaining plain text
-    plain = text[pos:]
-    parts.append(plain.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    parts.append(_esc(text[pos:]))
 
-    return "".join(parts)
+    result = "".join(parts)
+
+    # --- Line-level formatting (applied after inline processing) ---
+
+    # Headers: # text → bold text
+    result = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", result, flags=re.MULTILINE)
+
+    # Bullet lists: lines starting with - or * followed by space → bullet character
+    result = re.sub(r"^[\-\*]\s+", "• ", result, flags=re.MULTILINE)
+
+    # Blockquotes: > text → italic text with bar
+    result = re.sub(r"^&gt;\s?(.*)$", r"┃ <i>\1</i>", result, flags=re.MULTILINE)
+
+    # Horizontal rules: --- or *** or ___ on their own line
+    result = re.sub(r"^(---|\*\*\*|___)$", "───────────", result, flags=re.MULTILINE)
+
+    return result
 
 
 class _TelegramStreamState:
