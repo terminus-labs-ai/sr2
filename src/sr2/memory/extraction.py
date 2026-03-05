@@ -144,8 +144,17 @@ Conversation turn:
         try:
             items = json.loads(cleaned)
         except json.JSONDecodeError:
-            logger.warning("Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200])
-            return []
+            # LLM may have wrapped the array in prose; try to extract it
+            match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+            if match:
+                try:
+                    items = json.loads(match.group())
+                except json.JSONDecodeError:
+                    logger.warning("Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200])
+                    return []
+            else:
+                logger.warning("Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200])
+                return []
 
         if not isinstance(items, list):
             logger.warning("Memory extraction failed: expected JSON array, got %s", type(items).__name__)
