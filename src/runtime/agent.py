@@ -467,7 +467,7 @@ class Agent:
 
         # Prefix tracking + metrics
         cache_report = self._sr2.compare_prefix(ctx.compiled_snapshot, loop_result.cached_tokens)
-        self._sr2.collect_metrics(
+        await self._sr2.collect_metrics(
             pipeline_result=ctx.pipeline_result,
             interface=trigger.interface_name,
             loop_iterations=loop_result.iterations,
@@ -479,6 +479,7 @@ class Agent:
             session_messages=session.turns,
             session_turn_count=session.user_message_count,
             session_created_at=session.created_at.timestamp(),
+            tool_state_machine=ctx.state_machine,
         )
 
         # Clean up ephemeral session

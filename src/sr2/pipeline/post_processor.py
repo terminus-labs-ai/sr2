@@ -2,12 +2,13 @@
 
 import logging
 
-from sr2.compaction.engine import ConversationTurn
+from sr2.compaction.engine import CompactionResult, ConversationTurn
 from sr2.memory.conflicts import ConflictDetector
 from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
 from sr2.pipeline.conversation import ConversationManager
 from sr2.pipeline.result import PipelineResult, StageResult
+from sr2.summarization.engine import SummarizationResult
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,9 @@ class PostLLMProcessor:
         # Counters for memory metrics (per-invocation, reset on each process call)
         self.last_memories_extracted: int = 0
         self.last_conflicts_detected: int = 0
+        # Last compaction/summarization results for metrics collection
+        self.last_compaction_result: "CompactionResult | None" = None
+        self.last_summarization_result: "SummarizationResult | None" = None
 
     async def process(
         self,
@@ -49,6 +53,8 @@ class PostLLMProcessor:
         # Reset per-invocation counters
         self.last_memories_extracted = 0
         self.last_conflicts_detected = 0
+        self.last_compaction_result = None
+        self.last_summarization_result = None
 
         # 1. Add turn to conversation
         self._conv.add_turn(latest_turn, session_id=session_id)
@@ -110,7 +116,7 @@ class PostLLMProcessor:
                     await self._resolver.resolve_all(conflicts)
 
     async def _run_compaction(self, session_id: str) -> None:
-        self._conv.run_compaction(session_id=session_id)
+        self.last_compaction_result = self._conv.run_compaction(session_id=session_id)
 
     async def _run_summarization(self, session_id: str) -> None:
-        await self._conv.run_summarization(session_id=session_id)
+        self.last_summarization_result = await self._conv.run_summarization(session_id=session_id)

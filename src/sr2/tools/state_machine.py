@@ -15,6 +15,7 @@ class ToolStateMachine:
         self._current_state_name = config.initial_state
         self._strategy = get_masking_strategy(config.masking_strategy)
         self._history: list[str] = [config.initial_state]
+        self.denied_tool_attempts: int = 0
 
     @property
     def current_state(self) -> ToolStateConfig:
@@ -30,10 +31,14 @@ class ToolStateMachine:
 
     def get_masking_output(self) -> dict:
         """Get the current masking output for the LLM call."""
-        return self._strategy.apply(
+        result = self._strategy.apply(
             list(self._tools.values()),
             self.current_state,
         )
+        # Count denied tools each time masking is applied
+        denied = [name for name in self._tools if not self.current_state.is_tool_allowed(name)]
+        self.denied_tool_attempts += len(denied)
+        return result
 
     def get_allowed_tools(self) -> list[str]:
         """Get list of currently allowed tool names."""

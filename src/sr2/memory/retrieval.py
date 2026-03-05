@@ -1,6 +1,7 @@
 """Hybrid retrieval engine combining semantic, keyword, and recency signals."""
 
 import math
+import time
 from datetime import UTC, datetime
 
 from sr2.memory.schema import MemorySearchResult
@@ -33,6 +34,12 @@ class HybridRetriever:
             "recency": recency_weight,
             "frequency": frequency_weight,
         }
+        # Instrumentation stats (updated on each retrieve() call)
+        self.last_latency_ms: float = 0.0
+        self.last_avg_precision: float = 0.0
+        self.last_was_empty: bool = False
+        self._total_retrievals: int = 0
+        self._empty_retrievals: int = 0
 
     async def retrieve(
         self,
@@ -49,6 +56,7 @@ class HybridRetriever:
         5. Return top_k results (optionally capped by token count)
         """
         k = top_k or self._top_k
+        t0 = time.perf_counter()
         candidates: dict[str, MemorySearchResult] = {}
 
         # Semantic search
@@ -86,7 +94,24 @@ class HybridRetriever:
             r.memory.touch()
             await self._store.save(r.memory)
 
+        # Update instrumentation stats
+        self.last_latency_ms = (time.perf_counter() - t0) * 1000
+        self.last_was_empty = len(results) == 0
+        self.last_avg_precision = (
+            sum(r.relevance_score for r in results) / len(results) if results else 0.0
+        )
+        self._total_retrievals += 1
+        if self.last_was_empty:
+            self._empty_retrievals += 1
+
         return results
+
+    @property
+    def empty_rate(self) -> float:
+        """Fraction of retrievals that returned no results."""
+        if self._total_retrievals == 0:
+            return 0.0
+        return self._empty_retrievals / self._total_retrievals
 
     def _apply_boosts(self, results: list[MemorySearchResult]) -> list[MemorySearchResult]:
         """Apply recency and frequency boosts to relevance scores."""

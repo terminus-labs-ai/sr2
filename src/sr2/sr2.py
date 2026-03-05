@@ -388,7 +388,7 @@ class SR2:
         await store.create_tables()
         self.set_memory_store(store)
 
-    def collect_metrics(
+    async def collect_metrics(
         self,
         pipeline_result: PipelineResult,
         interface: str,
@@ -401,6 +401,7 @@ class SR2:
         session_messages: list[dict] | None = None,
         session_turn_count: int | None = None,
         session_created_at: float | None = None,
+        tool_state_machine: ToolStateMachine | None = None,
     ) -> None:
         """Collect metrics from a loop execution.
 
@@ -445,23 +446,32 @@ class SR2:
 
         # --- Naive vs managed comparison ---
         # Naive token estimate: sum raw content sizes from session messages
+        actual_tokens = pipeline_result.total_tokens
         if session_messages is not None:
             naive_tokens = sum(len(str(m.get("content", ""))) // 4 for m in session_messages)
             extra[MetricNames.NAIVE_TOKEN_ESTIMATE] = float(naive_tokens)
 
             # Token savings cumulative
-            actual_tokens = pipeline_result.total_tokens
             savings_this_turn = max(0.0, naive_tokens - actual_tokens)
             cumulative = self._token_savings_cumulative.get(session_id, 0.0) + savings_this_turn
             self._token_savings_cumulative[session_id] = cumulative
             extra[MetricNames.TOKEN_SAVINGS_CUMULATIVE] = cumulative
 
-        # --- Context health ---
-        actual_tokens = pipeline_result.total_tokens
+            # Cost savings ratio
+            if naive_tokens > 0:
+                extra[MetricNames.COST_SAVINGS_RATIO] = 1.0 - (actual_tokens / naive_tokens)
+
+        # --- Budget & utilization ---
         headroom = max(0, self._token_budget - actual_tokens)
         extra[MetricNames.BUDGET_HEADROOM_TOKENS] = float(headroom)
         extra[MetricNames.BUDGET_HEADROOM_RATIO] = (
             headroom / self._token_budget if self._token_budget > 0 else 0.0
+        )
+        extra[MetricNames.BUDGET_UTILIZATION] = (
+            actual_tokens / self._token_budget if self._token_budget > 0 else 0.0
+        )
+        extra[MetricNames.TOKEN_EFFICIENCY] = (
+            actual_tokens / self._token_budget if self._token_budget > 0 else 0.0
         )
 
         # Truncation events
@@ -472,8 +482,37 @@ class SR2:
             session_id
         )
 
+        # Zone token counts
+        zones = self._conversation.zones(session_id)
+        extra[MetricNames.ZONE_RAW_TOKENS] = float(
+            sum(len(t.content) // 4 for t in zones.raw)
+        )
+        extra[MetricNames.ZONE_COMPACTED_TOKENS] = float(
+            sum(len(t.content) // 4 for t in zones.compacted)
+        )
+        extra[MetricNames.ZONE_SUMMARIZED_TOKENS] = float(
+            sum(len(s) // 4 for s in zones.summarized)
+        )
+
         # Zone transition events (emitted as separate labeled metrics below)
         transitions = self._conversation.get_zone_transitions(session_id)
+
+        # --- Circuit breaker ---
+        cb_status = self._engine._circuit_breaker.status()
+        cb_activations = sum(1 for s in cb_status.values() if s.get("is_open"))
+        extra[MetricNames.CIRCUIT_BREAKER_ACTIVATIONS] = float(cb_activations)
+
+        # --- Tool state machine ---
+        extra[MetricNames.STATE_TRANSITION_RATE] = float(
+            max(0, len(tool_state_machine.state_history) - 1)
+            if tool_state_machine
+            else 0.0
+        )
+        extra[MetricNames.DENIED_TOOL_ATTEMPTS] = float(
+            tool_state_machine.denied_tool_attempts
+            if tool_state_machine
+            else 0.0
+        )
 
         # --- Memory system ---
         extra[MetricNames.MEMORIES_EXTRACTED] = float(
@@ -482,6 +521,47 @@ class SR2:
         extra[MetricNames.MEMORY_CONFLICTS_DETECTED] = float(
             self._post_processor.last_conflicts_detected
         )
+        try:
+            store_size = await self._memory_store.count()
+            extra[MetricNames.MEMORY_STORE_SIZE] = float(store_size)
+        except Exception:
+            pass
+
+        # --- Retrieval metrics ---
+        if self._retriever._total_retrievals > 0:
+            extra[MetricNames.RETRIEVAL_LATENCY_MS] = self._retriever.last_latency_ms
+            extra[MetricNames.RETRIEVAL_PRECISION] = self._retriever.last_avg_precision
+            extra[MetricNames.RETRIEVAL_EMPTY_RATE] = self._retriever.empty_rate
+
+        # --- Compaction metrics (from last post-processing run) ---
+        cr = self._post_processor.last_compaction_result
+        if cr is not None and cr.original_tokens > 0:
+            extra[MetricNames.COMPACTION_RATIO] = cr.compacted_tokens / cr.original_tokens
+            total_turns = cr.turns_compacted + len(cr.turns)
+            extra[MetricNames.COMPACTION_COVERAGE] = (
+                cr.turns_compacted / total_turns if total_turns > 0 else 0.0
+            )
+
+        # --- Summarization metrics (from last post-processing run) ---
+        sr = self._post_processor.last_summarization_result
+        if sr is not None and sr.original_tokens > 0:
+            extra[MetricNames.SUMMARIZATION_RATIO] = sr.summary_tokens / sr.original_tokens
+            # Fidelity: for structured summaries, measure field completeness
+            if hasattr(sr.summary, "key_decisions"):
+                filled = sum(
+                    1
+                    for field in [
+                        sr.summary.key_decisions,
+                        sr.summary.unresolved,
+                        sr.summary.facts,
+                        sr.summary.user_preferences,
+                        sr.summary.errors_encountered,
+                    ]
+                    if field
+                )
+                extra[MetricNames.SUMMARIZATION_FIDELITY] = filled / 5.0
+            else:
+                extra[MetricNames.SUMMARIZATION_FIDELITY] = 1.0 if sr.summary else 0.0
 
         snapshot = self._collector.collect(pipeline_result, interface, extra_metrics=extra)
 
@@ -493,6 +573,9 @@ class SR2:
                 "event",
                 zone_transition=transition_type,
             )
+
+        # Fire alert checks
+        await self._alerts.check(snapshot)
 
     def compare_prefix(
         self,

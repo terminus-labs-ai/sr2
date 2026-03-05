@@ -25,16 +25,19 @@ class PrometheusExporter:
         latest = self._collector.get_latest(1)
         if latest:
             snapshot = latest[0]
-            seen: set[str] = set()
+            seen_keys: set[str] = set()
+            seen_names: set[str] = set()
             for m in snapshot.metrics:
                 metric_key = self._make_key(m.name, m.labels)
-                if metric_key in seen:
+                if metric_key in seen_keys:
                     continue
-                seen.add(metric_key)
+                seen_keys.add(metric_key)
 
-                # HELP and TYPE lines
-                lines.append(f"# HELP {m.name} Pipeline metric")
-                lines.append(f"# TYPE {m.name} gauge")
+                # HELP and TYPE lines (only once per metric name)
+                if m.name not in seen_names:
+                    lines.append(f"# HELP {m.name} Pipeline metric")
+                    lines.append(f"# TYPE {m.name} gauge")
+                    seen_names.add(m.name)
 
                 label_str = self._format_labels(m.labels)
                 lines.append(f"{m.name}{label_str} {m.value}")
