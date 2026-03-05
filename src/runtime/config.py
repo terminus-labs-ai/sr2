@@ -188,7 +188,8 @@ class MCPServerConfig(BaseModel):
         "Supports ${VAR} env var substitution.",
     )
     env: dict[str, str] | None = Field(
-        default=None, description="Environment variables for the server process."
+        default=None,
+        description="Environment variables for the server process. Supports ${VAR} env var substitution.",
     )
     args: list[str] | None = Field(default=None, description="Additional args for stdio transport.")
     roots: list[str] | None = Field(

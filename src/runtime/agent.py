@@ -167,7 +167,9 @@ class Agent:
                     headers={k: self._resolve_env_vars(v) for k, v in server.headers.items()}
                     if server.headers
                     else None,
-                    env=server.env,
+                    env={k: self._resolve_env_vars(v) for k, v in server.env.items()}
+                    if server.env
+                    else None,
                     args=server.args,
                     roots=[self._resolve_env_vars(r) for r in server.roots]
                     if server.roots

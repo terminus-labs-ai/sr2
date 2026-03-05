@@ -62,7 +62,9 @@ def _md_to_telegram_html(text: str) -> str:
         protected.append((m.start(), m.end(), f"<b>{m.group(2)}</b>"))
 
     # 5. Italic: *text* or _text_ (single, not double)
-    for m in re.finditer(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", text):
+    for m in re.finditer(
+        r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", text
+    ):
         if any(s <= m.start() < e for s, e, _ in protected):
             continue
         content = m.group(1) or m.group(2)
@@ -109,7 +111,7 @@ class _TelegramStreamState:
 
     async def handle_event(self, event: StreamEvent) -> None:
         """Stream callback handed to ``TriggerContext.respond_callback``."""
-        logger.info(f"Handling StreamEvent: {event}.")
+        logger.debug(f"Handling StreamEvent: {event}.")
         if isinstance(event, TextDeltaEvent):
             self.was_used = True
             self._buffer += event.content
@@ -155,7 +157,7 @@ class _TelegramStreamState:
 
     async def _maybe_flush(self) -> None:
         now = time.monotonic()
-        logger.info(f"Telegram._maybe_flush - Last edit {now - self._last_edit:.2f}s ago")
+        logger.debug(f"Telegram._maybe_flush - Last edit {now - self._last_edit:.2f}s ago")
         if now - self._last_edit < _EDIT_INTERVAL:
             return
         await self._flush()
@@ -213,9 +215,7 @@ class _TelegramStreamState:
         else:
             # Edit existing message
             try:
-                await self._current_msg.edit_text(
-                    _md_to_telegram_html(text), parse_mode="HTML"
-                )
+                await self._current_msg.edit_text(_md_to_telegram_html(text), parse_mode="HTML")
             except Exception:
                 try:
                     await self._current_msg.edit_text(text)
@@ -226,9 +226,7 @@ class _TelegramStreamState:
     async def _safe_send(self, text: str):
         """Send a reply, falling back from HTML to plain text."""
         try:
-            return await self._reply_to.reply_text(
-                _md_to_telegram_html(text), parse_mode="HTML"
-            )
+            return await self._reply_to.reply_text(_md_to_telegram_html(text), parse_mode="HTML")
         except Exception:
             try:
                 return await self._reply_to.reply_text(text)
@@ -592,9 +590,7 @@ class TelegramPlugin:
         """
         for chunk in _TelegramStreamState._split_text(text, _MSG_LIMIT):
             try:
-                await message.reply_text(
-                    _md_to_telegram_html(chunk), parse_mode="HTML"
-                )
+                await message.reply_text(_md_to_telegram_html(chunk), parse_mode="HTML")
             except Exception:
                 try:
                     await message.reply_text(chunk)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -171,9 +172,13 @@ class LLMLoop:
                 raw_tool_call_text=llm_response.raw_tool_call_text,
             )
 
-            # Execute each tool call
-            for tc in llm_response.tool_calls:
-                record = await self._execute_tool_call(tc)
+            # Execute all tool calls concurrently when there are multiple
+            records = await asyncio.gather(
+                *[self._execute_tool_call(tc) for tc in llm_response.tool_calls]
+            )
+
+            # Process results sequentially: append messages, track failures, state transitions
+            for tc, record in zip(llm_response.tool_calls, records):
                 result.tool_calls.append(record)
 
                 # Append tool result to messages
@@ -341,9 +346,9 @@ class LLMLoop:
                 raw_tool_call_text=llm_response.raw_tool_call_text,
             )
 
-            for tc in llm_response.tool_calls:
-                # Notify about tool start
-                if stream_content and stream_content.tool_status:
+            # Notify start for all tools, then execute concurrently
+            if stream_content and stream_content.tool_status:
+                for tc in llm_response.tool_calls:
                     await stream_callback(
                         ToolStartEvent(
                             tool_name=tc["name"],
@@ -352,7 +357,12 @@ class LLMLoop:
                         )
                     )
 
-                record = await self._execute_tool_call(tc)
+            records = await asyncio.gather(
+                *[self._execute_tool_call(tc) for tc in llm_response.tool_calls]
+            )
+
+            # Process results sequentially: append messages, notify, track failures, state transitions
+            for tc, record in zip(llm_response.tool_calls, records):
                 result.tool_calls.append(record)
 
                 # Append tool result to messages
