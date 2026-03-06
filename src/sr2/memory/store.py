@@ -104,6 +104,7 @@ class InMemoryMemoryStore:
         include_archived: bool = False,
     ) -> list[MemorySearchResult]:
         mems = [m for m in self._memories.values() if not m.archived or include_archived]
+        mems.sort(key=lambda m: m.id)
         return [
             MemorySearchResult(memory=m, relevance_score=0.5, match_type="semantic")
             for m in mems[:top_k]
@@ -124,6 +125,7 @@ class InMemoryMemoryStore:
                 results.append(
                     MemorySearchResult(memory=m, relevance_score=0.7, match_type="keyword")
                 )
+        results.sort(key=lambda r: r.memory.id)
         return results[:top_k]
 
     async def count(self, include_archived: bool = False) -> int:
@@ -329,7 +331,7 @@ class PostgresMemoryStore:
         sql = f"SELECT * FROM memories WHERE ({conditions})"
         if not include_archived:
             sql += " AND archived = false"
-        sql += f" LIMIT ${len(words) + 1}"
+        sql += f" ORDER BY id LIMIT ${len(words) + 1}"
 
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, *word_patterns, top_k)

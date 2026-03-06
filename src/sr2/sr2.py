@@ -180,6 +180,7 @@ class SR2:
             memory_extractor=self._extractor,
             conflict_detector=self._conflict_detector,
             conflict_resolver=self._conflict_resolver,
+            retriever=self._retriever,
         )
 
         # Metrics
