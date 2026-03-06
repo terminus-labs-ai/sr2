@@ -1,13 +1,172 @@
-"""Tests for _TelegramStreamState edit-in-place streaming."""
+"""Tests for _TelegramStreamState edit-in-place streaming and markdown conversion."""
 
 from __future__ import annotations
 
+import re
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from runtime.llm.streaming import StreamEndEvent, TextDeltaEvent, ToolResultEvent, ToolStartEvent
+
+
+class TestMdToTelegramHtml:
+    """Tests for _md_to_telegram_html markdown-to-Telegram-HTML converter."""
+
+    def _convert(self, text: str) -> str:
+        from runtime.plugins.telegram import _md_to_telegram_html
+        return _md_to_telegram_html(text)
+
+    def _assert_balanced_tags(self, html: str) -> None:
+        """Assert all HTML tags are properly opened and closed."""
+        open_tags = re.findall(r"<(b|i|s|code|pre|a)\b", html)
+        close_tags = re.findall(r"</(b|i|s|code|pre|a)>", html)
+        assert sorted(open_tags) == sorted(close_tags), (
+            f"Unbalanced tags in {html!r}: open={open_tags} close={close_tags}"
+        )
+
+    # --- Basic inline formatting ---
+
+    def test_bold(self):
+        assert self._convert("**bold**") == "<b>bold</b>"
+
+    def test_bold_double_underscores(self):
+        assert self._convert("__bold__") == "<b>bold</b>"
+
+    def test_italic_asterisk(self):
+        assert self._convert("*italic*") == "<i>italic</i>"
+
+    def test_italic_underscore(self):
+        assert self._convert("_italic_") == "<i>italic</i>"
+
+    def test_strikethrough(self):
+        assert self._convert("~~struck~~") == "<s>struck</s>"
+
+    def test_inline_code(self):
+        assert self._convert("`code`") == "<code>code</code>"
+
+    def test_bold_italic_combo(self):
+        result = self._convert("***important***")
+        assert result == "<b><i>important</i></b>"
+        self._assert_balanced_tags(result)
+
+    def test_link(self):
+        assert self._convert("[click](https://example.com)") == (
+            '<a href="https://example.com">click</a>'
+        )
+
+    # --- Multi-line bold ---
+
+    def test_bold_multiline(self):
+        result = self._convert("**bold across\nmultiple lines**")
+        assert result == "<b>bold across\nmultiple lines</b>"
+
+    # --- Underscores in identifiers must NOT become italic ---
+
+    def test_snake_case_not_italic(self):
+        assert self._convert("file_name_with_underscores") == "file_name_with_underscores"
+
+    def test_multiple_underscores_not_italic(self):
+        assert self._convert("config_file_path_name") == "config_file_path_name"
+
+    def test_screaming_snake_case_not_italic(self):
+        assert self._convert("MAX_RETRIES") == "MAX_RETRIES"
+
+    def test_underscore_in_url_not_italic(self):
+        text = "https://example.com/my_page_here"
+        assert self._convert(text) == text
+
+    def test_inline_code_preserves_underscores(self):
+        assert self._convert("Use `my_function_name` method") == (
+            "Use <code>my_function_name</code> method"
+        )
+
+    # --- Headers ---
+
+    def test_h1(self):
+        assert self._convert("# Title") == "<b>Title</b>"
+
+    def test_h3(self):
+        assert self._convert("### Section") == "<b>Section</b>"
+
+    def test_header_with_bold_content(self):
+        """Header wrapping bold text should not produce nested <b> tags."""
+        result = self._convert("### **Bold Header**")
+        assert result == "<b>Bold Header</b>"
+        self._assert_balanced_tags(result)
+
+    # --- Lists ---
+
+    def test_dash_bullet_list(self):
+        assert self._convert("- item 1\n- item 2") == "• item 1\n• item 2"
+
+    def test_asterisk_bullet_list(self):
+        assert self._convert("* bullet 1\n* bullet 2") == "• bullet 1\n• bullet 2"
+
+    # --- Blockquotes ---
+
+    def test_blockquote(self):
+        result = self._convert("> quote text")
+        assert result == "┃ <i>quote text</i>"
+
+    # --- Horizontal rules ---
+
+    def test_horizontal_rule_dashes(self):
+        assert self._convert("---") == "───────────"
+
+    def test_horizontal_rule_asterisks(self):
+        assert self._convert("***") == "───────────"
+
+    # --- HTML escaping ---
+
+    def test_html_entities_escaped_in_plain_text(self):
+        assert self._convert("a < b & c > d") == "a &lt; b &amp; c &gt; d"
+
+    def test_html_entities_escaped_inside_bold(self):
+        assert self._convert("**a > b**") == "<b>a &gt; b</b>"
+
+    # --- Code blocks protect content ---
+
+    def test_fenced_code_block_preserves_markdown(self):
+        result = self._convert("```\n### not a header\n**not bold**\n```")
+        assert result == "<pre><code>### not a header\n**not bold**</code></pre>"
+
+    # --- Common LLM output patterns ---
+
+    def test_bold_label_pattern(self):
+        """LLMs commonly produce **Label:** followed by text."""
+        assert self._convert("**Key Point:** This is important") == (
+            "<b>Key Point:</b> This is important"
+        )
+
+    def test_bold_in_parens(self):
+        assert self._convert("(**bold in parens**)") == "(<b>bold in parens</b>)"
+
+    def test_unclosed_bold_left_as_is(self):
+        assert self._convert("**unclosed bold") == "**unclosed bold"
+
+    def test_complex_llm_response(self):
+        """Realistic multi-section LLM response."""
+        text = "### Title\n\nSome **bold** and *italic* text\n\n- item 1\n- item 2"
+        result = self._convert(text)
+        expected = "<b>Title</b>\n\nSome <b>bold</b> and <i>italic</i> text\n\n• item 1\n• item 2"
+        assert result == expected
+        self._assert_balanced_tags(result)
+
+    def test_all_output_has_balanced_tags(self):
+        """Ensure various inputs never produce unbalanced HTML tags."""
+        inputs = [
+            "***bold italic***",
+            "### **Bold Header**",
+            "**multi\nline**",
+            "text_with_underscores and *real italic*",
+            "> quote with **bold**",
+            "- item with `code_here`",
+        ]
+        for text in inputs:
+            result = self._convert(text)
+            self._assert_balanced_tags(result)
 
 
 class TestTelegramStreamState:

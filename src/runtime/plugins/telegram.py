@@ -41,46 +41,94 @@ def _md_to_telegram_html(text: str) -> str:
     # Collect protected spans (start, end, replacement) so we don't double-process
     protected: list[tuple[int, int, str]] = []
 
-    def _overlaps(start: int) -> bool:
-        return any(s <= start < e for s, e, _ in protected)
+    def _overlaps(start: int, end: int) -> bool:
+        return any(s < end and start < e for s, e, _ in protected)
 
-    # 1. Fenced code blocks: ```lang\ncode\n```
+    # 1. Fenced code blocks: ```lang\ncode\n```  (must be first — content is literal)
     for m in re.finditer(r"```(?:\w*)\n(.*?)```", text, re.DOTALL):
         code = m.group(1).rstrip("\n")
         protected.append((m.start(), m.end(), f"<pre><code>{_esc(code)}</code></pre>"))
 
+    # --- Line-level formatting (runs on raw text, skipping code blocks) ---
+    def _line_transform(text: str, protected: list) -> str:
+        """Apply line-level markdown transforms, skipping protected code spans."""
+        lines = text.split("\n")
+        result_lines = []
+        pos = 0  # track character position in original text
+        for i, line in enumerate(lines):
+            line_start = pos
+            line_end = pos + len(line)
+            # Check if this line falls inside a protected code block
+            in_code = any(s <= line_start and line_end <= e for s, e, _ in protected)
+            if not in_code:
+                # Horizontal rules: --- or *** or ___ on their own line
+                if re.match(r"^(---|\*\*\*|___)$", line):
+                    line = "───────────"
+                # Headers: strip # prefix and any wrapping ** from content
+                else:
+                    hm = re.match(r"^#{1,6}\s+(.+)$", line)
+                    if hm:
+                        inner = hm.group(1).strip()
+                        # Strip wrapping bold markers if present: **text** → text
+                        inner = re.sub(r"^\*\*(.+)\*\*$", r"\1", inner)
+                        inner = re.sub(r"^__(.+)__$", r"\1", inner)
+                        line = f"\x02BOLD\x02{inner}\x02/BOLD\x02"
+                    # Bullet lists
+                    elif re.match(r"^[-*]\s+", line):
+                        line = re.sub(r"^[-*]\s+", "• ", line)
+                    # Blockquotes
+                    elif re.match(r"^>\s?", line):
+                        bq_match = re.match(r"^>\s?(.*)$", line)
+                        if bq_match:
+                            line = "\x02BQSTART\x02" + bq_match.group(1) + "\x02BQEND\x02"
+            result_lines.append(line)
+            pos = line_end + 1  # +1 for the \n
+        return "\n".join(result_lines)
+
+    text = _line_transform(text, protected)
+
     # 2. Inline code: `code`
     for m in re.finditer(r"`([^`\n]+)`", text):
-        if _overlaps(m.start()):
+        if _overlaps(m.start(), m.end()):
             continue
         protected.append((m.start(), m.end(), f"<code>{_esc(m.group(1))}</code>"))
 
     # 3. Links: [text](url)
     for m in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", text):
-        if _overlaps(m.start()):
+        if _overlaps(m.start(), m.end()):
             continue
         protected.append((m.start(), m.end(), f'<a href="{m.group(2)}">{_esc(m.group(1))}</a>'))
 
-    # 4. Bold: **text** or __text__
-    for m in re.finditer(r"(\*\*|__)(.+?)\1", text):
-        if _overlaps(m.start()):
+    # 4. Bold+italic: ***text***
+    for m in re.finditer(r"\*\*\*(.+?)\*\*\*", text):
+        if _overlaps(m.start(), m.end()):
             continue
-        protected.append((m.start(), m.end(), f"<b>{_esc(m.group(2))}</b>"))
+        protected.append((m.start(), m.end(), f"<b><i>{_esc(m.group(1))}</i></b>"))
 
-    # 5. Strikethrough: ~~text~~
+    # 5. Bold: **text** or __text__ (may span lines)
+    for m in re.finditer(r"\*\*(.+?)\*\*|__(.+?)__", text, re.DOTALL):
+        if _overlaps(m.start(), m.end()):
+            continue
+        content = m.group(1) if m.group(1) is not None else m.group(2)
+        protected.append((m.start(), m.end(), f"<b>{_esc(content)}</b>"))
+
+    # 6. Strikethrough: ~~text~~
     for m in re.finditer(r"~~(.+?)~~", text):
-        if _overlaps(m.start()):
+        if _overlaps(m.start(), m.end()):
             continue
         protected.append((m.start(), m.end(), f"<s>{_esc(m.group(1))}</s>"))
 
-    # 6. Italic: *text* or _text_ (single, not double)
-    for m in re.finditer(
-        r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", text
-    ):
-        if _overlaps(m.start()):
+    # 7. Italic: *text* (not inside words) or _text_ (not inside words/identifiers)
+    #    Word-boundary guards prevent matching underscores in snake_case identifiers
+    #    and URLs like https://example.com/my_page_here
+    for m in re.finditer(r"(?<!\w)\*([^*\n]+?)\*(?!\w)", text):
+        if _overlaps(m.start(), m.end()):
             continue
-        content = m.group(1) or m.group(2)
-        protected.append((m.start(), m.end(), f"<i>{_esc(content)}</i>"))
+        protected.append((m.start(), m.end(), f"<i>{_esc(m.group(1))}</i>"))
+    for m in re.finditer(r"(?<!\w)_([^_\n]+?)_(?!\w)", text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        protected.append((m.start(), m.end(), f"<i>{_esc(m.group(1))}</i>"))
 
     # Sort by start position and build result
     protected.sort(key=lambda x: x[0])
@@ -101,19 +149,9 @@ def _md_to_telegram_html(text: str) -> str:
 
     result = "".join(parts)
 
-    # --- Line-level formatting (applied after inline processing) ---
-
-    # Headers: # text → bold text
-    result = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", result, flags=re.MULTILINE)
-
-    # Bullet lists: lines starting with - or * followed by space → bullet character
-    result = re.sub(r"^[\-\*]\s+", "• ", result, flags=re.MULTILINE)
-
-    # Blockquotes: > text → italic text with bar
-    result = re.sub(r"^&gt;\s?(.*)$", r"┃ <i>\1</i>", result, flags=re.MULTILINE)
-
-    # Horizontal rules: --- or *** or ___ on their own line
-    result = re.sub(r"^(---|\*\*\*|___)$", "───────────", result, flags=re.MULTILINE)
+    # Convert sentinel markers to HTML tags (these were placed by line-level transforms)
+    result = result.replace("\x02BOLD\x02", "<b>").replace("\x02/BOLD\x02", "</b>")
+    result = result.replace("\x02BQSTART\x02", "┃ <i>").replace("\x02BQEND\x02", "</i>")
 
     return result
 
