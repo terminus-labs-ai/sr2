@@ -50,7 +50,7 @@ def parse_args(argv: list[str] | None = None):
     )
     parser.add_argument(
         "--log-level",
-        default="DEBUG",
+        default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     return parser.parse_args(argv)
