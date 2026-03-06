@@ -63,22 +63,36 @@ class A2AClientTool:
             },
         }
 
-    async def execute(
-        self,
-        message: str,
-        metadata: dict | None = None,
-        task_id: str | None = None,
-    ) -> str:
+    # Parameter names the LLM commonly uses instead of "message"
+    _MESSAGE_ALIASES = {"message", "prompt", "query", "input", "text", "request", "task", "description", "content"}
+
+    def _extract_message(self, kwargs: dict) -> str | None:
+        """Extract the message from kwargs, tolerating LLM-chosen param names."""
+        # 1. Exact match on known aliases
+        for alias in self._MESSAGE_ALIASES:
+            if alias in kwargs and isinstance(kwargs[alias], str):
+                return kwargs[alias]
+        # 2. Fallback: first string value
+        for value in kwargs.values():
+            if isinstance(value, str):
+                return value
+        return None
+
+    async def execute(self, **kwargs) -> str:
         """Execute the A2A tool call.
 
-        1. Build A2A request payload
-        2. Send HTTP request to target agent
-        3. Parse response
-        4. Return result string for the LLM context
+        Accepts **kwargs to be resilient to LLMs that ignore the schema
+        and use parameter names like 'prompt', 'query', etc. instead of 'message'.
         """
         if not self._http:
             return "Error: No HTTP client configured for A2A tool"
 
+        message = self._extract_message(kwargs)
+        if message is None:
+            return f"Error: No message found in arguments: {list(kwargs.keys())}"
+
+        metadata = kwargs.get("metadata")
+        task_id = kwargs.get("task_id")
         tid = task_id or f"task_{uuid.uuid4().hex[:12]}"
         payload: dict = {
             "task_id": tid,
