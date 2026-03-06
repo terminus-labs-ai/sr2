@@ -365,10 +365,16 @@ class LLMClient:
         Returns True if the text is a JSON object with a ``"name"`` key and
         optionally an ``"arguments"`` key — the shape models use when they
         emit tool calls as plain text instead of structured API calls.
+        Also matches <tool_code>function_name(args)</tool_code> patterns.
         """
         import re
 
         text = text.strip()
+
+        # Check for <tool_code>...</tool_code> pattern (function-call syntax)
+        if re.search(r"<tool_code>\s*\w+\s*\(", text):
+            return True
+
         m = re.search(r"<tool_call>\s*(\{.*\})\s*(?:</tool_call>)?", text, re.DOTALL)
         if m:
             text = m.group(1).strip()
@@ -382,12 +388,81 @@ class LLMClient:
         return isinstance(data, dict) and "name" in data
 
     @staticmethod
+    def _try_parse_tool_code_block(text: str, available_tools: set[str] | None = None) -> dict | None:
+        """Try to parse <tool_code>function_name(args)</tool_code> patterns.
+
+        Some models (e.g. Llama, Qwen) emit tool calls as function-call
+        syntax in <tool_code> blocks rather than structured tool_calls or
+        JSON. Handles:
+          - <tool_code>func_name("arg")</tool_code>
+          - <tool_code>func_name(key="value", key2="value2")</tool_code>
+          - <tool_code>func_name({"key": "value"})</tool_code>
+        """
+        import ast
+        import re
+
+        m = re.search(
+            r"<tool_code>\s*(\w+)\s*\((.*?)\)\s*(?:</tool_code>)?",
+            text, re.DOTALL,
+        )
+        if not m:
+            return None
+
+        name = m.group(1)
+        raw_args = m.group(2).strip()
+
+        if available_tools is not None and name not in available_tools:
+            logger.warning(f"Model hallucinated tool '{name}' not in available tools, ignoring")
+            return None
+
+        # Parse arguments
+        arguments: dict = {}
+        if raw_args:
+            # Try JSON first: func({"key": "value"})
+            try:
+                parsed = json.loads(raw_args)
+                if isinstance(parsed, dict):
+                    arguments = parsed
+                else:
+                    arguments = {"input": parsed}
+            except json.JSONDecodeError:
+                # Try Python-style kwargs: func(key="value", key2="value2")
+                # or positional: func("value")
+                try:
+                    parsed = ast.literal_eval(f"({raw_args},)")
+                    if len(parsed) == 1 and isinstance(parsed[0], dict):
+                        arguments = parsed[0]
+                    elif len(parsed) == 1:
+                        arguments = {"input": parsed[0]}
+                    else:
+                        arguments = {"args": list(parsed)}
+                except (ValueError, SyntaxError):
+                    # Try key=value parsing
+                    kwarg_pattern = re.findall(r'(\w+)\s*=\s*(".*?"|\'.*?\'|\S+)', raw_args)
+                    if kwarg_pattern:
+                        for k, v in kwarg_pattern:
+                            v = v.strip("\"'")
+                            arguments[k] = v
+                    else:
+                        # Give up parsing, pass raw string
+                        arguments = {"input": raw_args}
+
+        return {
+            "id": f"tool_code_{name}",
+            "name": name,
+            "arguments": arguments,
+        }
+
+    @staticmethod
     def _try_parse_tool_call(text: str, available_tools: set[str] | None = None) -> dict | None:
         """Try to parse text as a tool call JSON.
 
         Some models (e.g. GLM-4) emit tool calls as raw JSON in
         reasoning_content or content rather than using structured tool_calls.
-        Handles both raw JSON and <tool_call>...</tool_call> wrappers.
+        Handles:
+          - Raw JSON: {"name": "func", "arguments": {...}}
+          - <tool_call>{"name": "func", "arguments": {...}}</tool_call>
+          - <tool_code>func_name(args)</tool_code>
 
         If *available_tools* is provided, rejects tool names that aren't
         in the set (prevents hallucinated tool names from being dispatched).
@@ -395,6 +470,11 @@ class LLMClient:
         import re
 
         text = text.strip()
+
+        # Try <tool_code>function_name(args)</tool_code> first
+        tool_code_result = LLMClient._try_parse_tool_code_block(text, available_tools)
+        if tool_code_result:
+            return tool_code_result
 
         # Strip <tool_call>...</tool_call> wrapper if present
         m = re.search(r"<tool_call>\s*(\{.*\})\s*(?:</tool_call>)?", text, re.DOTALL)

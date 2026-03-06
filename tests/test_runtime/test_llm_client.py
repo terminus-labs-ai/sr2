@@ -216,3 +216,75 @@ class TestTryParseToolCall:
             available_tools={"search"},
         )
         assert result is None
+
+
+class TestToolCodeParsing:
+    """Tests for <tool_code>function_name(args)</tool_code> parsing."""
+
+    def test_tool_code_with_string_arg(self):
+        result = LLMClient._try_parse_tool_call(
+            '<tool_code>manage_tasks("List all tasks")</tool_code>',
+            available_tools={"manage_tasks"},
+        )
+        assert result is not None
+        assert result["name"] == "manage_tasks"
+        assert result["arguments"] == {"input": "List all tasks"}
+
+    def test_tool_code_embedded_in_text(self):
+        """Model outputs text before the tool_code block (common pattern)."""
+        content = (
+            "Let me check the current state of the Galaxy Map task board.\n\n"
+            "<tool_code>\nmanage_tasks(\"List all tasks\")\n</tool_code>"
+        )
+        result = LLMClient._try_parse_tool_call(content, available_tools={"manage_tasks"})
+        assert result is not None
+        assert result["name"] == "manage_tasks"
+
+    def test_tool_code_with_kwargs(self):
+        result = LLMClient._try_parse_tool_call(
+            '<tool_code>search(query="galaxy map", limit=10)</tool_code>',
+            available_tools={"search"},
+        )
+        assert result is not None
+        assert result["name"] == "search"
+        assert result["arguments"]["query"] == "galaxy map"
+
+    def test_tool_code_with_json_arg(self):
+        result = LLMClient._try_parse_tool_call(
+            '<tool_code>search({"query": "galaxy"})</tool_code>',
+            available_tools={"search"},
+        )
+        assert result is not None
+        assert result["arguments"] == {"query": "galaxy"}
+
+    def test_tool_code_no_args(self):
+        result = LLMClient._try_parse_tool_call(
+            '<tool_code>list_tasks()</tool_code>',
+            available_tools={"list_tasks"},
+        )
+        assert result is not None
+        assert result["name"] == "list_tasks"
+        assert result["arguments"] == {}
+
+    def test_tool_code_hallucinated_name_rejected(self):
+        result = LLMClient._try_parse_tool_call(
+            '<tool_code>nonexistent_tool("test")</tool_code>',
+            available_tools={"search", "manage_tasks"},
+        )
+        assert result is None
+
+    def test_tool_code_no_available_tools_accepts_any(self):
+        result = LLMClient._try_parse_tool_call(
+            '<tool_code>any_tool("test")</tool_code>',
+            available_tools=None,
+        )
+        assert result is not None
+        assert result["name"] == "any_tool"
+
+    def test_looks_like_tool_call_detects_tool_code(self):
+        assert LLMClient._looks_like_tool_call(
+            'Some text\n<tool_code>func("arg")</tool_code>'
+        ) is True
+
+    def test_looks_like_tool_call_plain_text_false(self):
+        assert LLMClient._looks_like_tool_call("Just regular text") is False
