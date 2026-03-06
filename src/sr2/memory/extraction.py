@@ -6,6 +6,7 @@ import re
 
 from sr2.memory.schema import CONFIDENCE_SCORES, STABILITY_DEFAULTS, ExtractionResult, Memory
 from sr2.memory.store import MemoryStore
+from sr2.normalization.normalizer import ResponseNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class MemoryExtractor:
         self._key_schema = key_schema or []
         self._max = max_memories_per_turn
         self._embed = embed_callable
+        self._normalizer = ResponseNormalizer()
 
     async def extract(
         self,
@@ -139,7 +141,7 @@ Conversation turn:
         turn_number: int | None,
     ) -> list[Memory]:
         """Parse LLM JSON response into Memory objects, filtering noise."""
-        cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`")
+        cleaned = self._normalizer.normalize(raw)
 
         try:
             items = json.loads(cleaned)
