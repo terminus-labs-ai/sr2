@@ -37,6 +37,7 @@ class ToolCallRecord:
     success: bool
     error: str | None = None
     call_id: str = ""
+    iteration: int = 0  # Which loop iteration this call belongs to
 
 
 @dataclass
@@ -179,6 +180,7 @@ class LLMLoop:
 
             # Process results sequentially: append messages, track failures, state transitions
             for tc, record in zip(llm_response.tool_calls, records):
+                record.iteration = i
                 result.tool_calls.append(record)
 
                 # Append tool result to messages
@@ -363,6 +365,7 @@ class LLMLoop:
 
             # Process results sequentially: append messages, notify, track failures, state transitions
             for tc, record in zip(llm_response.tool_calls, records):
+                record.iteration = i
                 result.tool_calls.append(record)
 
                 # Append tool result to messages

@@ -444,9 +444,18 @@ class Agent:
                 tool_state_machine=ctx.state_machine,
             )
 
-        # Record in session
-        for tc in loop_result.tool_calls:
-            session.add_tool_call(tc.tool_name, tc.arguments, tc.result, tc.call_id)
+        # Record in session — group tool calls by loop iteration so the
+        # assistant message contains all tool_calls from the same LLM response
+        # (required by OpenAI message format).
+        from itertools import groupby
+        from operator import attrgetter
+
+        for _iteration, group in groupby(loop_result.tool_calls, key=attrgetter("iteration")):
+            calls = [
+                (tc.tool_name, tc.arguments, tc.result, tc.call_id)
+                for tc in group
+            ]
+            session.add_tool_calls_grouped(calls)
         if loop_result.response_text:
             session.add_assistant_message(loop_result.response_text)
 

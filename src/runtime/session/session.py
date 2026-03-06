@@ -78,6 +78,54 @@ class Session:
                 "metadata": {"tool_name": tool_name},
             }
         )
+
+    def add_tool_calls_grouped(
+        self,
+        calls: list[tuple[str, dict, str, str]],
+    ) -> None:
+        """Add multiple tool calls from a single LLM response.
+
+        Each call is (tool_name, arguments, result, call_id).
+        Creates one assistant message with all tool_calls, followed by
+        individual tool_result messages — matching the OpenAI message format.
+        """
+        if not calls:
+            return
+
+        tool_calls_payload = []
+        for tool_name, arguments, _result, call_id in calls:
+            tool_calls_payload.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(arguments),
+                    },
+                }
+            )
+
+        tool_names = [c[0] for c in calls]
+        self.turns.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": tool_calls_payload,
+                "content_type": "tool_call",
+                "metadata": {"tool_names": tool_names},
+            }
+        )
+
+        for tool_name, _arguments, result, call_id in calls:
+            self.turns.append(
+                {
+                    "role": "tool_result",
+                    "content": result,
+                    "content_type": "tool_output",
+                    "tool_call_id": call_id,
+                    "metadata": {"tool_name": tool_name},
+                }
+            )
         self.last_activity = datetime.now(UTC)
         self._enforce_rolling()
 
