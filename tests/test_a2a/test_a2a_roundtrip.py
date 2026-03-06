@@ -30,6 +30,72 @@ def _tool_response(tool_calls, content=""):
     )
 
 
+class TestA2AParameterResilience:
+    """Tests that A2AClientTool.execute() accepts LLM-guessed parameter names."""
+
+    @pytest.mark.asyncio
+    async def test_accepts_message_param(self):
+        async def mock_http(url, payload, timeout):
+            return {"status": "completed", "result": payload["message"]}
+
+        tool = A2AClientTool(
+            config=A2AToolConfig(name="t", target_url="http://r:8008"),
+            http_callable=mock_http,
+        )
+        result = await tool.execute(message="hello")
+        assert result == "hello"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("param_name", ["prompt", "query", "input", "text", "request", "description", "content"])
+    async def test_accepts_aliased_params(self, param_name):
+        async def mock_http(url, payload, timeout):
+            return {"status": "completed", "result": payload["message"]}
+
+        tool = A2AClientTool(
+            config=A2AToolConfig(name="t", target_url="http://r:8008"),
+            http_callable=mock_http,
+        )
+        result = await tool.execute(**{param_name: "hello from alias"})
+        assert result == "hello from alias"
+
+    @pytest.mark.asyncio
+    async def test_accepts_unknown_param_fallback(self):
+        async def mock_http(url, payload, timeout):
+            return {"status": "completed", "result": payload["message"]}
+
+        tool = A2AClientTool(
+            config=A2AToolConfig(name="t", target_url="http://r:8008"),
+            http_callable=mock_http,
+        )
+        result = await tool.execute(user_instruction="fallback value")
+        assert result == "fallback value"
+
+    @pytest.mark.asyncio
+    async def test_no_string_param_returns_error(self):
+        tool = A2AClientTool(
+            config=A2AToolConfig(name="t", target_url="http://r:8008"),
+            http_callable=lambda *a, **k: None,
+        )
+        result = await tool.execute(count=42)
+        assert "Error: No message found" in result
+
+    @pytest.mark.asyncio
+    async def test_metadata_still_forwarded(self):
+        captured = {}
+
+        async def mock_http(url, payload, timeout):
+            captured.update(payload)
+            return {"status": "completed", "result": "ok"}
+
+        tool = A2AClientTool(
+            config=A2AToolConfig(name="t", target_url="http://r:8008"),
+            http_callable=mock_http,
+        )
+        await tool.execute(prompt="do thing", metadata={"key": "val"})
+        assert captured["message"] == "do thing"
+        assert captured["metadata"] == {"key": "val"}
+
+
 class TestA2ARoundTrip:
     """Tests that verify A2A tool results flow correctly through the LLM loop."""
 
