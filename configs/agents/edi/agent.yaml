@@ -146,6 +146,12 @@ mcp_servers:
       - searxng_web_search
       - web_url_read
 
+  - name: galaxy-map
+    url: galaxy-map-mcp
+    transport: stdio
+    env:
+      GALAXY_MAP_URL: http://localhost:8000
+
   - name: filesystem
     url: npx -y @modelcontextprotocol/server-filesystem /tmp
     transport: stdio
