@@ -146,8 +146,8 @@ class TestHybridRetriever:
         assert results[1].memory.id == "mem_bbb"
 
     @pytest.mark.asyncio
-    async def test_touch_called(self, store):
-        """Retrieved memories have touch() called."""
+    async def test_retrieve_does_not_touch(self, store):
+        """retrieve() should NOT touch memories — touch is deferred."""
         mem = Memory(key="user.name", value="Alice", access_count=0)
         await store.save(mem)
 
@@ -155,4 +155,21 @@ class TestHybridRetriever:
         results = await retriever.retrieve("alice")
 
         assert len(results) == 1
-        assert results[0].memory.access_count == 1
+        # access_count unchanged after retrieve (touch is deferred)
+        assert results[0].memory.access_count == 0
+
+    @pytest.mark.asyncio
+    async def test_flush_touches(self, store):
+        """flush_touches() persists deferred touch updates."""
+        mem = Memory(key="user.name", value="Alice", access_count=0)
+        await store.save(mem)
+
+        retriever = HybridRetriever(store=store, strategy="keyword")
+        results = await retriever.retrieve("alice")
+        assert results[0].memory.access_count == 0
+
+        await retriever.flush_touches()
+
+        # Re-fetch from store to verify persistence
+        updated = await store.get(mem.id)
+        assert updated.access_count == 1

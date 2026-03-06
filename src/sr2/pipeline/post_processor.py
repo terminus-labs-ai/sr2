@@ -6,6 +6,7 @@ from sr2.compaction.engine import CompactionResult, ConversationTurn
 from sr2.memory.conflicts import ConflictDetector
 from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
+from sr2.memory.retrieval import HybridRetriever
 from sr2.pipeline.conversation import ConversationManager
 from sr2.pipeline.result import PipelineResult, StageResult
 from sr2.summarization.engine import SummarizationResult
@@ -29,11 +30,13 @@ class PostLLMProcessor:
         memory_extractor: MemoryExtractor | None = None,
         conflict_detector: ConflictDetector | None = None,
         conflict_resolver: ConflictResolver | None = None,
+        retriever: HybridRetriever | None = None,
     ):
         self._conv = conversation_manager
         self._extractor = memory_extractor
         self._detector = conflict_detector
         self._resolver = conflict_resolver
+        self._retriever = retriever
         # Counters for memory metrics (per-invocation, reset on each process call)
         self.last_memories_extracted: int = 0
         self.last_conflicts_detected: int = 0
@@ -59,7 +62,14 @@ class PostLLMProcessor:
         # 1. Add turn to conversation
         self._conv.add_turn(latest_turn, session_id=session_id)
 
-        # 2. Memory extraction
+        # 2. Flush deferred memory touches from retrieval
+        await self._run_stage(
+            result,
+            "memory_touch",
+            self._flush_touches,
+        )
+
+        # 3. Memory extraction
         await self._run_stage(
             result,
             "memory_extraction",
@@ -68,7 +78,7 @@ class PostLLMProcessor:
             conversation_id,
         )
 
-        # 3. Compaction
+        # 4. Compaction
         await self._run_stage(
             result,
             "compaction",
@@ -76,7 +86,7 @@ class PostLLMProcessor:
             session_id,
         )
 
-        # 4. Summarization
+        # 5. Summarization
         await self._run_stage(
             result,
             "summarization",
@@ -94,6 +104,10 @@ class PostLLMProcessor:
         except Exception as e:
             logger.warning(f"Post-LLM stage '{name}' failed: {e}", exc_info=True)
             result.add_stage(StageResult(stage_name=name, status="failed", error=str(e)))
+
+    async def _flush_touches(self) -> None:
+        if self._retriever:
+            await self._retriever.flush_touches()
 
     async def _extract_memories(
         self,

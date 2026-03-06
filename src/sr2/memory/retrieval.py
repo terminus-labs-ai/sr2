@@ -40,6 +40,8 @@ class HybridRetriever:
         self.last_was_empty: bool = False
         self._total_retrievals: int = 0
         self._empty_retrievals: int = 0
+        # IDs of memories accessed in the last retrieve() call, for deferred touch
+        self._pending_touch_ids: list[str] = []
 
     async def retrieve(
         self,
@@ -89,10 +91,8 @@ class HybridRetriever:
         if max_tokens is not None:
             results = self._cap_by_tokens(results, max_tokens)
 
-        # Touch accessed memories and persist updates
-        for r in results:
-            r.memory.touch()
-            await self._store.save(r.memory)
+        # Record IDs for deferred touch (called after pipeline is stable)
+        self._pending_touch_ids = [r.memory.id for r in results]
 
         # Update instrumentation stats
         self.last_latency_ms = (time.perf_counter() - t0) * 1000
@@ -105,6 +105,23 @@ class HybridRetriever:
             self._empty_retrievals += 1
 
         return results
+
+    async def flush_touches(self) -> None:
+        """Persist deferred touch() calls for memories accessed in the last retrieve().
+
+        Should be called during post-LLM processing, after the pipeline has
+        finished compiling context, so that touch side-effects don't destabilise
+        layer content between compile() calls.
+        """
+        if not self._pending_touch_ids:
+            return
+        ids = self._pending_touch_ids
+        self._pending_touch_ids = []
+        for memory_id in ids:
+            mem = await self._store.get(memory_id)
+            if mem is not None:
+                mem.touch()
+                await self._store.save(mem)
 
     @property
     def empty_rate(self) -> float:

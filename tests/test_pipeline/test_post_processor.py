@@ -57,7 +57,7 @@ class TestPostLLMProcessor:
         turn = _make_turn()
         result = await processor.process(turn, conversation_id="conv_1")
 
-        assert len(result.stages) == 3
+        assert len(result.stages) == 4
         assert all(s.status == "success" for s in result.stages)
 
     @pytest.mark.asyncio
@@ -70,7 +70,7 @@ class TestPostLLMProcessor:
         turn = _make_turn()
         result = await processor.process(turn)
 
-        assert len(result.stages) == 3
+        assert len(result.stages) == 4
         # All should succeed (extraction skips gracefully)
         assert all(s.status == "success" for s in result.stages)
 
@@ -93,10 +93,12 @@ class TestPostLLMProcessor:
         turn = _make_turn()
         result = await processor.process(turn)
 
-        assert result.stages[0].stage_name == "memory_extraction"
-        assert result.stages[0].status == "failed"
-        assert result.stages[1].stage_name == "compaction"
-        assert result.stages[1].status == "success"
+        assert result.stages[0].stage_name == "memory_touch"
+        assert result.stages[0].status == "success"
+        assert result.stages[1].stage_name == "memory_extraction"
+        assert result.stages[1].status == "failed"
+        assert result.stages[2].stage_name == "compaction"
+        assert result.stages[2].status == "success"
 
     @pytest.mark.asyncio
     async def test_compaction_failure_doesnt_block_summarization(self):
@@ -114,10 +116,12 @@ class TestPostLLMProcessor:
         turn = _make_turn()
         result = await processor.process(turn)
 
-        assert result.stages[1].stage_name == "compaction"
-        assert result.stages[1].status == "failed"
-        assert result.stages[2].stage_name == "summarization"
-        assert result.stages[2].status == "success"
+        assert result.stages[0].stage_name == "memory_touch"
+        assert result.stages[0].status == "success"
+        assert result.stages[2].stage_name == "compaction"
+        assert result.stages[2].status == "failed"
+        assert result.stages[3].stage_name == "summarization"
+        assert result.stages[3].status == "success"
 
     @pytest.mark.asyncio
     async def test_all_stages_failed(self):
@@ -147,8 +151,11 @@ class TestPostLLMProcessor:
         turn = _make_turn()
         result = await processor.process(turn)
 
-        assert len(result.stages) == 3
-        assert all(s.status == "failed" for s in result.stages)
+        assert len(result.stages) == 4
+        # memory_touch succeeds (no retriever), the other 3 fail
+        assert result.stages[0].stage_name == "memory_touch"
+        assert result.stages[0].status == "success"
+        assert all(s.status == "failed" for s in result.stages[1:])
 
     @pytest.mark.asyncio
     async def test_turn_added_to_conversation(self):
