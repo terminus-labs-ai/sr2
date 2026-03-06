@@ -34,7 +34,7 @@ class TestA2AClientTool:
             return {"status": "completed", "result": "Done!"}
 
         tool = A2AClientTool(config=_make_config(), http_callable=mock_http)
-        result = await tool.execute("Do something")
+        result = await tool.execute(message="Do something")
 
         assert result == "Done!"
 
@@ -46,7 +46,7 @@ class TestA2AClientTool:
             return {"status": "failed", "result": "Bad request"}
 
         tool = A2AClientTool(config=_make_config(), http_callable=mock_http)
-        result = await tool.execute("Do something")
+        result = await tool.execute(message="Do something")
 
         assert "failed" in result
         assert "Bad request" in result
@@ -59,7 +59,7 @@ class TestA2AClientTool:
             raise TimeoutError("Connection timed out")
 
         tool = A2AClientTool(config=_make_config(), http_callable=mock_http)
-        result = await tool.execute("Do something")
+        result = await tool.execute(message="Do something")
 
         assert "timed out" in result
 
@@ -71,7 +71,7 @@ class TestA2AClientTool:
             raise ConnectionError("Connection refused")
 
         tool = A2AClientTool(config=_make_config(), http_callable=mock_http)
-        result = await tool.execute("Do something")
+        result = await tool.execute(message="Do something")
 
         assert "A2A call failed" in result
         assert "Connection refused" in result
@@ -80,7 +80,7 @@ class TestA2AClientTool:
     async def test_execute_without_http_callable(self):
         """execute() without http_callable -> returns error message."""
         tool = A2AClientTool(config=_make_config())
-        result = await tool.execute("Do something")
+        result = await tool.execute(message="Do something")
 
         assert "No HTTP client configured" in result
 
@@ -94,7 +94,7 @@ class TestA2AClientTool:
             return {"status": "completed", "result": "ok"}
 
         tool = A2AClientTool(config=_make_config(), http_callable=mock_http)
-        await tool.execute("Hello", task_id="my-task")
+        await tool.execute(message="Hello", task_id="my-task")
 
         assert captured["task_id"] == "my-task"
         assert captured["message"] == "Hello"
@@ -110,7 +110,7 @@ class TestA2AClientTool:
 
         config = _make_config(skill_id="summarize")
         tool = A2AClientTool(config=config, http_callable=mock_http)
-        await tool.execute("Summarize this")
+        await tool.execute(message="Summarize this")
 
         assert captured["skill_id"] == "summarize"
 
