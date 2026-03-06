@@ -69,6 +69,10 @@ class MCPToolHandler:
         Raises RuntimeError if the MCP server signals an error via isError,
         so the loop's circuit breaker can detect repeated failures.
         """
+        logger.debug(
+            f"MCP tool '{self._tool_name}' on server '{self._server_name}' "
+            f"called with: {kwargs}"
+        )
         session = await self._manager._get_session(self._server_name)
         result = await session.call_tool(self._tool_name, arguments=kwargs)
 
@@ -84,6 +88,10 @@ class MCPToolHandler:
         text = "\n".join(parts) if parts else "Tool returned no content."
 
         if getattr(result, "isError", False):
+            logger.warning(
+                f"MCP tool '{self._tool_name}' on server '{self._server_name}' "
+                f"returned isError=True: {text}"
+            )
             raise RuntimeError(text)
 
         return text

@@ -428,9 +428,14 @@ class LLMLoop:
         start = time.perf_counter()
 
         try:
-            logger.info(f"Calling tool {tc} ")
+            logger.info(f"Calling tool '{tc['name']}' with args: {tc['arguments']}")
             tool_result = await self._tools.execute(tc["name"], tc["arguments"])
             duration = (time.perf_counter() - start) * 1000
+            logger.info(
+                f"Tool '{tc['name']}' completed in {duration:.0f}ms, "
+                f"result length: {len(tool_result)} chars"
+            )
+            logger.debug(f"Tool '{tc['name']}' result: {tool_result[:500]}")
             return ToolCallRecord(
                 tool_name=tc["name"],
                 arguments=tc["arguments"],
@@ -442,7 +447,10 @@ class LLMLoop:
         except Exception as e:
             duration = (time.perf_counter() - start) * 1000
             error_msg = f"Tool execution error: {e}"
-            logger.warning(f"Tool '{tc['name']}' failed: {e}")
+            logger.warning(
+                f"Tool '{tc['name']}' failed after {duration:.0f}ms: {e}",
+                exc_info=True,
+            )
             return ToolCallRecord(
                 tool_name=tc["name"],
                 arguments=tc["arguments"],
