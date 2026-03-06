@@ -106,7 +106,14 @@ def create_http_app(agent: Agent) -> FastAPI:
                 status_code=404,
             )
 
-        result = await a2a_plugin.handle_a2a_request(task_id, message, metadata)
+        try:
+            result = await a2a_plugin.handle_a2a_request(task_id, message, metadata)
+        except Exception as e:
+            logger.error(f"A2A message handling failed for task {task_id}: {e}", exc_info=True)
+            return JSONResponse(
+                {"task_id": task_id, "status": "failed", "result": f"Internal error: {e}"},
+                status_code=500,
+            )
         return JSONResponse({"task_id": task_id, "status": "completed", "result": result})
 
     @app.get("/.well-known/agent.json")

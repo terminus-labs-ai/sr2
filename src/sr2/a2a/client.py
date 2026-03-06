@@ -90,6 +90,10 @@ class A2AClientTool:
             payload["skill_id"] = self._config.skill_id
 
         try:
+            logger.info(
+                f"A2A call to {self._config.target_url} with task_id={tid}, "
+                f"message_length={len(message)}"
+            )
             response = await self._http(
                 url=f"{self._config.target_url}/a2a/message",
                 payload=payload,
@@ -99,15 +103,28 @@ class A2AClientTool:
             status = response.get("status", "unknown")
             result = response.get("result", "No result returned")
 
+            logger.info(
+                f"A2A response from {self._config.target_url}: "
+                f"status={status}, result_length={len(str(result))}"
+            )
+            logger.debug(f"A2A response result: {str(result)[:500]}")
+
             if status == "completed":
                 return result
             else:
+                logger.warning(
+                    f"A2A call returned non-completed status '{status}': {result}"
+                )
                 return f"Remote agent returned status '{status}': {result}"
 
         except TimeoutError:
+            logger.error(
+                f"A2A call to {self._config.target_url} timed out "
+                f"after {self._config.timeout_seconds}s"
+            )
             return f"A2A call to {self._config.target_url} timed out after {self._config.timeout_seconds}s"
         except Exception as e:
-            logger.warning(f"A2A call failed: {e}")
+            logger.error(f"A2A call to {self._config.target_url} failed: {e}", exc_info=True)
             return f"A2A call failed: {e}"
 
     async def fetch_agent_card(self) -> dict | None:
