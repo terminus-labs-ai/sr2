@@ -5,6 +5,16 @@ requests, and wraps them as ToolHandlers so the ToolExecutor can dispatch
 to them transparently.
 
 Uses the official mcp Python SDK.
+
+Connection lifecycle:
+1. Agent.start() calls discover_all() — connects to each server, discovers
+   tool/resource/prompt schemas, then disconnects immediately.  Schemas are
+   cached in memory and never change, keeping the KV-cache prefix stable.
+2. When a tool is actually *called*, MCPToolHandler asks MCPManager for a
+   live session via _get_session().  The manager connects on demand and keeps
+   the connection alive until an idle timeout fires.
+3. Agent.shutdown() calls disconnect_all() to tear down any still-open
+   connections.
 """
 
 from __future__ import annotations
@@ -31,6 +41,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Default idle timeout before tearing down on-demand connections (seconds).
+_DEFAULT_IDLE_TIMEOUT = 120
+
 
 # ---------------------------------------------------------------------------
 # Tool Handlers
@@ -38,10 +51,16 @@ logger = logging.getLogger(__name__)
 
 
 class MCPToolHandler:
-    """Wraps a single MCP tool as a ToolHandler for the ToolExecutor."""
+    """Wraps a single MCP tool as a ToolHandler for the ToolExecutor.
 
-    def __init__(self, session: ClientSession, tool_name: str):
-        self._session = session
+    Instead of holding a live ClientSession (which can die), it asks the
+    MCPManager for a session on demand.  The manager handles connection
+    lifecycle transparently.
+    """
+
+    def __init__(self, manager: MCPManager, server_name: str, tool_name: str):
+        self._manager = manager
+        self._server_name = server_name
         self._tool_name = tool_name
 
     async def execute(self, **kwargs) -> str:
@@ -50,7 +69,8 @@ class MCPToolHandler:
         Raises RuntimeError if the MCP server signals an error via isError,
         so the loop's circuit breaker can detect repeated failures.
         """
-        result = await self._session.call_tool(self._tool_name, arguments=kwargs)
+        session = await self._manager._get_session(self._server_name)
+        result = await session.call_tool(self._tool_name, arguments=kwargs)
 
         parts = []
         for block in result.content:
@@ -118,25 +138,27 @@ class MCPGetPromptHandler:
 class MCPManager:
     """Manages connections to multiple MCP servers.
 
-    Each server runs in its own background task that holds the transport
-    context manager open (required by anyio's cancel scope rules). The task
-    stays alive until disconnect_all() signals it to stop.
-
     Lifecycle:
-    1. Agent.start() calls connect_all()
-    2. For each server: spawn a task that connects, discovers tools/resources/prompts,
-       registers in ToolExecutor, then waits until signalled to stop
-    3. Agent.shutdown() calls disconnect_all()
+    1. Agent.start() calls discover_all() — connects, caches schemas, disconnects.
+    2. Tool execution calls _get_session() — connects on demand with idle timeout.
+    3. Agent.shutdown() calls disconnect_all() — tears down any open connections.
     """
 
     def __init__(self):
         self._configs: list[MCPServerConfig] = []
+        self._configs_by_name: dict[str, MCPServerConfig] = {}
+
+        # Live connection state (populated on demand)
         self._sessions: dict[str, ClientSession] = {}
         self._server_tasks: dict[str, asyncio.Task] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
+        self._ready_events: dict[str, asyncio.Event] = {}
+        self._idle_tasks: dict[str, asyncio.Task] = {}
+        self._last_activity: dict[str, float] = {}
 
-        # Tools
+        # Cached schemas (populated once at discovery, never change)
         self._discovered_tools: dict[str, dict] = {}  # tool_name -> schema
+        self._tool_server_map: dict[str, str] = {}  # tool_name -> server_name
 
         # Resources
         self._discovered_resources: dict[str, list[dict]] = {}  # server_name -> [resource info]
@@ -150,20 +172,26 @@ class MCPManager:
         self._llm_client: Any = None
         self._sampling_timestamps: dict[str, list[float]] = {}  # server -> timestamps
 
+        self._idle_timeout: float = _DEFAULT_IDLE_TIMEOUT
+
     def add_server(self, config: MCPServerConfig) -> None:
         """Register an MCP server config."""
         self._configs.append(config)
+        self._configs_by_name[config.name] = config
 
     def set_llm_client(self, llm_client: Any) -> None:
         """Wire the agent's LLMClient for sampling callbacks."""
         self._llm_client = llm_client
 
     # -------------------------------------------------------------------
-    # Connection lifecycle
+    # Schema discovery (connect, discover, disconnect)
     # -------------------------------------------------------------------
 
-    async def connect_all(self, tool_executor) -> dict[str, list[str]]:
-        """Connect to all registered MCP servers and register their tools.
+    async def discover_all(self, tool_executor) -> dict[str, list[str]]:
+        """Connect to all servers, discover schemas, register tools, disconnect.
+
+        Schemas are cached permanently so that the tool list presented to the
+        LLM never changes (preserving the KV-cache prefix).
 
         Args:
             tool_executor: ToolExecutor to register discovered tools into.
@@ -184,99 +212,190 @@ class MCPManager:
         registered = {}
 
         for config in self._configs:
-            ready: asyncio.Future[list[str]] = asyncio.get_event_loop().create_future()
-            stop_event = asyncio.Event()
-            self._stop_events[config.name] = stop_event
-
-            task = asyncio.create_task(
-                self._run_server(config, tool_executor, ready, stop_event),
-                name=f"mcp-{config.name}",
-            )
-            self._server_tasks[config.name] = task
-
             try:
-                tools = await ready
-                registered[config.name] = tools
-                logger.info(f"MCP server '{config.name}': {len(tools)} tools registered")
+                tool_names = await self._discover_server(config, tool_executor)
+                registered[config.name] = tool_names
+                logger.info(f"MCP server '{config.name}': {len(tool_names)} tools registered")
             except Exception as e:
-                logger.error(f"Failed to connect MCP server '{config.name}': {e}")
+                logger.error(f"Failed to discover MCP server '{config.name}': {e}")
                 registered[config.name] = []
-                # Clean up the failed task
-                self._server_tasks.pop(config.name, None)
-                self._stop_events.pop(config.name, None)
 
         return registered
 
-    async def _run_server(
-        self,
-        config: MCPServerConfig,
-        tool_executor,
-        ready: asyncio.Future[list[str]],
-        stop_event: asyncio.Event,
-    ) -> None:
-        """Long-lived task that holds the transport context manager open.
+    async def _discover_server(
+        self, config: MCPServerConfig, tool_executor
+    ) -> list[str]:
+        """Connect to a single server, discover everything, disconnect."""
+        cm = self._make_transport(config)
 
-        Enters the async-with block, discovers tools/resources/prompts,
-        signals ready, then waits for the stop event before exiting the
-        context (which tears down the connection cleanly in the same task).
-        """
-        try:
-            if config.transport == "stdio":
-                server_params = StdioServerParameters(
-                    command=config.url.split()[0],
-                    args=config.url.split()[1:] + (config.args or []),
-                    env=config.env,
-                )
-                cm = stdio_client(server_params)
-            elif config.transport in ("http", "sse"):
-                cm = streamablehttp_client(config.url, headers=config.headers or {})
-            else:
-                ready.set_exception(ValueError(f"Unknown MCP transport: {config.transport}"))
-                return
+        async with cm as streams:
+            read, write = streams[0], streams[1]
 
-            async with cm as streams:
-                # stdio_client yields (read, write)
-                # streamablehttp_client yields (read, write, get_session_id)
-                read, write = streams[0], streams[1]
+            session = ClientSession(read, write)
+            async with session:
+                await session.initialize()
 
-                # Build optional callbacks
-                roots_cb = self._build_roots_callback(config)
-                sampling_cb = self._build_sampling_callback(config)
+                # Discover tools
+                tool_names = await self._discover_tools(config, session, tool_executor)
 
-                session = ClientSession(
-                    read,
-                    write,
-                    list_roots_callback=roots_cb,
-                    sampling_callback=sampling_cb,
-                )
-                async with session:
-                    await session.initialize()
-                    self._sessions[config.name] = session
+                # Discover resources
+                await self._discover_resources(config, session)
 
-                    # Discover tools (existing)
-                    tools = await self._discover_tools(config, session, tool_executor)
+                # Discover prompts
+                await self._discover_prompts(config, session)
 
-                    # Discover resources (new)
-                    await self._discover_resources(config, session)
-
-                    # Discover prompts (new)
-                    await self._discover_prompts(config, session)
-
-                    ready.set_result(tools)
-
-                    # Hold connection open until told to stop
-                    await stop_event.wait()
-
-        except Exception as e:
-            if not ready.done():
-                ready.set_exception(e)
-            else:
-                logger.error(f"MCP server '{config.name}' error: {e}")
-        finally:
-            self._sessions.pop(config.name, None)
+                return tool_names
 
     # -------------------------------------------------------------------
-    # Tools (existing, unchanged)
+    # On-demand connection management
+    # -------------------------------------------------------------------
+
+    async def _get_session(self, server_name: str) -> ClientSession:
+        """Get a live session for a server, connecting on demand.
+
+        If a connection is already open, reuses it and resets the idle timer.
+        Otherwise, starts a new connection in a background task and waits for
+        it to be ready.
+        """
+        # Reset idle timer
+        self._last_activity[server_name] = time.monotonic()
+
+        # Already connected?
+        if server_name in self._sessions:
+            return self._sessions[server_name]
+
+        config = self._configs_by_name.get(server_name)
+        if not config:
+            raise KeyError(f"No MCP server config for '{server_name}'")
+
+        if not _MCP_AVAILABLE:
+            raise RuntimeError("MCP package not installed")
+
+        # Spin up connection in background task
+        ready_event = asyncio.Event()
+        stop_event = asyncio.Event()
+        self._ready_events[server_name] = ready_event
+        self._stop_events[server_name] = stop_event
+
+        connect_error: list[Exception] = []
+
+        async def _run():
+            try:
+                cm = self._make_transport(config)
+                async with cm as streams:
+                    read, write = streams[0], streams[1]
+
+                    roots_cb = self._build_roots_callback(config)
+                    sampling_cb = self._build_sampling_callback(config)
+
+                    session = ClientSession(
+                        read,
+                        write,
+                        list_roots_callback=roots_cb,
+                        sampling_callback=sampling_cb,
+                    )
+                    async with session:
+                        await session.initialize()
+                        self._sessions[server_name] = session
+                        ready_event.set()
+
+                        # Hold open until told to stop
+                        await stop_event.wait()
+            except Exception as e:
+                connect_error.append(e)
+                ready_event.set()  # unblock waiter
+            finally:
+                self._sessions.pop(server_name, None)
+                self._ready_events.pop(server_name, None)
+
+        task = asyncio.create_task(_run(), name=f"mcp-ondemand-{server_name}")
+        self._server_tasks[server_name] = task
+
+        # Start idle watcher
+        self._start_idle_watcher(server_name)
+
+        # Wait for connection to be ready
+        await ready_event.wait()
+
+        if connect_error:
+            self._server_tasks.pop(server_name, None)
+            self._stop_events.pop(server_name, None)
+            raise RuntimeError(
+                f"Failed to connect MCP server '{server_name}': {connect_error[0]}"
+            ) from connect_error[0]
+
+        return self._sessions[server_name]
+
+    def _start_idle_watcher(self, server_name: str) -> None:
+        """Start a task that tears down the connection after idle timeout."""
+        # Cancel any existing watcher
+        old = self._idle_tasks.pop(server_name, None)
+        if old and not old.done():
+            old.cancel()
+
+        async def _watch():
+            while True:
+                await asyncio.sleep(self._idle_timeout / 2)
+                last = self._last_activity.get(server_name, 0)
+                if time.monotonic() - last >= self._idle_timeout:
+                    logger.info(
+                        f"MCP server '{server_name}' idle for "
+                        f"{self._idle_timeout}s, disconnecting"
+                    )
+                    await self._disconnect_server(server_name)
+                    return
+
+        self._idle_tasks[server_name] = asyncio.create_task(
+            _watch(), name=f"mcp-idle-{server_name}"
+        )
+
+    async def _disconnect_server(self, server_name: str) -> None:
+        """Disconnect a single server."""
+        event = self._stop_events.pop(server_name, None)
+        if event:
+            event.set()
+
+        task = self._server_tasks.pop(server_name, None)
+        if task:
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"MCP server '{server_name}' did not shut down in time, cancelling"
+                )
+                task.cancel()
+            except Exception as e:
+                logger.warning(f"Error disconnecting MCP server '{server_name}': {e}")
+
+        idle_task = self._idle_tasks.pop(server_name, None)
+        if idle_task and not idle_task.done():
+            idle_task.cancel()
+
+        self._sessions.pop(server_name, None)
+        self._ready_events.pop(server_name, None)
+        self._last_activity.pop(server_name, None)
+
+    # -------------------------------------------------------------------
+    # Transport factory
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _make_transport(config: MCPServerConfig):
+        """Create the appropriate transport context manager."""
+        if config.transport == "stdio":
+            server_params = StdioServerParameters(
+                command=config.url.split()[0],
+                args=config.url.split()[1:] + (config.args or []),
+                env=config.env,
+            )
+            return stdio_client(server_params)
+        elif config.transport in ("http", "sse"):
+            return streamablehttp_client(config.url, headers=config.headers or {})
+        else:
+            raise ValueError(f"Unknown MCP transport: {config.transport}")
+
+    # -------------------------------------------------------------------
+    # Tools
     # -------------------------------------------------------------------
 
     async def _discover_tools(
@@ -296,15 +415,16 @@ class MCPManager:
 
             logger.debug(f"MCP tool '{tool.name}': inputSchema={tool.inputSchema}")
 
-            # Store schema for tool definitions
+            # Store schema for tool definitions (permanent, never changes)
             self._discovered_tools[tool.name] = {
                 "name": tool.name,
                 "description": tool.description or "",
                 "parameters": tool.inputSchema or {"type": "object", "properties": {}},
             }
+            self._tool_server_map[tool.name] = config.name
 
-            # Register handler in executor
-            handler = MCPToolHandler(session, tool.name)
+            # Register handler that connects on demand
+            handler = MCPToolHandler(self, config.name, tool.name)
             tool_executor.register(tool.name, handler)
             registered_names.append(tool.name)
 
@@ -358,7 +478,7 @@ class MCPManager:
     async def read_resource(self, uri: str, server_name: str | None = None) -> str:
         """Read a resource by URI.
 
-        Finds the owning session and calls read_resource on it.
+        Finds the owning session (connecting on demand) and calls read_resource.
         """
         if not _MCP_AVAILABLE:
             raise RuntimeError("MCP package not installed")
@@ -368,19 +488,17 @@ class MCPManager:
         # Determine which server owns this resource
         owner = server_name or self._resource_server_map.get(uri)
         if not owner:
-            # Try all sessions
-            for name, session in self._sessions.items():
+            # Try all servers
+            for name in self._configs_by_name:
                 try:
+                    session = await self._get_session(name)
                     result = await session.read_resource(AnyUrl(uri))
                     return self._extract_resource_content(result)
                 except Exception:
                     continue
             raise KeyError(f"No MCP server could read resource: {uri}")
 
-        session = self._sessions.get(owner)
-        if not session:
-            raise KeyError(f"MCP server '{owner}' not connected")
-
+        session = await self._get_session(owner)
         result = await session.read_resource(AnyUrl(uri))
         return self._extract_resource_content(result)
 
@@ -480,7 +598,7 @@ class MCPManager:
     ) -> str:
         """Get a filled prompt from an MCP server.
 
-        Returns the prompt content as a concatenated string of all message blocks.
+        Connects on demand if needed.
         """
         if not _MCP_AVAILABLE:
             raise RuntimeError("MCP package not installed")
@@ -489,10 +607,7 @@ class MCPManager:
         if not owner:
             raise KeyError(f"No MCP server has prompt: {name}")
 
-        session = self._sessions.get(owner)
-        if not session:
-            raise KeyError(f"MCP server '{owner}' not connected")
-
+        session = await self._get_session(owner)
         result = await session.get_prompt(name, arguments)
         return self._extract_prompt_content(result)
 
@@ -656,21 +771,22 @@ class MCPManager:
 
     async def disconnect_all(self) -> None:
         """Disconnect from all MCP servers."""
-        # Signal all server tasks to stop
-        for event in self._stop_events.values():
-            event.set()
-
-        # Wait for tasks to finish (context managers exit cleanly)
-        for name, task in self._server_tasks.items():
-            try:
-                await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.warning(f"MCP server '{name}' did not shut down in time, cancelling")
-                task.cancel()
-            except Exception as e:
-                logger.warning(f"Error disconnecting MCP server '{name}': {e}")
+        server_names = list(self._server_tasks.keys())
+        for name in server_names:
+            await self._disconnect_server(name)
 
         self._server_tasks.clear()
         self._stop_events.clear()
         self._sessions.clear()
+        self._ready_events.clear()
+        self._idle_tasks.clear()
+        self._last_activity.clear()
         logger.info("All MCP servers disconnected")
+
+    # -------------------------------------------------------------------
+    # Legacy compat: connect_all forwards to discover_all
+    # -------------------------------------------------------------------
+
+    async def connect_all(self, tool_executor) -> dict[str, list[str]]:
+        """Alias for discover_all() — kept for backward compatibility."""
+        return await self.discover_all(tool_executor)

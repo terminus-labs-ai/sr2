@@ -89,7 +89,9 @@ class TestMCPManagerPrompts:
         msg = _make_mock_prompt_message("user", "Review this Python code.")
         session = MagicMock()
         session.get_prompt = AsyncMock(return_value=MagicMock(messages=[msg]))
+        # Pre-populate session for _get_session
         mgr._sessions["prompts"] = session
+        mgr._last_activity["prompts"] = 0
 
         result = await mgr.get_prompt("code_review", {"language": "python"})
         assert "Review this Python code." in result
@@ -106,8 +108,8 @@ class TestMCPManagerPrompts:
     async def test_get_prompt_disconnected_server_raises(self):
         mgr = MCPManager()
         mgr._prompt_server_map["test"] = "gone"
-
-        with pytest.raises(KeyError, match="not connected"):
+        # No config registered, so _get_session will raise
+        with pytest.raises(KeyError, match="No MCP server config"):
             await mgr.get_prompt("test")
 
     def test_get_prompt_tool_schemas(self):

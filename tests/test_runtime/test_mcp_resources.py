@@ -81,7 +81,9 @@ class TestMCPManagerResources:
         text_content.text = "Hello, world!"
         session = MagicMock()
         session.read_resource = AsyncMock(return_value=MagicMock(contents=[text_content]))
+        # _get_session will find the session directly
         mgr._sessions["fs"] = session
+        mgr._last_activity["fs"] = 0
 
         result = await mgr.read_resource("file:///test.txt")
         assert result == "Hello, world!"
@@ -95,6 +97,7 @@ class TestMCPManagerResources:
         session = MagicMock()
         session.read_resource = AsyncMock(return_value=MagicMock(contents=[text_content]))
         mgr._sessions["my_server"] = session
+        mgr._last_activity["my_server"] = 0
 
         result = await mgr.read_resource("some://uri", server_name="my_server")
         assert result == "Content from explicit server"
@@ -110,8 +113,9 @@ class TestMCPManagerResources:
     async def test_read_resource_disconnected_server_raises(self):
         mgr = MCPManager()
         mgr._resource_server_map["file:///x"] = "gone"
-
-        with pytest.raises(KeyError, match="not connected"):
+        # Server config exists but no session and no config to reconnect
+        # _get_session will raise KeyError because config is missing
+        with pytest.raises(KeyError, match="No MCP server config"):
             await mgr.read_resource("file:///x")
 
     def test_get_resource_tool_schemas(self):
