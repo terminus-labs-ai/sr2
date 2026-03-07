@@ -317,6 +317,79 @@ class TestPipelineEngine:
         assert any("append_only" in r.message for r in caplog.records)
         assert any("should_be_stable" in r.message for r in caplog.records)
 
+    async def test_strategy_append_only_no_warn_for_dynamic_memory_layer(self, caplog):
+        """append_only: memory layer with dynamic refresh should NOT warn on content change."""
+        call_count = 0
+
+        class ChangingResolver:
+            async def resolve(self, key, config, context):
+                nonlocal call_count
+                call_count += 1
+                return ResolvedContent(
+                    key=key, content=f"memory version {call_count}", tokens=50
+                )
+
+        resolvers = ContentResolverRegistry()
+        resolvers.register("src", ChangingResolver())
+
+        engine = PipelineEngine(resolvers, create_default_cache_registry())
+        config = _make_config(
+            [
+                LayerConfig(
+                    name="memory",
+                    cache_policy="always_new",
+                    contents=[ContentItemConfig(key="k", source="src")],
+                ),
+            ],
+        )
+        config.kv_cache = KVCacheConfig(
+            strategy="append_only", memory_refresh="on_topic_shift"
+        )
+
+        await engine.compile(config, _make_context(), state=PipelineState())
+
+        with caplog.at_level(logging.WARNING):
+            await engine.compile(config, _make_context(), state=PipelineState())
+
+        assert not any("append_only" in r.message for r in caplog.records)
+
+    async def test_strategy_append_only_warns_for_static_memory_layer(self, caplog):
+        """append_only: memory layer with session_start_only SHOULD warn on content change."""
+        call_count = 0
+
+        class ChangingResolver:
+            async def resolve(self, key, config, context):
+                nonlocal call_count
+                call_count += 1
+                return ResolvedContent(
+                    key=key, content=f"memory version {call_count}", tokens=50
+                )
+
+        resolvers = ContentResolverRegistry()
+        resolvers.register("src", ChangingResolver())
+
+        engine = PipelineEngine(resolvers, create_default_cache_registry())
+        config = _make_config(
+            [
+                LayerConfig(
+                    name="memory",
+                    cache_policy="always_new",
+                    contents=[ContentItemConfig(key="k", source="src")],
+                ),
+            ],
+        )
+        config.kv_cache = KVCacheConfig(
+            strategy="append_only", memory_refresh="session_start_only"
+        )
+
+        await engine.compile(config, _make_context(), state=PipelineState())
+
+        with caplog.at_level(logging.WARNING):
+            await engine.compile(config, _make_context(), state=PipelineState())
+
+        assert any("append_only" in r.message for r in caplog.records)
+        assert any("memory" in r.message for r in caplog.records)
+
     async def test_prefix_snapshot_populated(self):
         """CompiledContext.prefix_snapshot is not None after compile."""
         resolver = MockResolver(content="test", tokens=10)
