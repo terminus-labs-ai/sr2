@@ -143,10 +143,19 @@ class PipelineEngine:
                         )
                     else:
                         # Strategy: append_only — warn if layer content changed
+                        # Skip warning for memory layer when memory_refresh allows
+                        # dynamic changes (on_topic_shift, every_n_turns)
+                        memory_refresh = config.kv_cache.memory_refresh
+                        expects_dynamic_content = (
+                            layer.name == "memory"
+                            and memory_refresh
+                            not in ("session_start_only", "disabled")
+                        )
                         if (
                             strategy == "append_only"
                             and layer.name in self._layer_string_cache
                             and serialized != self._layer_string_cache[layer.name]
+                            and not expects_dynamic_content
                         ):
                             logger.warning(
                                 f"Strategy append_only: layer '{layer.name}' "
