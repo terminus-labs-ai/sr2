@@ -79,7 +79,7 @@ docker compose up
 
 ## Testing
 
-- **839 tests** across 74 test files in `tests/`
+- **839 tests** across 77 test files in `tests/`
 - `pytest-asyncio` in auto mode (fixtures auto-marked)
 - Unit tests cover: pipeline, compaction, summarization, memory, config, resolvers, tools
 - Integration tests in `tests/integration/` require PostgreSQL
