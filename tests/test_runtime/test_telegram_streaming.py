@@ -169,6 +169,86 @@ class TestMdToTelegramHtml:
             self._assert_balanced_tags(result)
 
 
+    # --- Non-HTTP links ---
+
+    def test_non_http_link_renders_text_only(self):
+        """Non-HTTP links like task: should render as plain text, not <a> tags."""
+        result = self._convert("[PHASE-3.1-1](task:db4e09ad7eb0)")
+        assert "<a " not in result
+        assert "PHASE-3.1-1" in result
+        assert "task:" not in result
+
+    def test_http_link_still_works(self):
+        result = self._convert("[Google](https://google.com)")
+        assert '<a href="https://google.com">Google</a>' in result
+
+    def test_mixed_http_and_non_http_links(self):
+        text = "See [docs](https://example.com) and [task](task:abc123)"
+        result = self._convert(text)
+        assert '<a href="https://example.com">docs</a>' in result
+        assert "task:" not in result
+        assert "task" in result  # just the text
+
+    # --- Realistic LLM response with non-HTTP links ---
+
+    def test_realistic_llm_response_with_task_links(self):
+        """Real-world LLM response with task: links shouldn't produce invalid HTML."""
+        text = (
+            "**Right now:** Working on [PHASE-3.1-1](task:db4e09ad7eb0)\n\n"
+            "**Waiting:** Everything else is queued:\n"
+            "- Memory CRUD API\n"
+            "- MCP tools\n"
+        )
+        result = self._convert(text)
+        self._assert_balanced_tags(result)
+        assert "<b>Right now:</b>" in result
+        assert "task:" not in result
+
+
+class TestStripMarkdown:
+    """Tests for _strip_markdown fallback formatter."""
+
+    def _strip(self, text: str) -> str:
+        from runtime.plugins.telegram import _strip_markdown
+        return _strip_markdown(text)
+
+    def test_strips_bold(self):
+        assert self._strip("**hello**") == "hello"
+
+    def test_strips_italic(self):
+        assert self._strip("*hello*") == "hello"
+
+    def test_strips_headers(self):
+        assert self._strip("## Title") == "Title"
+
+    def test_strips_links(self):
+        assert self._strip("[text](https://example.com)") == "text"
+
+    def test_strips_non_http_links(self):
+        assert self._strip("[PHASE-1](task:abc)") == "PHASE-1"
+
+    def test_strips_inline_code(self):
+        assert self._strip("`code`") == "code"
+
+    def test_strips_strikethrough(self):
+        assert self._strip("~~deleted~~") == "deleted"
+
+    def test_converts_bullets(self):
+        assert self._strip("- item") == "• item"
+
+    def test_complex_message(self):
+        text = "**Bold** and *italic* with [link](task:x) and `code`"
+        result = self._strip(text)
+        assert "**" not in result
+        assert "*" not in result
+        assert "task:" not in result
+        assert "`" not in result
+        assert "Bold" in result
+        assert "italic" in result
+        assert "link" in result
+        assert "code" in result
+
+
 class TestTelegramStreamState:
     def _make_state(self):
         from runtime.plugins.telegram import _TelegramStreamState
@@ -279,9 +359,13 @@ class TestTelegramStreamState:
         state._last_edit = 0
         await state.handle_event(TextDeltaEvent(content=" world"))
         # handle_event triggers _maybe_flush which flushes:
-        #   call 1: edit_text("Hello world", parse_mode="Markdown") -> fails
-        #   call 2: edit_text("Hello world") -> succeeds (plain fallback)
+        #   call 1: edit_text(html, parse_mode="HTML") -> fails
+        #   call 2: edit_text(stripped_plain) -> succeeds (plain fallback)
         assert sent_msg.edit_text.call_count == 2
+        # Verify the fallback used stripped markdown, not raw
+        fallback_text = sent_msg.edit_text.call_args_list[1][0][0]
+        assert "**" not in fallback_text
+        assert "##" not in fallback_text
 
     @pytest.mark.asyncio
     async def test_stream_end_flushes(self):
