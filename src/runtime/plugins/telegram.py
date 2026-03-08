@@ -93,11 +93,18 @@ def _md_to_telegram_html(text: str) -> str:
             continue
         protected.append((m.start(), m.end(), f"<code>{_esc(m.group(1))}</code>"))
 
-    # 3. Links: [text](url)
+    # 3. Links: [text](url) — only create <a> tags for http/https URLs;
+    #    Telegram rejects non-HTTP schemes and will fail the entire HTML parse.
     for m in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", text):
         if _overlaps(m.start(), m.end()):
             continue
-        protected.append((m.start(), m.end(), f'<a href="{m.group(2)}">{_esc(m.group(1))}</a>'))
+        url = m.group(2)
+        link_text = m.group(1)
+        if url.startswith(("http://", "https://")):
+            protected.append((m.start(), m.end(), f'<a href="{url}">{_esc(link_text)}</a>'))
+        else:
+            # Non-HTTP link: render as text only
+            protected.append((m.start(), m.end(), _esc(link_text)))
 
     # 4. Bold+italic: ***text***
     for m in re.finditer(r"\*\*\*(.+?)\*\*\*", text):
@@ -154,6 +161,38 @@ def _md_to_telegram_html(text: str) -> str:
     result = result.replace("\x02BQSTART\x02", "┃ <i>").replace("\x02BQEND\x02", "</i>")
 
     return result
+
+
+def _strip_markdown(text: str) -> str:
+    """Strip Markdown formatting to produce clean plain text.
+
+    Used as fallback when Telegram rejects our HTML conversion.
+    """
+    # Fenced code blocks → just the code
+    text = re.sub(r"```(?:\w*)\n(.*?)```", r"\1", text, flags=re.DOTALL)
+    # Inline code
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+    # Links: [text](url)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Bold+italic
+    text = re.sub(r"\*\*\*(.+?)\*\*\*", r"\1", text)
+    # Bold
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.DOTALL)
+    # Strikethrough
+    text = re.sub(r"~~(.+?)~~", r"\1", text)
+    # Italic (word-boundary guards)
+    text = re.sub(r"(?<!\w)\*([^*\n]+?)\*(?!\w)", r"\1", text)
+    text = re.sub(r"(?<!\w)_([^_\n]+?)_(?!\w)", r"\1", text)
+    # Headers
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Bullet lists
+    text = re.sub(r"^[-*]\s+", "• ", text, flags=re.MULTILINE)
+    # Blockquotes
+    text = re.sub(r"^>\s?", "┃ ", text, flags=re.MULTILINE)
+    # Horizontal rules
+    text = re.sub(r"^(---|\*\*\*|___)$", "───────────", text, flags=re.MULTILINE)
+    return text
 
 
 class _TelegramStreamState:
@@ -259,9 +298,12 @@ class _TelegramStreamState:
                     await self._current_msg.edit_text(
                         _md_to_telegram_html(text[:_MSG_LIMIT]), parse_mode="HTML"
                     )
-                except Exception:
+                except Exception as html_err:
+                    logger.warning(
+                        f"Telegram HTML parse failed (overflow), falling back: {html_err}"
+                    )
                     try:
-                        await self._current_msg.edit_text(text[:_MSG_LIMIT])
+                        await self._current_msg.edit_text(_strip_markdown(text[:_MSG_LIMIT]))
                     except Exception as e:
                         logger.debug(f"Telegram edit_text failed: {e}")
 
@@ -281,20 +323,24 @@ class _TelegramStreamState:
             # Edit existing message
             try:
                 await self._current_msg.edit_text(_md_to_telegram_html(text), parse_mode="HTML")
-            except Exception:
+            except Exception as html_err:
+                logger.warning(
+                    f"Telegram HTML parse failed, falling back to plain text: {html_err}"
+                )
                 try:
-                    await self._current_msg.edit_text(text)
+                    await self._current_msg.edit_text(_strip_markdown(text))
                 except Exception as e:
                     logger.debug(f"Telegram edit_text failed: {e}")
         self._last_edit = time.monotonic()
 
     async def _safe_send(self, text: str):
-        """Send a reply, falling back from HTML to plain text."""
+        """Send a reply, falling back from HTML to stripped plain text."""
         try:
             return await self._reply_to.reply_text(_md_to_telegram_html(text), parse_mode="HTML")
-        except Exception:
+        except Exception as html_err:
+            logger.warning(f"Telegram HTML parse failed, falling back to plain text: {html_err}")
             try:
-                return await self._reply_to.reply_text(text)
+                return await self._reply_to.reply_text(_strip_markdown(text))
             except Exception as e:
                 logger.warning(f"Telegram reply_text failed: {e}")
                 return None
@@ -415,9 +461,10 @@ class TelegramPlugin:
                     await self._bot.send_message(
                         chat_id=uid, text=_md_to_telegram_html(chunk), parse_mode="HTML"
                     )
-                except Exception:
+                except Exception as html_err:
+                    logger.warning(f"Telegram HTML parse failed (send): {html_err}")
                     try:
-                        await self._bot.send_message(chat_id=uid, text=chunk)
+                        await self._bot.send_message(chat_id=uid, text=_strip_markdown(chunk))
                     except Exception as e:
                         logger.warning(f"Telegram send to {uid} failed: {e}")
 
@@ -656,8 +703,9 @@ class TelegramPlugin:
         for chunk in _TelegramStreamState._split_text(text, _MSG_LIMIT):
             try:
                 await message.reply_text(_md_to_telegram_html(chunk), parse_mode="HTML")
-            except Exception:
+            except Exception as html_err:
+                logger.warning(f"Telegram HTML parse failed (_safe_reply): {html_err}")
                 try:
-                    await message.reply_text(chunk)
+                    await message.reply_text(_strip_markdown(chunk))
                 except Exception as e:
                     logger.warning(f"Telegram reply failed: {e}")
