@@ -30,6 +30,7 @@ Layer 3: Conversation (append-only) — Session history, compacted/summarized
 - **Memory System** (`src/sr2/memory/`) — Extraction, hybrid retrieval (semantic+keyword), conflict resolution
 - **ToolStateMachine** (`src/sr2/tools/state_machine.py`) — Named states with dynamic tool masking
 - **CircuitBreaker** (`src/sr2/degradation/circuit_breaker.py`) — Per-layer graceful degradation
+- **Heartbeat System** (`src/runtime/heartbeat/`) — Scheduled future agent callbacks with DB persistence, idempotent keys, context carry-over
 
 ### Config Inheritance
 ```
@@ -78,7 +79,7 @@ docker compose up
 
 ## Testing
 
-- **688 tests** across 71 test files in `tests/`
+- **839 tests** across 74 test files in `tests/`
 - `pytest-asyncio` in auto mode (fixtures auto-marked)
 - Unit tests cover: pipeline, compaction, summarization, memory, config, resolvers, tools
 - Integration tests in `tests/integration/` require PostgreSQL
@@ -92,6 +93,7 @@ docker compose up
 4. **Post-LLM processing** — Memory extraction, compaction, summarization run async after LLM response
 5. **Graceful degradation** — Per-layer circuit breakers; core layer never skipped
 6. **Memory conflict resolution** — Detects conflicting memories with configurable resolution strategies (latest-wins-archive, keep-both-tagged)
+7. **Dynamic heartbeats** — Agents can schedule future callbacks to themselves via `schedule_heartbeat`/`cancel_heartbeat` tools, with context carry-over and idempotent keys
 
 ## Directory Structure
 
@@ -115,11 +117,12 @@ src/runtime/       # Optional agent runtime
   mcp/             # MCP client, transports (stdio/HTTP/SSE)
   plugins/         # HTTP, Telegram, timer, A2A plugins
   session/         # Session lifecycle management
+  heartbeat/       # Scheduled future agent callbacks (model, store, tools, scanner)
 
 configs/           # Example YAML configurations
   defaults.yaml    # Library defaults
   agents/edi/      # Example agent config
 
-tests/             # 688 tests
+tests/             # 839 tests
   integration/     # PostgreSQL integration tests
 ```

@@ -223,6 +223,27 @@ class StreamContentConfig(BaseModel):
     tool_results: bool = Field(default=False, description="Stream tool result content.")
 
 
+class HeartbeatConfig(BaseModel):
+    """Dynamic heartbeat scheduling settings."""
+
+    enabled: bool = Field(default=False, description="Enable heartbeat scheduling.")
+    poll_interval_seconds: int = Field(
+        default=30, ge=5, description="How often the scanner checks for due heartbeats."
+    )
+    max_context_turns: int = Field(
+        default=10, ge=0, description="Max turns from source session to carry into heartbeat."
+    )
+    session_lifecycle: str = Field(
+        default="ephemeral", description="Session lifecycle for heartbeat sessions."
+    )
+    pipeline: str | None = Field(
+        default=None, description="Pipeline config path for heartbeat sessions."
+    )
+    max_pending_per_agent: int = Field(
+        default=100, ge=1, description="Max pending heartbeats per agent."
+    )
+
+
 class RuntimeConfig(BaseModel):
     """Runtime settings."""
 
@@ -243,6 +264,10 @@ class RuntimeConfig(BaseModel):
     stream_content: StreamContentConfig = Field(
         default_factory=StreamContentConfig,
         description="Controls what gets streamed beyond text deltas.",
+    )
+    heartbeat: HeartbeatConfig = Field(
+        default_factory=HeartbeatConfig,
+        description="Dynamic heartbeat scheduling settings.",
     )
 
 
