@@ -11,6 +11,7 @@ from runtime.plugins.timer import TimerPlugin
 from runtime.plugins.telegram import TelegramPlugin
 from runtime.plugins.http import HTTPPlugin
 from runtime.plugins.a2a import A2APlugin
+from runtime.plugins.single_shot import SingleShotPlugin
 
 
 # --- Registry ---
@@ -39,6 +40,7 @@ class TestPluginRegistry:
         assert "timer" in reg.available
         assert "http" in reg.available
         assert "a2a" in reg.available
+        assert "single_shot" in reg.available
 
 
 # --- Timer Plugin ---
@@ -219,3 +221,53 @@ class TestA2APlugin:
         cb = AsyncMock()
         plugin = A2APlugin("a2a", {}, cb)
         await plugin.send("session", "msg")
+
+
+# --- SingleShot Plugin ---
+
+
+class TestSingleShotPlugin:
+    def test_init(self):
+        cb = AsyncMock()
+        plugin = SingleShotPlugin("task_runner", {"session": {"name": "runner", "lifecycle": "ephemeral"}}, cb)
+        assert plugin._name == "task_runner"
+
+    @pytest.mark.asyncio
+    async def test_start_stop_are_noops(self):
+        cb = AsyncMock()
+        plugin = SingleShotPlugin("task_runner", {}, cb)
+        await plugin.start()
+        await plugin.stop()
+
+    @pytest.mark.asyncio
+    async def test_send_is_noop(self):
+        cb = AsyncMock()
+        plugin = SingleShotPlugin("task_runner", {}, cb)
+        await plugin.send("session", "msg")
+
+    @pytest.mark.asyncio
+    async def test_run_fires_trigger(self):
+        cb = AsyncMock(return_value="done")
+        plugin = SingleShotPlugin(
+            "task_runner",
+            {"session": {"name": "runner", "lifecycle": "ephemeral"}},
+            cb,
+        )
+        result = await plugin.run("implement auth")
+        assert result == "done"
+        assert cb.call_count == 1
+        trigger = cb.call_args[0][0]
+        assert isinstance(trigger, TriggerContext)
+        assert trigger.plugin_name == "single_shot"
+        assert trigger.session_name == "runner"
+        assert trigger.session_lifecycle == "ephemeral"
+        assert trigger.input_data == "implement auth"
+
+    @pytest.mark.asyncio
+    async def test_run_uses_interface_name_as_default_session(self):
+        cb = AsyncMock(return_value="ok")
+        plugin = SingleShotPlugin("my_runner", {}, cb)
+        await plugin.run("hello")
+        trigger = cb.call_args[0][0]
+        assert trigger.session_name == "my_runner"
+        assert trigger.session_lifecycle == "ephemeral"

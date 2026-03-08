@@ -61,6 +61,10 @@ ruff format src/
 # Run example agent
 sr2-agent configs/agents/edi --http --port 8008
 
+# Single-shot mode (fire one message through an interface, print response, exit)
+sr2-agent configs/agents/edi --single-shot task_runner "implement auth"
+echo "long prompt" | sr2-agent configs/agents/edi --single-shot task_runner
+
 # Docker (full stack: agent + Ollama + Prometheus + Grafana + PostgreSQL)
 docker compose up
 ```
@@ -79,7 +83,7 @@ docker compose up
 
 ## Testing
 
-- **839 tests** across 77 test files in `tests/`
+- **844 tests** across 77 test files in `tests/`
 - `pytest-asyncio` in auto mode (fixtures auto-marked)
 - Unit tests cover: pipeline, compaction, summarization, memory, config, resolvers, tools
 - Integration tests in `tests/integration/` require PostgreSQL
@@ -115,7 +119,7 @@ src/sr2/           # Core library
 src/runtime/       # Optional agent runtime
   llm/             # LiteLLM wrapper, agentic loop, streaming
   mcp/             # MCP client, transports (stdio/HTTP/SSE)
-  plugins/         # HTTP, Telegram, timer, A2A plugins
+  plugins/         # HTTP, Telegram, timer, A2A, single-shot plugins
   session/         # Session lifecycle management
   heartbeat/       # Scheduled future agent callbacks (model, store, tools, scanner)
 
@@ -123,6 +127,6 @@ configs/           # Example YAML configurations
   defaults.yaml    # Library defaults
   agents/edi/      # Example agent config
 
-tests/             # 839 tests
+tests/             # 844 tests
   integration/     # PostgreSQL integration tests
 ```
