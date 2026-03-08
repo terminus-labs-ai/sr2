@@ -388,7 +388,9 @@ class LLMClient:
         return isinstance(data, dict) and "name" in data
 
     @staticmethod
-    def _try_parse_tool_code_block(text: str, available_tools: set[str] | None = None) -> dict | None:
+    def _try_parse_tool_code_block(
+        text: str, available_tools: set[str] | None = None
+    ) -> dict | None:
         """Try to parse <tool_code>function_name(args)</tool_code> patterns.
 
         Some models (e.g. Llama, Qwen) emit tool calls as function-call
@@ -403,7 +405,8 @@ class LLMClient:
 
         m = re.search(
             r"<tool_code>\s*(\w+)\s*\((.*?)\)\s*(?:</tool_code>)?",
-            text, re.DOTALL,
+            text,
+            re.DOTALL,
         )
         if not m:
             return None

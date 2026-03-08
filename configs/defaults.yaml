@@ -256,6 +256,20 @@ runtime:
     # Stream tool result content.
     tool_results: false
 
+  heartbeat:
+    # Enable heartbeat scheduling.
+    enabled: false
+    # How often the scanner checks for due heartbeats.
+    poll_interval_seconds: 30
+    # Max turns from source session to carry into heartbeat.
+    max_context_turns: 10
+    # Session lifecycle for heartbeat sessions.
+    session_lifecycle: ephemeral
+    # Pipeline config path for heartbeat sessions.
+    pipeline: null
+    # Max pending heartbeats per agent.
+    max_pending_per_agent: 100
+
 
 # Interface plugin definitions.
 # interfaces:
@@ -287,3 +301,4 @@ mcp_servers: []
   #   prompts: null
   #   expose_prompts_as_tools: false
   #   sampling: <required>
+

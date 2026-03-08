@@ -2,14 +2,16 @@
 
 Usage:
     sr2-agent <config_dir>
-    sr2-agent config/agents/edi
     sr2-agent config/agents/edi --http --port 8008
+    sr2-agent config/agents/tali --single-shot task_runner "implement auth"
+    echo "long prompt" | sr2-agent config/agents/tali --single-shot task_runner
 """
 
 import argparse
 import asyncio
 import logging
 import os
+import sys
 
 import yaml
 from dotenv import load_dotenv
@@ -49,6 +51,19 @@ def parse_args(argv: list[str] | None = None):
         help="HTTP port (default: 8008)",
     )
     parser.add_argument(
+        "--single-shot",
+        metavar="INTERFACE",
+        default=None,
+        help="Run a single message through the named interface and exit. "
+        "Provide message as positional arg or pipe via stdin.",
+    )
+    parser.add_argument(
+        "prompt",
+        nargs="?",
+        default=None,
+        help="Message to process in single-shot mode (reads stdin if omitted)",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -81,6 +96,38 @@ async def run_agent(args):
             defaults_path=args.defaults,
         )
     )
+
+    if args.single_shot:
+        interface_name = args.single_shot
+        message = args.prompt
+        if message is None:
+            if sys.stdin.isatty():
+                print(
+                    "Error: --single-shot requires a prompt argument or stdin input",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            message = sys.stdin.read().strip()
+        if not message:
+            print("Error: empty message", file=sys.stderr)
+            sys.exit(1)
+
+        await agent.start()
+        try:
+            plugin = agent._plugins.get(interface_name)
+            if plugin is None:
+                print(
+                    f"Error: interface '{interface_name}' not found. "
+                    f"Available: {list(agent._plugins.keys())}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            response = await plugin.run(message)
+            print(response)
+        finally:
+            await agent.shutdown()
+        return
 
     if args.http:
         from runtime.http import create_http_app

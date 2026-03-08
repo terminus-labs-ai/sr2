@@ -34,7 +34,8 @@ class CompactionResolver:
 
         content = self._format_turns(compacted_zone)
         tokens = (
-            result.compacted_tokens - sum(estimate_tokens(t.content) for t in result.turns[-raw_window:])
+            result.compacted_tokens
+            - sum(estimate_tokens(t.content) for t in result.turns[-raw_window:])
             if len(result.turns) > raw_window
             else 0
         )

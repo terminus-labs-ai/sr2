@@ -19,7 +19,7 @@ _TOOL_ARTIFACT_KEYS = re.compile(
 )
 
 # Values that look like raw JSON blobs (tool call dumps)
-_JSON_VALUE = re.compile(r'^\s*[\[{]')
+_JSON_VALUE = re.compile(r"^\s*[\[{]")
 
 # Keys whose values go stale quickly and provide no lasting personal value
 _TRANSIENT_KEYS = re.compile(
@@ -152,14 +152,20 @@ Conversation turn:
                 try:
                     items = json.loads(match.group())
                 except json.JSONDecodeError:
-                    logger.warning("Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200])
+                    logger.warning(
+                        "Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200]
+                    )
                     return []
             else:
-                logger.warning("Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200])
+                logger.warning(
+                    "Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200]
+                )
                 return []
 
         if not isinstance(items, list):
-            logger.warning("Memory extraction failed: expected JSON array, got %s", type(items).__name__)
+            logger.warning(
+                "Memory extraction failed: expected JSON array, got %s", type(items).__name__
+            )
             return []
 
         memories = []

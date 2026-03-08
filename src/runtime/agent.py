@@ -148,8 +148,15 @@ class Agent:
             "post_to_session",
             PostToSessionTool(self._sessions, self._session_to_plugin),
         )
-        # _current_session_id is set per-trigger so the tool can tag memories correctly
+        # _current_session_id and _current_session_turns are set per-trigger
         self._current_session_id: str | None = None
+        self._current_session_turns: list[dict] = []
+
+        # Heartbeat system
+        self._heartbeat_config = self._agent_config.runtime.heartbeat
+        self._heartbeat_scanner: object | None = None  # HeartbeatScanner
+        self._heartbeat_store: object | None = None
+        self._heartbeat_tools: list = []
         self._tool_executor.register(
             "save_memory",
             SaveMemoryTool(self._sr2, session_resolver=lambda: self._current_session_id),
@@ -302,6 +309,62 @@ class Agent:
 
             logger.info("Database connected, persistent stores active")
 
+        # Heartbeat system — wire after DB pool is available
+        if self._heartbeat_config.enabled:
+            from runtime.heartbeat import (
+                CancelHeartbeatTool,
+                HeartbeatScanner,
+                InMemoryHeartbeatStore,
+                PostgresHeartbeatStore,
+                ScheduleHeartbeatTool,
+            )
+
+            if self._db_pool:
+                hb_store = PostgresHeartbeatStore(self._db_pool)
+                await hb_store.create_tables()
+            else:
+                hb_store = InMemoryHeartbeatStore()
+                logger.warning(
+                    "Heartbeat enabled without database — using in-memory store "
+                    "(heartbeats will not survive restarts)"
+                )
+
+            self._heartbeat_store = hb_store
+
+            schedule_tool = ScheduleHeartbeatTool(
+                store=hb_store,
+                agent_name=self._name,
+                max_context_turns=self._heartbeat_config.max_context_turns,
+                session_resolver=lambda: self._current_session_id,
+                session_turns_resolver=lambda: self._current_session_turns,
+            )
+            cancel_tool = CancelHeartbeatTool(store=hb_store)
+
+            self._tool_executor.register("schedule_heartbeat", schedule_tool)
+            self._tool_executor.register("cancel_heartbeat", cancel_tool)
+            self._heartbeat_tools = [schedule_tool, cancel_tool]
+
+            # Inject synthetic interface for heartbeat pipeline routing
+            if self._heartbeat_config.pipeline:
+                synthetic_name = f"_heartbeat_{self._heartbeat_config.pipeline}"
+                if synthetic_name not in self._agent_config.interfaces:
+                    self._agent_yaml.setdefault("interfaces", {})[synthetic_name] = {
+                        "plugin": "timer",
+                        "session": {"name": "heartbeat", "lifecycle": "ephemeral"},
+                        "pipeline": self._heartbeat_config.pipeline,
+                    }
+
+            scanner = HeartbeatScanner(
+                store=hb_store,
+                agent_callback=self._handle_trigger,
+                poll_interval_seconds=self._heartbeat_config.poll_interval_seconds,
+                session_lifecycle=self._heartbeat_config.session_lifecycle,
+                pipeline=self._heartbeat_config.pipeline,
+            )
+            self._heartbeat_scanner = scanner
+            await scanner.start()
+            logger.info("Heartbeat system started")
+
         # MCP — wire LLM client for sampling, then connect
         self._mcp_manager.set_llm_client(self._llm)
         mcp_result = await self._mcp_manager.connect_all(self._tool_executor)
@@ -341,6 +404,13 @@ class Agent:
 
     async def shutdown(self) -> None:
         """Stop all plugins + MCP."""
+        # Stop heartbeat scanner first
+        if self._heartbeat_scanner:
+            try:
+                await self._heartbeat_scanner.stop()
+            except Exception as e:
+                logger.warning(f"Heartbeat scanner failed to stop: {e}")
+
         for name, plugin in self._plugins.items():
             try:
                 await plugin.stop()
@@ -392,6 +462,13 @@ class Agent:
         else:
             session = await self._sessions.get_or_create(trigger.session_name)
         self._current_session_id = session.id
+        self._current_session_turns = session.turns
+
+        # Inject heartbeat context turns into session before processing
+        if trigger.metadata and trigger.metadata.get("context_turns"):
+            for turn in trigger.metadata["context_turns"]:
+                session.turns.append(turn)
+            self._current_session_turns = session.turns
 
         # Special commands
         special = self._handle_special_command(trigger, session)
@@ -451,10 +528,7 @@ class Agent:
         from operator import attrgetter
 
         for _iteration, group in groupby(loop_result.tool_calls, key=attrgetter("iteration")):
-            calls = [
-                (tc.tool_name, tc.arguments, tc.result, tc.call_id)
-                for tc in group
-            ]
+            calls = [(tc.tool_name, tc.arguments, tc.result, tc.call_id) for tc in group]
             session.add_tool_calls_grouped(calls)
         if loop_result.response_text:
             session.add_assistant_message(loop_result.response_text)
@@ -509,6 +583,7 @@ class Agent:
         cmd = trigger.input_data or ""
 
         if cmd == "__clear_session__":
+
             async def _clear():
                 await self._sessions.destroy(trigger.session_name)
                 logger.info(
@@ -516,6 +591,7 @@ class Agent:
                     f"from {trigger.plugin_name} cleared"
                 )
                 return "Session cleared."
+
             return _clear()
 
         if cmd == "__get_status__":
@@ -537,6 +613,7 @@ class Agent:
             # Latest metrics from SR2 collector
             try:
                 from sr2.metrics.definitions import MetricNames
+
                 snapshots = self._sr2._collector.get_latest(1)
                 if snapshots:
                     snap = snapshots[0]
@@ -567,17 +644,20 @@ class Agent:
             for sid in self._sessions.active_sessions:
                 s = self._sessions.get(sid)
                 if s:
-                    sessions_info.append({
-                        "id": s.id,
-                        "turn_count": s.turn_count,
-                        "user_message_count": s.user_message_count,
-                        "created_at": s.created_at.isoformat(),
-                        "last_activity": s.last_activity.isoformat(),
-                    })
+                    sessions_info.append(
+                        {
+                            "id": s.id,
+                            "turn_count": s.turn_count,
+                            "user_message_count": s.user_message_count,
+                            "created_at": s.created_at.isoformat(),
+                            "last_activity": s.last_activity.isoformat(),
+                        }
+                    )
             return json.dumps(sessions_info)
 
         if cmd.startswith("__set_active_session__:"):
             session_name = cmd.split(":", 1)[1]
+
             async def _set():
                 state_id = f"_plugin_state_{trigger.interface_name}"
                 state_session = await self._sessions.get_or_create(state_id)
@@ -585,9 +665,11 @@ class Agent:
                 if self._sessions._store:
                     await self._sessions.save_session(state_id)
                 return json.dumps({"active_session": session_name})
+
             return _set()
 
         if cmd == "__get_active_session__":
+
             async def _get():
                 state_id = f"_plugin_state_{trigger.interface_name}"
                 state_session = self._sessions.get(state_id)
@@ -597,6 +679,7 @@ class Agent:
                         self._sessions._sessions[state_id] = state_session
                 active = state_session.metadata.get("active_session") if state_session else None
                 return json.dumps({"active_session": active})
+
             return _get()
 
         return None
@@ -675,6 +758,10 @@ class Agent:
 
         # Add A2A client tool schemas
         for tool in self._a2a_client_tools:
+            schemas.append(tool.tool_definition)
+
+        # Add heartbeat tool schemas
+        for tool in self._heartbeat_tools:
             schemas.append(tool.tool_definition)
 
         # Add tool_definitions from agent.yaml (e.g. post_to_session)

@@ -485,9 +485,7 @@ class SR2:
 
         # Zone token counts
         zones = self._conversation.zones(session_id)
-        extra[MetricNames.ZONE_RAW_TOKENS] = float(
-            sum(len(t.content) // 4 for t in zones.raw)
-        )
+        extra[MetricNames.ZONE_RAW_TOKENS] = float(sum(len(t.content) // 4 for t in zones.raw))
         extra[MetricNames.ZONE_COMPACTED_TOKENS] = float(
             sum(len(t.content) // 4 for t in zones.compacted)
         )
@@ -505,20 +503,14 @@ class SR2:
 
         # --- Tool state machine ---
         extra[MetricNames.STATE_TRANSITION_RATE] = float(
-            max(0, len(tool_state_machine.state_history) - 1)
-            if tool_state_machine
-            else 0.0
+            max(0, len(tool_state_machine.state_history) - 1) if tool_state_machine else 0.0
         )
         extra[MetricNames.DENIED_TOOL_ATTEMPTS] = float(
-            tool_state_machine.denied_tool_attempts
-            if tool_state_machine
-            else 0.0
+            tool_state_machine.denied_tool_attempts if tool_state_machine else 0.0
         )
 
         # --- Memory system ---
-        extra[MetricNames.MEMORIES_EXTRACTED] = float(
-            self._post_processor.last_memories_extracted
-        )
+        extra[MetricNames.MEMORIES_EXTRACTED] = float(self._post_processor.last_memories_extracted)
         extra[MetricNames.MEMORY_CONFLICTS_DETECTED] = float(
             self._post_processor.last_conflicts_detected
         )
