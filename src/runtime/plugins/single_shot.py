@@ -55,7 +55,5 @@ class SingleShotPlugin:
 
         logger.info(f"Single-shot '{self._name}' firing")
         response = await self._callback(trigger)
-        logger.info(
-            f"Single-shot '{self._name}' complete: {len(response)} chars"
-        )
+        logger.info(f"Single-shot '{self._name}' complete: {len(response)} chars")
         return response

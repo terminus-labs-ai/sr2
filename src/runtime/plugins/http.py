@@ -77,7 +77,10 @@ class HTTPPlugin:
 
             if wants_stream:
                 return await self._streaming_chat_response(
-                    message, session_name, lifecycle, session_id,
+                    message,
+                    session_name,
+                    lifecycle,
+                    session_id,
                     wrapper=_wrap_chat_sse,
                 )
 
@@ -116,7 +119,10 @@ class HTTPPlugin:
 
             if wants_stream:
                 return await self._streaming_chat_response(
-                    user_message, session_name, lifecycle, session_id,
+                    user_message,
+                    session_name,
+                    lifecycle,
+                    session_id,
                     wrapper=lambda: _wrap_openai_sse(model_id),
                 )
 
@@ -129,34 +135,38 @@ class HTTPPlugin:
                 metadata={"session_id": session_id},
             )
             response = await self._callback(trigger)
-            return JSONResponse({
-                "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": model_id,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": response},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            })
+            return JSONResponse(
+                {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": model_id,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": response},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                }
+            )
 
         async def openai_models(request: Request):
             model_id = f"sr2-{self._agent_name}"
-            return JSONResponse({
-                "object": "list",
-                "data": [
-                    {
-                        "id": model_id,
-                        "object": "model",
-                        "created": 0,
-                        "owned_by": "sr2",
-                    }
-                ],
-            })
+            return JSONResponse(
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": model_id,
+                            "object": "model",
+                            "created": 0,
+                            "owned_by": "sr2",
+                        }
+                    ],
+                }
+            )
 
         return {
             "chat": chat,

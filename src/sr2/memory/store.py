@@ -179,9 +179,7 @@ class PostgresMemoryStore:
             # (e.g. vector(1536)) to unbounded vector so any embedding model can be used.
             # Try unconditionally — harmless if already unbounded.
             try:
-                await conn.execute(
-                    "ALTER TABLE memories ALTER COLUMN embedding TYPE vector"
-                )
+                await conn.execute("ALTER TABLE memories ALTER COLUMN embedding TYPE vector")
             except Exception:
                 pass
 
@@ -189,9 +187,7 @@ class PostgresMemoryStore:
         """Save a memory. If ID exists, update it."""
         data = memory.model_dump()
         embed_str = (
-            "[" + ",".join(str(v) for v in embedding) + "]"
-            if embedding is not None
-            else None
+            "[" + ",".join(str(v) for v in embedding) + "]" if embedding is not None else None
         )
         async with self._pool.acquire() as conn:
             await conn.execute(

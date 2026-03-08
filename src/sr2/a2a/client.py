@@ -64,7 +64,17 @@ class A2AClientTool:
         }
 
     # Parameter names the LLM commonly uses instead of "message"
-    _MESSAGE_ALIASES = {"message", "prompt", "query", "input", "text", "request", "task", "description", "content"}
+    _MESSAGE_ALIASES = {
+        "message",
+        "prompt",
+        "query",
+        "input",
+        "text",
+        "request",
+        "task",
+        "description",
+        "content",
+    }
 
     def _extract_message(self, kwargs: dict) -> str | None:
         """Extract the message from kwargs, tolerating LLM-chosen param names."""
@@ -126,9 +136,7 @@ class A2AClientTool:
             if status == "completed":
                 return result
             else:
-                logger.warning(
-                    f"A2A call returned non-completed status '{status}': {result}"
-                )
+                logger.warning(f"A2A call returned non-completed status '{status}': {result}")
                 return f"Remote agent returned status '{status}': {result}"
 
         except TimeoutError:

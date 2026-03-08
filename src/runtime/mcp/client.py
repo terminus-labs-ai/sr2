@@ -70,8 +70,7 @@ class MCPToolHandler:
         so the loop's circuit breaker can detect repeated failures.
         """
         logger.debug(
-            f"MCP tool '{self._tool_name}' on server '{self._server_name}' "
-            f"called with: {kwargs}"
+            f"MCP tool '{self._tool_name}' on server '{self._server_name}' called with: {kwargs}"
         )
         session = await self._manager._get_session(self._server_name)
         result = await session.call_tool(self._tool_name, arguments=kwargs)
@@ -230,9 +229,7 @@ class MCPManager:
 
         return registered
 
-    async def _discover_server(
-        self, config: MCPServerConfig, tool_executor
-    ) -> list[str]:
+    async def _discover_server(self, config: MCPServerConfig, tool_executor) -> list[str]:
         """Connect to a single server, discover everything, disconnect."""
         cm = self._make_transport(config)
 
@@ -347,8 +344,7 @@ class MCPManager:
                 last = self._last_activity.get(server_name, 0)
                 if time.monotonic() - last >= self._idle_timeout:
                     logger.info(
-                        f"MCP server '{server_name}' idle for "
-                        f"{self._idle_timeout}s, disconnecting"
+                        f"MCP server '{server_name}' idle for {self._idle_timeout}s, disconnecting"
                     )
                     await self._disconnect_server(server_name)
                     return
@@ -368,9 +364,7 @@ class MCPManager:
             try:
                 await asyncio.wait_for(task, timeout=5.0)
             except asyncio.TimeoutError:
-                logger.warning(
-                    f"MCP server '{server_name}' did not shut down in time, cancelling"
-                )
+                logger.warning(f"MCP server '{server_name}' did not shut down in time, cancelling")
                 task.cancel()
             except Exception as e:
                 logger.warning(f"Error disconnecting MCP server '{server_name}': {e}")

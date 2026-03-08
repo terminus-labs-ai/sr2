@@ -146,10 +146,9 @@ class PipelineEngine:
                         # Skip warning for memory layer when memory_refresh allows
                         # dynamic changes (on_topic_shift, every_n_turns)
                         memory_refresh = config.kv_cache.memory_refresh
-                        expects_dynamic_content = (
-                            layer.name == "memory"
-                            and memory_refresh
-                            not in ("session_start_only", "disabled")
+                        expects_dynamic_content = layer.name == "memory" and memory_refresh not in (
+                            "session_start_only",
+                            "disabled",
                         )
                         if (
                             strategy == "append_only"
@@ -257,7 +256,9 @@ class PipelineEngine:
         if had_required_failure:
             if resolved:
                 tokens = sum(c.tokens for c in resolved)
-                result.add_stage(timer.result(status="degraded", tokens_used=tokens, fallback_used=True))
+                result.add_stage(
+                    timer.result(status="degraded", tokens_used=tokens, fallback_used=True)
+                )
                 logger.info(f"Layer {layer.name} degraded to {tokens} tokens.")
                 return resolved
             return None

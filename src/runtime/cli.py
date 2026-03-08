@@ -102,7 +102,10 @@ async def run_agent(args):
         message = args.prompt
         if message is None:
             if sys.stdin.isatty():
-                print("Error: --single-shot requires a prompt argument or stdin input", file=sys.stderr)
+                print(
+                    "Error: --single-shot requires a prompt argument or stdin input",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             message = sys.stdin.read().strip()
         if not message:
@@ -113,8 +116,11 @@ async def run_agent(args):
         try:
             plugin = agent._plugins.get(interface_name)
             if plugin is None:
-                print(f"Error: interface '{interface_name}' not found. "
-                      f"Available: {list(agent._plugins.keys())}", file=sys.stderr)
+                print(
+                    f"Error: interface '{interface_name}' not found. "
+                    f"Available: {list(agent._plugins.keys())}",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
 
             response = await plugin.run(message)

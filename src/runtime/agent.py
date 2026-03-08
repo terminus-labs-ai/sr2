@@ -346,8 +346,6 @@ class Agent:
 
             # Inject synthetic interface for heartbeat pipeline routing
             if self._heartbeat_config.pipeline:
-                from runtime.config import InterfaceConfig, InterfaceSessionConfig
-
                 synthetic_name = f"_heartbeat_{self._heartbeat_config.pipeline}"
                 if synthetic_name not in self._agent_config.interfaces:
                     self._agent_yaml.setdefault("interfaces", {})[synthetic_name] = {
@@ -530,10 +528,7 @@ class Agent:
         from operator import attrgetter
 
         for _iteration, group in groupby(loop_result.tool_calls, key=attrgetter("iteration")):
-            calls = [
-                (tc.tool_name, tc.arguments, tc.result, tc.call_id)
-                for tc in group
-            ]
+            calls = [(tc.tool_name, tc.arguments, tc.result, tc.call_id) for tc in group]
             session.add_tool_calls_grouped(calls)
         if loop_result.response_text:
             session.add_assistant_message(loop_result.response_text)
@@ -588,6 +583,7 @@ class Agent:
         cmd = trigger.input_data or ""
 
         if cmd == "__clear_session__":
+
             async def _clear():
                 await self._sessions.destroy(trigger.session_name)
                 logger.info(
@@ -595,6 +591,7 @@ class Agent:
                     f"from {trigger.plugin_name} cleared"
                 )
                 return "Session cleared."
+
             return _clear()
 
         if cmd == "__get_status__":
@@ -616,6 +613,7 @@ class Agent:
             # Latest metrics from SR2 collector
             try:
                 from sr2.metrics.definitions import MetricNames
+
                 snapshots = self._sr2._collector.get_latest(1)
                 if snapshots:
                     snap = snapshots[0]
@@ -646,17 +644,20 @@ class Agent:
             for sid in self._sessions.active_sessions:
                 s = self._sessions.get(sid)
                 if s:
-                    sessions_info.append({
-                        "id": s.id,
-                        "turn_count": s.turn_count,
-                        "user_message_count": s.user_message_count,
-                        "created_at": s.created_at.isoformat(),
-                        "last_activity": s.last_activity.isoformat(),
-                    })
+                    sessions_info.append(
+                        {
+                            "id": s.id,
+                            "turn_count": s.turn_count,
+                            "user_message_count": s.user_message_count,
+                            "created_at": s.created_at.isoformat(),
+                            "last_activity": s.last_activity.isoformat(),
+                        }
+                    )
             return json.dumps(sessions_info)
 
         if cmd.startswith("__set_active_session__:"):
             session_name = cmd.split(":", 1)[1]
+
             async def _set():
                 state_id = f"_plugin_state_{trigger.interface_name}"
                 state_session = await self._sessions.get_or_create(state_id)
@@ -664,9 +665,11 @@ class Agent:
                 if self._sessions._store:
                     await self._sessions.save_session(state_id)
                 return json.dumps({"active_session": session_name})
+
             return _set()
 
         if cmd == "__get_active_session__":
+
             async def _get():
                 state_id = f"_plugin_state_{trigger.interface_name}"
                 state_session = self._sessions.get(state_id)
@@ -676,6 +679,7 @@ class Agent:
                         self._sessions._sessions[state_id] = state_session
                 active = state_session.metadata.get("active_session") if state_session else None
                 return json.dumps({"active_session": active})
+
             return _get()
 
         return None

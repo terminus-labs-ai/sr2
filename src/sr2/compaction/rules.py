@@ -76,7 +76,9 @@ class ReferenceRule:
 
         # If include_metadata is specified, only show those fields
         metadata_fields = {
-            "line_count": lambda: f"{meta.get('line_count', '?')} lines" if meta.get("line_count") else None,
+            "line_count": lambda: (
+                f"{meta.get('line_count', '?')} lines" if meta.get("line_count") else None
+            ),
             "language": lambda: meta.get("language") or None,
             "size": lambda: meta.get("size") or None,
         }

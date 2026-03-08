@@ -144,11 +144,15 @@ class HybridRetriever:
 
             # Weighted combination
             base = r.relevance_score
-            r.relevance_score = min(1.0, max(0.0,
-                base * (1 - self._weights["recency"] - self._weights["frequency"])
-                + recency_score * self._weights["recency"]
-                + frequency_score * self._weights["frequency"]
-            ))
+            r.relevance_score = min(
+                1.0,
+                max(
+                    0.0,
+                    base * (1 - self._weights["recency"] - self._weights["frequency"])
+                    + recency_score * self._weights["recency"]
+                    + frequency_score * self._weights["frequency"],
+                ),
+            )
         return results
 
     def _cap_by_tokens(
