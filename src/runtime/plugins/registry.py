@@ -26,10 +26,12 @@ def create_default_registry() -> PluginRegistry:
     from runtime.plugins.timer import TimerPlugin
     from runtime.plugins.http import HTTPPlugin
     from runtime.plugins.a2a import A2APlugin
+    from runtime.plugins.single_shot import SingleShotPlugin
 
     reg = PluginRegistry()
     reg.register("telegram", TelegramPlugin)
     reg.register("timer", TimerPlugin)
     reg.register("http", HTTPPlugin)
     reg.register("a2a", A2APlugin)
+    reg.register("single_shot", SingleShotPlugin)
     return reg
