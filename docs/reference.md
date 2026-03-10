@@ -179,9 +179,17 @@ runtime:
   session:
     max_turns: 200                   # Default max turns for unnamed sessions
     idle_timeout_minutes: 60         # Default idle timeout
+
+  heartbeat:
+    enabled: false                   # Enable schedule_heartbeat / cancel_heartbeat tools
+    poll_interval_seconds: 30        # Scanner poll frequency (min: 5)
+    max_context_turns: 10            # Turns carried from source session
+    session_lifecycle: ephemeral     # Session lifecycle for heartbeat sessions
+    pipeline: null                   # Custom pipeline config path (optional)
+    max_pending_per_agent: 100       # Max queued heartbeats
 ```
 
-All fields have defaults — you only need to specify what you want to override.
+All fields have defaults — you only need to specify what you want to override. See [Heartbeat Guide](guide-heartbeats.md) for details on the heartbeat system.
 
 ## Interfaces (`interfaces:`)
 
