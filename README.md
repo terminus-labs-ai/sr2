@@ -196,7 +196,9 @@ Config inheritance: `defaults.yaml` → `agent.yaml` → `interfaces/user_messag
 
 **Graceful degradation.** Per-layer circuit breakers. If retrieval fails 3 times in a row, the breaker opens and that layer is skipped — the agent keeps running with reduced context rather than crashing. The core layer (system prompt) is never skipped.
 
-**Per-interface pipeline configs.** A Telegram chat gets 48k tokens with full compaction/summarization. A heartbeat timer gets 3k tokens with everything disabled. An A2A call gets 8k tokens, stateless. Same agent, different context strategies per trigger type.
+**Per-interface pipeline configs.** A Telegram chat gets 48k tokens with full compaction/summarization. A heartbeat gets 3k tokens with everything disabled. An A2A call gets 8k tokens, stateless. Same agent, different context strategies per trigger type.
+
+**Dynamic heartbeats.** Agents can schedule future callbacks to themselves via `schedule_heartbeat` / `cancel_heartbeat` tools. Supports idempotent keys, context carry-over from the original session, and DB persistence. Use it for async monitoring, retries, or timed reminders. See [Heartbeat Guide](docs/guide-heartbeats.md).
 
 **Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search.
 
