@@ -51,9 +51,39 @@ class ModelParams(BaseModel):
         description="Stop sequences.",
     )
 
+    # Fields that LiteLLM accepts as top-level kwargs.
+    # Everything else goes into ``extra_body`` so it reaches the API
+    # without LiteLLM rejecting it as an unsupported parameter.
+    _LITELLM_NATIVE_FIELDS: frozenset[str] = frozenset(
+        {
+            "temperature",
+            "top_p",
+            "top_k",
+            "frequency_penalty",
+            "presence_penalty",
+            "stop",
+        }
+    )
+
     def to_api_kwargs(self) -> dict[str, Any]:
-        """Return only non-None fields as a dict for LiteLLM kwargs."""
-        return {k: v for k, v in self.model_dump().items() if v is not None}
+        """Return only non-None fields as a dict for LiteLLM kwargs.
+
+        Known LiteLLM params are top-level; provider-specific extras
+        (e.g. ``thinking``, ``max_thinking_tokens``, ``num_batch``)
+        go into ``extra_body`` so they pass through to the API untouched.
+        """
+        top_level: dict[str, Any] = {}
+        extra_body: dict[str, Any] = {}
+        for k, v in self.model_dump().items():
+            if v is None:
+                continue
+            if k in self._LITELLM_NATIVE_FIELDS:
+                top_level[k] = v
+            else:
+                extra_body[k] = v
+        if extra_body:
+            top_level["extra_body"] = extra_body
+        return top_level
 
 
 class RuntimeDatabaseConfig(BaseModel):
