@@ -10,9 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class ModelParams(BaseModel):
     """LLM sampling/generation parameters passed to the provider API.
 
-    Known fields are validated; unknown fields (e.g. ``thinking``,
-    ``max_thinking_tokens``, ``min_p``) are passed through to the
-    provider API as-is.
+    Known fields are validated; unknown fields (e.g. thinking,
+    max_thinking_tokens, min_p) are passed through to the provider API as-is.
     """
 
     model_config = ConfigDict(extra="allow")
