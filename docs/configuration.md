@@ -310,6 +310,7 @@ Model: `RuntimeConfig`
 | `loop` | any | — |  |  |
 | `session` | any | — |  | Default session settings. |
 | `stream_content` | any | — |  |  |
+| `heartbeat` | any | — |  | Dynamic heartbeat scheduling settings. |
 
 **Example:**
 ```yaml
@@ -318,6 +319,7 @@ llm: <llm>
 loop: <loop>
 session: <session>
 stream_content: <stream_content>
+heartbeat: <heartbeat>
 ```
 
 ### Database
@@ -425,6 +427,32 @@ Model: `RuntimeSessionConfig`
 max_turns: 200
 idle_timeout_minutes: 60
 ```
+
+### Heartbeat
+
+Model: `HeartbeatConfig`
+
+| Field | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `enabled` | boolean | `false` |  | Enable heartbeat scheduling. |
+| `poll_interval_seconds` | integer | `30` |  | How often the scanner checks for due heartbeats (min: 5). |
+| `max_context_turns` | integer | `10` |  | Max turns from source session to carry into heartbeat. |
+| `session_lifecycle` | string | `"ephemeral"` |  | Session lifecycle for heartbeat sessions. |
+| `pipeline` | string \| null | `null` |  | Pipeline config path for heartbeat sessions. |
+| `max_pending_per_agent` | integer | `100` |  | Max pending heartbeats per agent. |
+
+**Example:**
+```yaml
+heartbeat:
+  enabled: true
+  poll_interval_seconds: 30
+  max_context_turns: 10
+  session_lifecycle: ephemeral
+  pipeline: interfaces/heartbeat.yaml
+  max_pending_per_agent: 100
+```
+
+See [Heartbeat Guide](guide-heartbeats.md) for usage details.
 
 ## Interfaces & Plugins
 

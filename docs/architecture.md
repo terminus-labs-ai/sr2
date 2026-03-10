@@ -94,7 +94,22 @@
 | Interface | Budget | Features | Use Case |
 |---|---|---|---|
 | `user_message` | Full (48k) | All features enabled | Chat with user |
-| `heartbeat` | Minimal (3k) | Compaction/summarization/retrieval disabled | Polling checks |
+| `heartbeat` | Minimal (3k) | Compaction/summarization/retrieval disabled | Scheduled callbacks, async monitoring |
 | `a2a_inbound` | Medium (8k) | Stateless, per-invocation | Called by other agents |
 
 Each interface type gets its own PipelineConfig, allowing different token budgets, layer layouts, and feature toggles for different trigger types.
+
+### Heartbeat System
+
+Agents can schedule future callbacks via `schedule_heartbeat` / `cancel_heartbeat` tools. The `HeartbeatScanner` polls the store for due heartbeats and fires them as synthetic triggers through `_handle_trigger`, creating ephemeral sessions with context from the original conversation.
+
+```
+Agent calls schedule_heartbeat(delay=300, prompt="check X", key="k")
+  → Heartbeat stored (pending)
+  → HeartbeatScanner polls every 30s
+  → When fire_at <= now: fires TriggerContext(interface="heartbeat", input=prompt)
+  → New ephemeral session with last N turns from original session
+  → Agent processes prompt with carried context
+```
+
+Heartbeats support idempotent keys (same key updates instead of duplicating), cancellation, and DB persistence. See [Heartbeat Guide](guide-heartbeats.md).
