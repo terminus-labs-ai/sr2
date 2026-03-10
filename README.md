@@ -264,16 +264,20 @@ src/
 ├── runtime/           # Agent runtime (optional, uses the library)
 │   ├── agent.py       #   Main Agent class
 │   ├── cli.py         #   CLI entry point
-│   ├── llm_client.py  #   LiteLLM wrapper
-│   ├── loop.py        #   Agentic LLM loop
-│   ├── plugins/       #   Interface plugins (telegram, http, timer, a2a)
-│   └── session.py     #   Session management with lifecycle policies
+│   ├── config.py      #   Runtime configuration
+│   ├── http.py        #   HTTP server and endpoints
+│   ├── tool_executor.py #  Tool execution and MCP integration
+│   ├── llm/           #   LLM client, agentic loop, streaming
+│   ├── mcp/           #   MCP client and transports
+│   ├── plugins/       #   Interface plugins (http, telegram, timer, a2a, single-shot)
+│   ├── session/       #   Session lifecycle management
+│   └── heartbeat/     #   Scheduled agent callbacks
 │
 configs/               # Example configs
 │   ├── defaults.yaml  #   Library defaults
 │   └── agents/edi/    #   Example agent
 │
-tests/                 # 688 tests
+tests/                 # 844 tests
 │   ├── test_config/
 │   ├── test_pipeline/
 │   ├── test_memory/

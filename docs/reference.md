@@ -10,10 +10,10 @@ uv sync                          # Install all deps (core + dev)
 
 ```bash
 # With HTTP API (interactive)
-uv run sr2-agent agents/edi/configs --http --port 8008
+uv run sr2-agent configs/agents/edi --http --port 8008
 
 # Headless (heartbeats only, no HTTP)
-uv run sr2-agent agents/edi/configs
+uv run sr2-agent configs/agents/edi
 
 # Options
 #   --name EDI               Override agent name
