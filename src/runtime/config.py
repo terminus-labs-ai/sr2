@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ModelParams(BaseModel):
-    """LLM sampling/generation parameters passed to the provider API."""
+    """LLM sampling/generation parameters passed to the provider API.
+
+    Known fields are validated; unknown fields (e.g. ``thinking``,
+    ``max_thinking_tokens``, ``min_p``) are passed through to the
+    provider API as-is.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     temperature: float | None = Field(
         default=None,
