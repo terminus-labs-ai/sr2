@@ -39,3 +39,4 @@ tsconfig.tsbuildinfo
 .coverage
 .ruff_cache
 .claude/*.local.*
+.opencode
