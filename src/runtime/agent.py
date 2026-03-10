@@ -69,6 +69,27 @@ class Agent:
             embedding=runtime_conf.llm.embedding,
         )
 
+        # Inject synthetic heartbeat interface before SR2 sees the YAML,
+        # so the InterfaceRouter registers it for pipeline routing.
+        hb_cfg = self._agent_config.runtime.heartbeat
+        if hb_cfg.enabled:
+            if hb_cfg.pipeline:
+                synthetic_name = f"_heartbeat_{hb_cfg.pipeline}"
+                iface_def = {
+                    "plugin": "timer",
+                    "session": {"name": "heartbeat", "lifecycle": hb_cfg.session_lifecycle},
+                    "pipeline": hb_cfg.pipeline,
+                }
+            else:
+                synthetic_name = "heartbeat"
+                iface_def = {
+                    "plugin": "timer",
+                    "session": {"name": "heartbeat", "lifecycle": hb_cfg.session_lifecycle},
+                }
+            interfaces = self._agent_yaml.setdefault("interfaces", {})
+            if synthetic_name not in interfaces:
+                interfaces[synthetic_name] = iface_def
+
         # SR2 facade — owns memory, pipeline, resolvers, compaction, metrics
         # MCP resource/prompt readers are wired after MCPManager is created below
         self._sr2 = SR2(
@@ -343,16 +364,6 @@ class Agent:
             self._tool_executor.register("schedule_heartbeat", schedule_tool)
             self._tool_executor.register("cancel_heartbeat", cancel_tool)
             self._heartbeat_tools = [schedule_tool, cancel_tool]
-
-            # Inject synthetic interface for heartbeat pipeline routing
-            if self._heartbeat_config.pipeline:
-                synthetic_name = f"_heartbeat_{self._heartbeat_config.pipeline}"
-                if synthetic_name not in self._agent_config.interfaces:
-                    self._agent_yaml.setdefault("interfaces", {})[synthetic_name] = {
-                        "plugin": "timer",
-                        "session": {"name": "heartbeat", "lifecycle": "ephemeral"},
-                        "pipeline": self._heartbeat_config.pipeline,
-                    }
 
             scanner = HeartbeatScanner(
                 store=hb_store,
