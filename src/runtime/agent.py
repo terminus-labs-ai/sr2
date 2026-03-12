@@ -22,6 +22,54 @@ from runtime.tool_executor import PostToSessionTool, SaveMemoryTool, ToolExecuto
 logger = logging.getLogger(__name__)
 
 
+def _load_agent_yaml_with_extends(agent_yaml_path: str) -> dict:
+    """Load agent YAML with extends directive support.
+
+    Recursively loads parent configs via 'extends' and merges them.
+    Relative extends are resolved from the agent.yaml directory.
+    """
+    visited = set()
+
+    def _load_recursive(path: str) -> dict:
+        abs_path = os.path.abspath(path)
+        if abs_path in visited:
+            raise ValueError(f"Circular extends detected: {abs_path}")
+        visited.add(abs_path)
+
+        with open(abs_path) as f:
+            config = yaml.safe_load(f) or {}
+
+        extends = config.pop("extends", None)
+        if not extends:
+            return config
+
+        # Resolve extends path relative to current file's directory
+        if extends.startswith("/"):
+            parent_path = extends
+        else:
+            parent_dir = os.path.dirname(abs_path)
+            parent_path = os.path.normpath(os.path.join(parent_dir, extends))
+
+        parent_config = _load_recursive(parent_path)
+
+        # Deep merge: parent is base, current file overrides
+        return _deep_merge(parent_config, config)
+
+    def _deep_merge(base: dict, override: dict) -> dict:
+        """Deep merge override into base. Lists are replaced, not merged."""
+        result = base.copy()
+        for key, value in override.items():
+            if value is None:
+                continue
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = _deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
+    return _load_recursive(agent_yaml_path)
+
+
 @dataclass
 class AgentConfig:
     """Top-level agent configuration. LLM and runtime settings come from agent.yaml."""
@@ -46,10 +94,9 @@ class Agent:
         self._config = config
         self._name = config.name
 
-        # Load raw agent YAML and validate with Pydantic
+        # Load raw agent YAML with extends support and validate with Pydantic
         agent_yaml_path = os.path.join(config.config_dir, "agent.yaml")
-        with open(agent_yaml_path) as f:
-            self._agent_yaml = yaml.safe_load(f) or {}
+        self._agent_yaml = _load_agent_yaml_with_extends(agent_yaml_path)
         self._agent_config = AgentYAMLConfig(**self._agent_yaml)
         runtime_conf = self._agent_config.runtime
 
