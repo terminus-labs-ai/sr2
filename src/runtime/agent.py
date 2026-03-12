@@ -108,6 +108,7 @@ class Agent:
 
         if runtime_conf.database.url:
             self._db_url = self._resolve_env_vars(runtime_conf.database.url)
+            logger.info(f"Database URL configured: {self._db_url[:50]}..." if len(str(self._db_url)) > 50 else f"Database URL configured: {self._db_url}")
 
         # LLM — configured from agent.yaml runtime.llm section
         self._llm = LLMClient(
