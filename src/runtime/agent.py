@@ -543,7 +543,7 @@ class Agent:
         # Route + compile context via SR2 facade
         ctx = await self._sr2.process(
             interface_name=trigger.interface_name,
-            tool_schemas=self._get_tool_schemas(),
+            tool_schemas=self._get_tool_schemas(trigger.interface_name),
             trigger_input=trigger.input_data,
             session_turns=session.turns,
             session_id=session.id,
@@ -921,8 +921,12 @@ class Agent:
         
         return compressed
 
-    def _get_tool_schemas(self) -> list[dict]:
-        """Get tool schemas for the LLM call."""
+    def _get_tool_schemas(self, interface_name: str | None = None) -> list[dict]:
+        """Get tool schemas for the LLM call.
+        
+        Args:
+            interface_name: Name of the interface (for looking up pipeline config)
+        """
         schemas = self._mcp_manager.get_tool_schemas()
         # Add resource/prompt tool schemas if exposed
         for server in self._agent_config.mcp_servers:
@@ -972,7 +976,13 @@ class Agent:
         schemas = [self._compress_tool_schema(s) for s in schemas]
         
         # Truncate schemas if tool_schema_max_tokens is set
-        max_tool_tokens = self._pipeline_config.tool_schema_max_tokens
+        # Get pipeline config from SR2 which has the resolved config
+        if interface_name and hasattr(self._sr2, '_pipeline_configs'):
+            resolved_config = self._sr2._pipeline_configs.get(interface_name)
+            max_tool_tokens = resolved_config.tool_schema_max_tokens if resolved_config else None
+        else:
+            max_tool_tokens = None
+        
         if max_tool_tokens:
             schemas = self._truncate_tool_schemas(schemas, max_tool_tokens)
 
