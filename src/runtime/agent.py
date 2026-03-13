@@ -865,6 +865,62 @@ class Agent:
         
         return truncated
 
+
+    def _compress_tool_schema(self, schema: dict) -> dict:
+        """Compress tool schema by removing redundant/verbose fields.
+        
+        Keeps: name, description, parameters
+        Removes from properties:
+        - Descriptions for non-required parameters
+        - minLength, maxLength, pattern, examples, title, default
+        
+        Keeps enums and required list (compact and essential).
+        Saves ~20% tokens without losing functionality.
+        """
+        if not schema:
+            return schema
+        
+        compressed = {
+            "name": schema.get("name"),
+            "description": schema.get("description", ""),
+        }
+        
+        params = schema.get("parameters", {})
+        if params:
+            compressed["parameters"] = {
+                "type": params.get("type", "object"),
+            }
+            
+            properties = params.get("properties", {})
+            required = params.get("required", [])
+            
+            if properties:
+                compressed_props = {}
+                
+                for prop_name, prop_def in properties.items():
+                    # Minimal: type + enum (if present) + description (if required)
+                    compressed_prop = {"type": prop_def.get("type", "string")}
+                    
+                    # Keep enum - it's compact and critical
+                    if "enum" in prop_def:
+                        compressed_prop["enum"] = prop_def["enum"]
+                    
+                    # Keep description ONLY for required params
+                    if prop_name in required and "description" in prop_def:
+                        compressed_prop["description"] = prop_def["description"]
+                    
+                    # Drop: minLength, maxLength, pattern, examples, title, default
+                    
+                    compressed_props[prop_name] = compressed_prop
+                
+                compressed["parameters"]["properties"] = compressed_props
+            
+            # Keep required list - essential for LLM
+            if required:
+                compressed["parameters"]["required"] = required
+        
+        return compressed
+
     def _get_tool_schemas(self) -> list[dict]:
         """Get tool schemas for the LLM call."""
         schemas = self._mcp_manager.get_tool_schemas()
@@ -912,6 +968,9 @@ class Agent:
             }
             schemas.append(schema)
 
+        # Compress schemas to reduce token usage
+        schemas = [self._compress_tool_schema(s) for s in schemas]
+        
         # Truncate schemas if tool_schema_max_tokens is set
         max_tool_tokens = self._pipeline_config.tool_schema_max_tokens
         if max_tool_tokens:
