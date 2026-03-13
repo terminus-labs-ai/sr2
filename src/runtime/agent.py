@@ -801,6 +801,70 @@ class Agent:
             "skills": [],
         }
 
+
+    def _truncate_tool_schemas(self, schemas: list[dict], max_tokens: int | None) -> list[dict]:
+        """Truncate tool schemas to fit within token budget.
+        
+        Strategy:
+        1. Calculate tokens for each schema (simple JSON size estimate)
+        2. If within budget, return all
+        3. Otherwise, truncate in order: descriptions → parameters → drop tools
+        """
+        if not max_tokens or not schemas:
+            return schemas
+        
+        import json
+        
+        def estimate_tokens(obj):
+            """Estimate tokens using character heuristic (1 token ≈ 4 chars)."""
+            try:
+                s = json.dumps(obj, separators=(',', ':'))
+                return max(1, len(s) // 4)
+            except:
+                return 100  # fallback
+        
+        total_tokens = sum(estimate_tokens(s) for s in schemas)
+        if total_tokens <= max_tokens:
+            return schemas
+        
+        logger.info(f"Tool schemas exceed max_tokens budget: {total_tokens} > {max_tokens}, truncating")
+        
+        truncated = []
+        remaining_tokens = max_tokens
+        
+        for schema in schemas:
+            schema_tokens = estimate_tokens(schema)
+            
+            if schema_tokens <= remaining_tokens:
+                truncated.append(schema)
+                remaining_tokens -= schema_tokens
+            else:
+                # Try truncating this schema
+                truncated_schema = {
+                    "name": schema.get("name"),
+                    "parameters": schema.get("parameters", {"type": "object"})
+                }
+                
+                if estimate_tokens(truncated_schema) <= remaining_tokens:
+                    truncated.append(truncated_schema)
+                    remaining_tokens -= estimate_tokens(truncated_schema)
+                    logger.debug(f"  Dropped description for {schema.get('name')}")
+                elif remaining_tokens > 200:
+                    # Try minimal schema: name + empty params
+                    min_schema = {
+                        "name": schema.get("name"),
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                    if estimate_tokens(min_schema) <= remaining_tokens:
+                        truncated.append(min_schema)
+                        remaining_tokens -= estimate_tokens(min_schema)
+                        logger.debug(f"  Dropped parameters for {schema.get('name')}")
+        
+        if len(truncated) < len(schemas):
+            logger.warning(f"Tool schema truncation: {len(truncated)}/{len(schemas)} tools fit in {max_tokens} tokens")
+        
+        return truncated
+
     def _get_tool_schemas(self) -> list[dict]:
         """Get tool schemas for the LLM call."""
         schemas = self._mcp_manager.get_tool_schemas()
@@ -847,5 +911,10 @@ class Agent:
                 },
             }
             schemas.append(schema)
+
+        # Truncate schemas if tool_schema_max_tokens is set
+        max_tool_tokens = self._pipeline_config.tool_schema_max_tokens
+        if max_tool_tokens:
+            schemas = self._truncate_tool_schemas(schemas, max_tool_tokens)
 
         return schemas
