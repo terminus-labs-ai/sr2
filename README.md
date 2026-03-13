@@ -200,7 +200,13 @@ Config inheritance: `defaults.yaml` → `agent.yaml` → `interfaces/user_messag
 
 **Dynamic heartbeats.** Agents can schedule future callbacks to themselves via `schedule_heartbeat` / `cancel_heartbeat` tools. Supports idempotent keys, context carry-over from the original session, and DB persistence. Use it for async monitoring, retries, or timed reminders. See [Heartbeat Guide](docs/guide-heartbeats.md).
 
-**Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search.
+**Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search. Supports PostgreSQL and SQLite backends.
+
+**Intent detection.** Classify user messages to detect topic shifts, enabling context-aware memory refresh and selective summarization. Foundation for LLM-based topic understanding.
+
+**Pre-emptive context rotation.** Early warning system that monitors token budget pressure and triggers proactive rotation before cache invalidation. Prevents degradation from emergency truncation.
+
+**Pluggable tokenizers.** Choose between fast character heuristic (default) or accurate tiktoken counting with support for specific LLM encoding schemes.
 
 **Tool state machine.** Dynamic tool masking with named states and transitions. Start in "default" (all tools), transition to "planning" (read-only tools), back to "execution" (write tools enabled). Supports allowed-list, prefill, and logit-mask strategies.
 
@@ -337,9 +343,12 @@ python -m schema_gen --format md > docs/configuration.md
 - **[Quick Reference](docs/reference.md)** — CLI commands, config structure, key directories
 - **[Configuration Reference](docs/configuration.md)** — Every config field, auto-generated from Pydantic models
 - **[Architecture Overview](docs/architecture.md)** — Pipeline flow, three-zone conversation, multi-agent
-- **[Memory System](docs/guide-memory.md)** — Extraction, conflict resolution, retrieval
+- **[Memory System](docs/guide-memory.md)** — Extraction, conflict resolution, retrieval (SQLite + PostgreSQL backends)
 - **[Compaction](docs/guide-compaction.md)** — Five strategies for compressing tool outputs
 - **[Tool Masking](docs/guide-tool-masking.md)** — Dynamic tool visibility with state machines
+- **[Custom Resolvers](docs/guide-custom-resolvers.md)** — Build pluggable content sources (5 patterns + examples)
+- **[Circuit Breakers](docs/guide-circuit-breakers.md)** — Graceful degradation when layers fail
+- **[Agent-to-Agent](docs/guide-a2a.md)** — Multi-agent workflows and service composition
 - **[Observability](docs/observability.md)** — Prometheus and OpenTelemetry setup
 - **[Troubleshooting](docs/troubleshooting.md)** — Common errors, debugging, FAQ
 
