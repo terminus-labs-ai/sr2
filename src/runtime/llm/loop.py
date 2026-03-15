@@ -320,7 +320,7 @@ class LLMLoop:
             # If tool calls were parsed from streamed text (raw_tool_call_text
             # is set), the JSON was already sent to the user as TextDeltaEvents.
             # Retract it so the interface can clean up.
-            if llm_response.raw_tool_call_text and full_text:
+            if llm_response.raw_tool_call_text:
                 await stream_callback(
                     StreamRetractEvent(retracted_text=llm_response.raw_tool_call_text)
                 )
