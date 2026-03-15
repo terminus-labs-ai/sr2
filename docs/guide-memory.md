@@ -206,7 +206,7 @@ Default. All memories live in a Python dict. Fast, no dependencies, but lost on 
 
 ### PostgresMemoryStore
 
-Persistent storage using PostgreSQL. Requires `asyncpg`:
+Persistent storage using PostgreSQL with vector search support (pgvector). Requires `asyncpg`:
 
 ```bash
 pip install -e ".[postgres]"
@@ -218,6 +218,22 @@ Set up via the SR2 facade:
 sr2 = SR2(config)
 await sr2.set_postgres_store(asyncpg_pool)  # creates tables automatically
 ```
+
+Supports semantic search via pgvector embeddings.
+
+### SQLiteMemoryStore
+
+Lightweight persistent storage using SQLite. Suitable for single-agent or development setups. No additional dependencies beyond aiosqlite (included in core):
+
+```python
+from sr2.memory.store import SQLiteMemoryStore
+
+store = SQLiteMemoryStore(db_path="./memories.db")
+await store.connect()
+await store.create_tables()
+```
+
+**Note:** SQLite has no native vector distance support. Keyword and key-prefix search work fully, but semantic vector search returns memories with embeddings in insertion order only. For production systems with many agents, use PostgreSQL.
 
 ## Pipeline Integration
 

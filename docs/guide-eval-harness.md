@@ -157,9 +157,17 @@ Three built-in suites covering critical scenarios:
 - **Summarization**: Information preservation during summarization
 
 ```python
-from sr2.eval import create_all_suites
+from sr2.eval import (
+    create_coherence_suite,
+    create_compaction_suite,
+    create_summarization_suite,
+)
 
-all_suites = create_all_suites()
+suites = {
+    "coherence": create_coherence_suite(),
+    "compaction": create_compaction_suite(),
+    "summarization": create_summarization_suite(),
+}
 ```
 
 ## Performance Optimization

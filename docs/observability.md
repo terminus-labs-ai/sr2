@@ -1,6 +1,6 @@
 # Observability Guide
 
-SR2 exposes 28 metrics covering cache performance, compaction, retrieval, token usage, and pipeline latency. There are two ways to get these into your monitoring stack:
+SR2 exposes 43 metrics covering cache performance, compaction, retrieval, token usage, pipeline latency, degradation events, and tool masking. There are two ways to get these into your monitoring stack:
 
 1. **Prometheus scraping** — built-in `/metrics` endpoint, no extra deps
 2. **OpenTelemetry export** — push metrics to any OTLP-compatible backend
