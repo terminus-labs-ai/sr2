@@ -221,6 +221,19 @@ class _TelegramStreamState:
             self._buffer += event.content
             await self._maybe_flush()
 
+        elif isinstance(event, ToolStartEvent):
+            self.was_used = True
+            self._buffer += f"\n_Using {event.tool_name}..._\n"
+            await self._maybe_flush()
+
+        elif isinstance(event, ToolResultEvent):
+            self.was_used = True
+            if event.success:
+                self._buffer += f"\n_Using {event.tool_name}: {event.result}_\n"
+            else:
+                self._buffer += f"\n_Using {event.tool_name}: failed ({event.result})_\n"
+            await self._maybe_flush()
+
         elif isinstance(event, StreamRetractEvent):
             # The text we streamed was actually a tool call, not user-facing.
             # Delete the live message and reset so tool status starts fresh.
