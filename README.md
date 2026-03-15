@@ -53,7 +53,7 @@ Layers are ordered most-stable to least-stable. The system prompt never changes,
 git clone https://github.com/terminus-labs-ai/sr2.git
 cd sr2
 
-# Core library (pydantic + pyyaml + litellm, nothing else)
+# Core library (pydantic, pyyaml, litellm, python-dotenv, aiosqlite)
 pip install -e .
 
 # With the agent runtime (FastAPI + uvicorn)
@@ -265,6 +265,9 @@ src/
 │   ├── degradation/   #   Circuit breaker and degradation ladder
 │   ├── tools/         #   Tool definitions, state machine, masking strategies
 │   ├── metrics/       #   Collector, exporter, alerts
+│   ├── tokenization/  #   Pluggable tokenizers (heuristic, tiktoken)
+│   ├── normalization/ #   LLM response cleaning (thinking blocks, markdown, JSON extraction)
+│   ├── eval/          #   Multi-turn evaluation framework and benchmarking
 │   └── a2a/           #   Agent-to-Agent protocol support
 │
 ├── runtime/           # Agent runtime (optional, uses the library)
@@ -334,7 +337,7 @@ ruff check src/
 ruff format src/
 
 # Generate config docs from Pydantic models
-python -m schema_gen --format md > docs/configuration.md
+sr2-config-docs --format md > docs/configuration.md
 ```
 
 ## Documentation
@@ -349,6 +352,8 @@ python -m schema_gen --format md > docs/configuration.md
 - **[Custom Resolvers](docs/guide-custom-resolvers.md)** — Build pluggable content sources (5 patterns + examples)
 - **[Circuit Breakers](docs/guide-circuit-breakers.md)** — Graceful degradation when layers fail
 - **[Agent-to-Agent](docs/guide-a2a.md)** — Multi-agent workflows and service composition
+- **[Heartbeats](docs/guide-heartbeats.md)** — Scheduling agent callbacks for async tasks and retries
+- **[Evaluation Harness](docs/guide-eval-harness.md)** — Multi-turn benchmarking framework and evaluation
 - **[Observability](docs/observability.md)** — Prometheus and OpenTelemetry setup
 - **[Troubleshooting](docs/troubleshooting.md)** — Common errors, debugging, FAQ
 
