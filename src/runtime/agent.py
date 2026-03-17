@@ -17,7 +17,7 @@ from runtime.mcp import MCPManager
 from runtime.plugins.base import TriggerContext
 from runtime.plugins.registry import create_default_registry
 from runtime.session import SessionConfig, SessionManager
-from runtime.tool_executor import PostToSessionTool, SaveMemoryTool, ToolExecutor
+from runtime.tool_executor import PostToSessionTool, RecallMemoryTool, SaveMemoryTool, ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +229,14 @@ class Agent:
             "save_memory",
             SaveMemoryTool(self._sr2, session_resolver=lambda: self._current_session_id),
         )
+
+        self._recall_memory_tool = RecallMemoryTool(
+            retriever=self._sr2._retriever,
+            memory_store=self._sr2._memory_store,
+            scope_config=self._sr2._retriever._scope_config,
+            key_schema=getattr(self._sr2._extractor, "_key_schema", []),
+        )
+        self._tool_executor.register("recall_memory", self._recall_memory_tool)
 
         # MCP — from agent.yaml
         self._mcp_manager = MCPManager()
@@ -949,6 +957,10 @@ class Agent:
         for tool in self._heartbeat_tools:
             schemas.append(tool.tool_definition)
 
+
+        # Add recall_memory tool schema
+        if hasattr(self, "_recall_memory_tool"):
+            schemas.append(self._recall_memory_tool.tool_definition)
         # Add tool_definitions from agent.yaml (e.g. post_to_session)
         for tool_def in self._agent_yaml.get("tool_definitions", []):
             properties = {}
