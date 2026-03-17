@@ -155,10 +155,17 @@ class SR2:
             ),
         )
 
-        # Wire key_schema to extractor now that agent_config is loaded
+        # Wire key_schema and scope_config now that agent_config is loaded
         key_schema = [s.model_dump() for s in agent_config.memory.key_schema]
         if key_schema:
             self._extractor._key_schema = key_schema
+
+        # Wire scope config to retriever and extractor
+        scope_config = agent_config.memory.scope
+        self._scope_config_resolved = scope_config  # cached for process() and save_memory()
+        if scope_config:
+            self._retriever._scope_config = scope_config
+            self._extractor._scope_config = scope_config
 
         self._compaction_engine = CompactionEngine(agent_config.compaction)
         self._summarization_engine = SummarizationEngine(
@@ -257,12 +264,27 @@ class SR2:
             "session_history": session_turns,
         }
 
+        # Build current_context from env vars (single-shot dispatchers set these)
+        current_context: dict[str, str] = {}
+        project_id = os.environ.get("SR2_PROJECT_ID")
+        if project_id:
+            current_context["project_id"] = project_id
+        task_source = os.environ.get("SR2_TASK_SOURCE")
+        if task_source:
+            current_context["source"] = task_source
+
+        # Inject current_context into retriever for this request
+        if current_context:
+            self._retriever._current_context = current_context
+
         # Compile context
         ctx = ResolverContext(
             agent_config=agent_context,
             trigger_input=trigger_input,
             session_id=session_id,
             interface_type=interface_name,
+            scope_config=self._scope_config_resolved,
+            current_context=current_context or None,
         )
         compiled = await self._engine.compile(config, ctx)
         logger.info(f"SR2.process: context compiled for {interface_name}")
@@ -312,6 +334,7 @@ class SR2:
         content: str,
         session_id: str,
         user_message: str | None = None,
+        current_context: dict | None = None,
     ) -> None:
         """Fire-and-forget post-LLM processing (memory extraction, compaction).
 
@@ -329,7 +352,18 @@ class SR2:
                 role=role,
                 content=extract_content,
             )
-            await self._post_processor.process(turn, session_id)
+            # Build current_context: prefer explicit param, fall back to env vars
+            ctx = current_context
+            if ctx is None:
+                ctx = {}
+                _pid = os.environ.get("SR2_PROJECT_ID")
+                if _pid:
+                    ctx["project_id"] = _pid
+                _src = os.environ.get("SR2_TASK_SOURCE")
+                if _src:
+                    ctx["source"] = _src
+                ctx = ctx or None
+            await self._post_processor.process(turn, session_id, current_context=ctx)
         except Exception as e:
             logger.warning(f"Post-processing failed: {e}")
 
@@ -339,6 +373,7 @@ class SR2:
         value: str,
         memory_type: str = "semi_stable",
         source: str | None = None,
+        current_context: dict | None = None,
     ) -> None:
         """Directly persist a memory, bypassing LLM extraction.
 
@@ -355,6 +390,11 @@ class SR2:
             confidence_source="explicit_statement",
             source=source,
         )
+
+        # Stamp scope if scope config is wired
+        if self._scope_config_resolved:
+            self._extractor._stamp_scope(mem, current_context)
+
         embedding = None
         if self._config.embed:
             try:
