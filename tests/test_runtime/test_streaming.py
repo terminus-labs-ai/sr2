@@ -255,6 +255,18 @@ class TestLoopRunStreaming:
 
         mock_llm.stream_complete = mock_stream_complete
 
+        complete_call_count = 0
+
+        async def mock_complete(**kwargs):
+            nonlocal complete_call_count
+            if complete_call_count < len(stream_responses):
+                resp = stream_responses[complete_call_count]
+                complete_call_count += 1
+                return resp
+            return stream_responses[-1]
+
+        mock_llm.complete = mock_complete
+
         mock_executor = AsyncMock()
         if tool_results:
             mock_executor.execute = AsyncMock(side_effect=tool_results)
@@ -396,7 +408,7 @@ class TestLoopRunStreaming:
     @pytest.mark.asyncio
     async def test_streaming_max_iterations(self):
         tool_calls = [{"id": "tc_1", "name": "loop_tool", "arguments": {}}]
-        responses = [_tool_response(tool_calls) for _ in range(3)]
+        responses = [_tool_response(tool_calls) for _ in range(3)] + [_text_response("Final answer")]
         loop, _, _ = self._make_loop(responses, max_iterations=3)
         events = []
 
@@ -409,7 +421,7 @@ class TestLoopRunStreaming:
         )
 
         assert result.stopped_reason == "max_iterations"
-        assert result.iterations == 3
+        assert result.iterations == 4  # 3 tool iterations + 1 synthesis
         end_events = [e for e in events if isinstance(e, StreamEndEvent)]
         assert len(end_events) == 1
 
@@ -466,6 +478,18 @@ class TestStreamRetraction:
             mock_llm.last_stream_response = resp
 
         mock_llm.stream_complete = mock_stream_complete
+
+        complete_call_count = 0
+
+        async def mock_complete(**kwargs):
+            nonlocal complete_call_count
+            if complete_call_count < len(stream_responses):
+                resp = stream_responses[complete_call_count]
+                complete_call_count += 1
+                return resp
+            return stream_responses[-1]
+
+        mock_llm.complete = mock_complete
 
         mock_executor = AsyncMock()
         if tool_results:

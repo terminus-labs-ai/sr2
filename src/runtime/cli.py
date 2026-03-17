@@ -161,6 +161,11 @@ async def run_agent(args):
 def main():
     args = parse_args()
 
+    # When running as a subprocess with piped stderr, the default StreamHandler
+    # crashes with BlockingIOError on large log bursts. Force blocking mode.
+    if not os.isatty(sys.stderr.fileno()):
+        os.set_blocking(sys.stderr.fileno(), True)
+
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",

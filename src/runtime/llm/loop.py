@@ -225,7 +225,7 @@ class LLMLoop:
 
         # Reached max iterations
         # If last response had a tool call, force final synthesis without tools
-        if llm_response and llm_response.raw_tool_call_text:
+        if llm_response and (llm_response.raw_tool_call_text or (llm_response.has_tool_calls and not llm_response.content)):
             logger.warning(
                 "Reached max iterations with pending tool call, forcing final synthesis"
             )
@@ -440,7 +440,7 @@ class LLMLoop:
 
         # Reached max iterations
         # If last response had a tool call, force final synthesis without tools
-        if llm_response and llm_response.raw_tool_call_text:
+        if llm_response and (llm_response.raw_tool_call_text or (llm_response.has_tool_calls and not llm_response.content)):
             logger.warning(
                 "Reached max iterations with pending tool call, forcing final synthesis"
             )
