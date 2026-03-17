@@ -20,8 +20,9 @@ class Memory(BaseModel):
         "explicit_statement", "direct_answer", "contextual_mention", "inferred", "offhand"
     ] = "contextual_mention"
     dimensions: dict[str, str] = Field(default_factory=dict)
-    source_conversation: str | None = None
-    source_turn: int | None = None
+    scope: Literal["private", "project"] = "private"
+    scope_ref: str | None = None
+    source: str | None = None
     extracted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     last_accessed: datetime = Field(default_factory=lambda: datetime.now(UTC))
     access_count: int = 0
@@ -47,8 +48,7 @@ class ExtractionResult(BaseModel):
     """Output from the memory extraction model."""
 
     memories: list[Memory]
-    source_conversation: str | None = None
-    source_turn: int | None = None
+    source: str | None = None
 
 
 STABILITY_DEFAULTS: dict[str, float] = {

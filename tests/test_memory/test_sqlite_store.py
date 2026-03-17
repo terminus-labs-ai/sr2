@@ -28,8 +28,9 @@ async def test_sqlite_save_and_get(sqlite_store: SQLiteMemoryStore) -> None:
         confidence=0.85,
         confidence_source="explicit_statement",
         dimensions={"topic": "communication_style"},
-        source_conversation="conv1",
-        source_turn=5,
+        scope="project",
+        scope_ref="test-project",
+        source="session:conv1",
     )
     await sqlite_store.save(memory)
 

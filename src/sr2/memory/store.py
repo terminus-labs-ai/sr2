@@ -19,7 +19,13 @@ class MemoryStore(Protocol):
         """Get a memory by ID. Returns None if not found."""
         ...
 
-    async def get_by_key(self, key: str, include_archived: bool = False) -> list[Memory]:
+    async def get_by_key(
+        self,
+        key: str,
+        include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
+    ) -> list[Memory]:
         """Get all memories with a given key. Sorted by extracted_at desc."""
         ...
 
@@ -42,6 +48,8 @@ class MemoryStore(Protocol):
         embedding: list[float],
         top_k: int = 10,
         include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
         """Semantic search by vector embedding. Returns top_k results sorted by similarity."""
         ...
@@ -51,6 +59,8 @@ class MemoryStore(Protocol):
         query: str,
         top_k: int = 10,
         include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
         """Keyword search across key and value fields."""
         ...
@@ -66,16 +76,40 @@ class InMemoryMemoryStore:
     def __init__(self) -> None:
         self._memories: dict[str, Memory] = {}
 
+    def _scope_match(
+        self,
+        memory: Memory,
+        scope_filter: list[str] | None,
+        scope_refs: list[str] | None,
+    ) -> bool:
+        """Check if a memory matches the scope filter criteria."""
+        if scope_filter is None:
+            return True
+        if memory.scope not in scope_filter:
+            return False
+        if scope_refs is not None:
+            # Allow memories with no scope_ref (legacy) or matching scope_ref
+            if memory.scope_ref is not None and memory.scope_ref not in scope_refs:
+                return False
+        return True
+
     async def save(self, memory: Memory, embedding: list[float] | None = None) -> None:
         self._memories[memory.id] = memory
 
     async def get(self, memory_id: str) -> Memory | None:
         return self._memories.get(memory_id)
 
-    async def get_by_key(self, key: str, include_archived: bool = False) -> list[Memory]:
+    async def get_by_key(
+        self,
+        key: str,
+        include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
+    ) -> list[Memory]:
         results = [m for m in self._memories.values() if m.key == key]
         if not include_archived:
             results = [m for m in results if not m.archived]
+        results = [m for m in results if self._scope_match(m, scope_filter, scope_refs)]
         return sorted(results, key=lambda m: m.extracted_at, reverse=True)
 
     async def search_by_key_prefix(
@@ -103,8 +137,11 @@ class InMemoryMemoryStore:
         embedding: list[float],
         top_k: int = 10,
         include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
         mems = [m for m in self._memories.values() if not m.archived or include_archived]
+        mems = [m for m in mems if self._scope_match(m, scope_filter, scope_refs)]
         mems.sort(key=lambda m: m.id)
         return [
             MemorySearchResult(memory=m, relevance_score=0.5, match_type="semantic")
@@ -116,11 +153,15 @@ class InMemoryMemoryStore:
         query: str,
         top_k: int = 10,
         include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
         query_lower = query.lower()
         results = []
         for m in self._memories.values():
             if m.archived and not include_archived:
+                continue
+            if not self._scope_match(m, scope_filter, scope_refs):
                 continue
             if query_lower in m.key.lower() or query_lower in m.value.lower():
                 results.append(
@@ -162,8 +203,9 @@ class PostgresMemoryStore:
                     confidence REAL NOT NULL DEFAULT 0.7,
                     confidence_source TEXT NOT NULL DEFAULT 'contextual_mention',
                     dimensions JSONB NOT NULL DEFAULT '{}',
-                    source_conversation TEXT,
-                    source_turn INTEGER,
+                    scope TEXT NOT NULL DEFAULT 'private',
+                    scope_ref TEXT,
+                    source TEXT,
                     extracted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     last_accessed TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     access_count INTEGER NOT NULL DEFAULT 0,
@@ -175,6 +217,8 @@ class PostgresMemoryStore:
                 CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
                 CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories(archived);
                 CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
+                CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope);
+                CREATE INDEX IF NOT EXISTS idx_memories_scope_ref ON memories(scope_ref);
             """)
             # Migrate existing tables that were created with a fixed-dimension vector column
             # (e.g. vector(1536)) to unbounded vector so any embedding model can be used.
@@ -194,16 +238,17 @@ class PostgresMemoryStore:
             await conn.execute(
                 """
                 INSERT INTO memories (id, key, value, memory_type, stability_score,
-                    confidence, confidence_source, dimensions, source_conversation,
-                    source_turn, extracted_at, last_accessed, access_count,
+                    confidence, confidence_source, dimensions, scope,
+                    scope_ref, source, extracted_at, last_accessed, access_count,
                     conflicts_with, archived, raw_text, embedding)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::vector)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::vector)
                 ON CONFLICT (id) DO UPDATE SET
                     key = EXCLUDED.key, value = EXCLUDED.value,
                     memory_type = EXCLUDED.memory_type, stability_score = EXCLUDED.stability_score,
                     confidence = EXCLUDED.confidence, confidence_source = EXCLUDED.confidence_source,
-                    dimensions = EXCLUDED.dimensions, source_conversation = EXCLUDED.source_conversation,
-                    source_turn = EXCLUDED.source_turn, last_accessed = EXCLUDED.last_accessed,
+                    dimensions = EXCLUDED.dimensions, scope = EXCLUDED.scope,
+                    scope_ref = EXCLUDED.scope_ref, source = EXCLUDED.source,
+                    last_accessed = EXCLUDED.last_accessed,
                     access_count = EXCLUDED.access_count, conflicts_with = EXCLUDED.conflicts_with,
                     archived = EXCLUDED.archived, raw_text = EXCLUDED.raw_text,
                     embedding = COALESCE(EXCLUDED.embedding, memories.embedding)
@@ -216,8 +261,9 @@ class PostgresMemoryStore:
                 data["confidence"],
                 data["confidence_source"],
                 json.dumps(data["dimensions"]),
-                data["source_conversation"],
-                data["source_turn"],
+                data["scope"],
+                data["scope_ref"],
+                data["source"],
                 data["extracted_at"],
                 data["last_accessed"],
                 data["access_count"],
@@ -235,14 +281,27 @@ class PostgresMemoryStore:
                 return None
             return self._row_to_memory(row)
 
-    async def get_by_key(self, key: str, include_archived: bool = False) -> list[Memory]:
+    async def get_by_key(
+        self,
+        key: str,
+        include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
+    ) -> list[Memory]:
         """Get all memories with a given key. Sorted by extracted_at desc."""
         query = "SELECT * FROM memories WHERE key = $1"
+        params: list = [key]
         if not include_archived:
             query += " AND archived = false"
+        if scope_filter is not None:
+            params.append(scope_filter)
+            query += f" AND scope = ANY(${len(params)})"
+        if scope_refs is not None:
+            params.append(scope_refs)
+            query += f" AND (scope_ref = ANY(${len(params)}) OR scope_ref IS NULL)"
         query += " ORDER BY extracted_at DESC"
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(query, key)
+            rows = await conn.fetch(query, *params)
             return [self._row_to_memory(r) for r in rows]
 
     async def search_by_key_prefix(
@@ -278,23 +337,27 @@ class PostgresMemoryStore:
         embedding: list[float],
         top_k: int = 10,
         include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
         """Semantic search by vector embedding."""
         embed_str = "[" + ",".join(str(v) for v in embedding) + "]"
-        if include_archived:
-            query = """
-                SELECT *, 1 - (embedding <=> $1::vector) as similarity
-                FROM memories WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> $1::vector LIMIT $2
-            """
-            params = [embed_str, top_k]
-        else:
-            query = """
-                SELECT *, 1 - (embedding <=> $1::vector) as similarity
-                FROM memories WHERE archived = false AND embedding IS NOT NULL
-                ORDER BY embedding <=> $1::vector LIMIT $2
-            """
-            params = [embed_str, top_k]
+        conditions = ["embedding IS NOT NULL"]
+        params: list = [embed_str, top_k]
+        if not include_archived:
+            conditions.append("archived = false")
+        if scope_filter is not None:
+            params.append(scope_filter)
+            conditions.append(f"scope = ANY(${len(params)})")
+        if scope_refs is not None:
+            params.append(scope_refs)
+            conditions.append(f"(scope_ref = ANY(${len(params)}) OR scope_ref IS NULL)")
+        where = " AND ".join(conditions)
+        query = f"""
+            SELECT *, 1 - (embedding <=> $1::vector) as similarity
+            FROM memories WHERE {where}
+            ORDER BY embedding <=> $1::vector LIMIT $2
+        """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
             return [
@@ -311,6 +374,8 @@ class PostgresMemoryStore:
         query: str,
         top_k: int = 10,
         include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
         """Keyword search across key and value fields.
 
@@ -328,12 +393,19 @@ class PostgresMemoryStore:
             f"(key ILIKE ${i + 1} OR value ILIKE ${i + 1})" for i in range(len(words))
         )
         sql = f"SELECT * FROM memories WHERE ({conditions})"
+        extra_params: list = []
         if not include_archived:
             sql += " AND archived = false"
+        if scope_filter is not None:
+            extra_params.append(scope_filter)
+            sql += f" AND scope = ANY(${len(words) + 1 + len(extra_params)})"
+        if scope_refs is not None:
+            extra_params.append(scope_refs)
+            sql += f" AND (scope_ref = ANY(${len(words) + 1 + len(extra_params)}) OR scope_ref IS NULL)"
         sql += f" ORDER BY id LIMIT ${len(words) + 1}"
 
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, *word_patterns, top_k)
+            rows = await conn.fetch(sql, *word_patterns, top_k, *extra_params)
             return [
                 MemorySearchResult(
                     memory=self._row_to_memory(r),
@@ -424,8 +496,9 @@ class SQLiteMemoryStore:
                 confidence REAL NOT NULL DEFAULT 0.7,
                 confidence_source TEXT NOT NULL DEFAULT 'contextual_mention',
                 dimensions TEXT NOT NULL DEFAULT '{}',
-                source_conversation TEXT,
-                source_turn INTEGER,
+                scope TEXT NOT NULL DEFAULT 'private',
+                scope_ref TEXT,
+                source TEXT,
                 extracted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 last_accessed TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 access_count INTEGER NOT NULL DEFAULT 0,
@@ -445,6 +518,12 @@ class SQLiteMemoryStore:
         await self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type)"
         )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_scope_ref ON memories(scope_ref)"
+        )
         await self._conn.commit()
 
     async def save(self, memory: Memory, embedding: list[float] | None = None) -> None:
@@ -460,16 +539,17 @@ class SQLiteMemoryStore:
         await self._conn.execute(
             """
             INSERT INTO memories (id, key, value, memory_type, stability_score,
-                confidence, confidence_source, dimensions, source_conversation,
-                source_turn, extracted_at, last_accessed, access_count,
+                confidence, confidence_source, dimensions, scope,
+                scope_ref, source, extracted_at, last_accessed, access_count,
                 conflicts_with, archived, raw_text, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 key = excluded.key, value = excluded.value,
                 memory_type = excluded.memory_type, stability_score = excluded.stability_score,
                 confidence = excluded.confidence, confidence_source = excluded.confidence_source,
-                dimensions = excluded.dimensions, source_conversation = excluded.source_conversation,
-                source_turn = excluded.source_turn, last_accessed = excluded.last_accessed,
+                dimensions = excluded.dimensions, scope = excluded.scope,
+                scope_ref = excluded.scope_ref, source = excluded.source,
+                last_accessed = excluded.last_accessed,
                 access_count = excluded.access_count, conflicts_with = excluded.conflicts_with,
                 archived = excluded.archived, raw_text = excluded.raw_text,
                 embedding = COALESCE(excluded.embedding, embedding)
@@ -483,8 +563,9 @@ class SQLiteMemoryStore:
                 data["confidence"],
                 data["confidence_source"],
                 json.dumps(data["dimensions"]),
-                data["source_conversation"],
-                data["source_turn"],
+                data["scope"],
+                data["scope_ref"],
+                data["source"],
                 data["extracted_at"].isoformat() if data["extracted_at"] else None,
                 data["last_accessed"].isoformat() if data["last_accessed"] else None,
                 data["access_count"],
@@ -509,7 +590,13 @@ class SQLiteMemoryStore:
             return None
         return self._row_to_memory(row)
 
-    async def get_by_key(self, key: str, include_archived: bool = False) -> list[Memory]:
+    async def get_by_key(
+        self,
+        key: str,
+        include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
+    ) -> list[Memory]:
         """Get all memories with a given key. Sorted by extracted_at desc."""
         if not self._conn:
             raise RuntimeError("Not connected. Call connect() first.")
@@ -518,6 +605,14 @@ class SQLiteMemoryStore:
         params: list = [key]
         if not include_archived:
             query += " AND archived = 0"
+        if scope_filter is not None:
+            placeholders = ",".join("?" for _ in scope_filter)
+            query += f" AND scope IN ({placeholders})"
+            params.extend(scope_filter)
+        if scope_refs is not None:
+            placeholders = ",".join("?" for _ in scope_refs)
+            query += f" AND (scope_ref IN ({placeholders}) OR scope_ref IS NULL)"
+            params.extend(scope_refs)
         query += " ORDER BY extracted_at DESC"
 
         cursor = await self._conn.execute(query, params)
@@ -568,6 +663,8 @@ class SQLiteMemoryStore:
         embedding: list[float],
         top_k: int = 10,
         include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
         """Semantic search by vector embedding.
 
@@ -579,11 +676,20 @@ class SQLiteMemoryStore:
             raise RuntimeError("Not connected. Call connect() first.")
 
         query = "SELECT * FROM memories WHERE embedding IS NOT NULL"
+        params: list = []
         if not include_archived:
             query += " AND archived = 0"
+        if scope_filter is not None:
+            placeholders = ",".join("?" for _ in scope_filter)
+            query += f" AND scope IN ({placeholders})"
+            params.extend(scope_filter)
+        if scope_refs is not None:
+            placeholders = ",".join("?" for _ in scope_refs)
+            query += f" AND (scope_ref IN ({placeholders}) OR scope_ref IS NULL)"
+            params.extend(scope_refs)
         query += f" LIMIT {top_k}"
 
-        cursor = await self._conn.execute(query)
+        cursor = await self._conn.execute(query, params)
         rows = await cursor.fetchall()
         return [
             MemorySearchResult(
@@ -599,6 +705,8 @@ class SQLiteMemoryStore:
         query: str,
         top_k: int = 10,
         include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
         """Keyword search across key and value fields."""
         if not self._conn:

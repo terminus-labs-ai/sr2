@@ -33,7 +33,8 @@ class TestMemoryExtractor:
         assert len(result.memories) == 2
         assert result.memories[0].key == "user.name"
         assert result.memories[1].value == "Anthropic"
-        assert result.source_conversation == "conv_1"
+        # source_conversation removed; ExtractionResult now uses source
+        assert result.source is None
 
     @pytest.mark.asyncio
     async def test_json_with_markdown_fences(self, store):

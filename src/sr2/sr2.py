@@ -338,7 +338,7 @@ class SR2:
         key: str,
         value: str,
         memory_type: str = "semi_stable",
-        source_conversation: str | None = None,
+        source: str | None = None,
     ) -> None:
         """Directly persist a memory, bypassing LLM extraction.
 
@@ -353,7 +353,7 @@ class SR2:
             memory_type=memory_type if memory_type in STABILITY_DEFAULTS else "semi_stable",
             stability_score=STABILITY_DEFAULTS.get(memory_type, 0.7),
             confidence_source="explicit_statement",
-            source_conversation=source_conversation,
+            source=source,
         )
         embedding = None
         if self._config.embed:

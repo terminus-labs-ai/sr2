@@ -161,6 +161,10 @@ pipeline:
 
   # Memory extraction settings
   memory:
+    # Scope configuration for memory isolation and sharing. When absent, all
+    # memories are accessible (backward compatible).
+    # scope:
+
     # Key prefix schema for memory extraction. Guides the LLM to use consistent,
     # dot-notation keys.
     key_schema: []
