@@ -255,6 +255,18 @@ class TestLoopRunStreaming:
 
         mock_llm.stream_complete = mock_stream_complete
 
+        complete_call_count = 0
+
+        async def mock_complete(**kwargs):
+            nonlocal complete_call_count
+            if complete_call_count < len(stream_responses):
+                resp = stream_responses[complete_call_count]
+                complete_call_count += 1
+                return resp
+            return stream_responses[-1]
+
+        mock_llm.complete = mock_complete
+
         mock_executor = AsyncMock()
         if tool_results:
             mock_executor.execute = AsyncMock(side_effect=tool_results)
@@ -396,7 +408,7 @@ class TestLoopRunStreaming:
     @pytest.mark.asyncio
     async def test_streaming_max_iterations(self):
         tool_calls = [{"id": "tc_1", "name": "loop_tool", "arguments": {}}]
-        responses = [_tool_response(tool_calls) for _ in range(3)]
+        responses = [_tool_response(tool_calls) for _ in range(3)] + [_text_response("Final answer")]
         loop, _, _ = self._make_loop(responses, max_iterations=3)
         events = []
 
@@ -409,7 +421,7 @@ class TestLoopRunStreaming:
         )
 
         assert result.stopped_reason == "max_iterations"
-        assert result.iterations == 3
+        assert result.iterations == 4  # 3 tool iterations + 1 synthesis
         end_events = [e for e in events if isinstance(e, StreamEndEvent)]
         assert len(end_events) == 1
 
@@ -437,3 +449,173 @@ class TestLoopRunStreaming:
             e for e in events if isinstance(e, (ToolStartEvent, ToolResultEvent))
         ]
         assert len(tool_events) == 0
+
+
+# ---------------------------------------------------------------------------
+# StreamRetractEvent retraction tests
+# ---------------------------------------------------------------------------
+
+from runtime.llm.streaming import StreamRetractEvent
+
+
+class TestStreamRetraction:
+    """Tests for hallucinated tool call retraction in streaming mode."""
+
+    def _make_loop(self, stream_responses, tool_results=None, max_iterations=25):
+        """Create an LLMLoop with a mocked stream_complete."""
+        mock_llm = AsyncMock()
+
+        call_count = 0
+
+        async def mock_stream_complete(**kwargs):
+            nonlocal call_count
+            resp = stream_responses[call_count]
+            call_count += 1
+            # Yield text content character by character
+            if resp.content:
+                for ch in resp.content:
+                    yield ch
+            mock_llm.last_stream_response = resp
+
+        mock_llm.stream_complete = mock_stream_complete
+
+        complete_call_count = 0
+
+        async def mock_complete(**kwargs):
+            nonlocal complete_call_count
+            if complete_call_count < len(stream_responses):
+                resp = stream_responses[complete_call_count]
+                complete_call_count += 1
+                return resp
+            return stream_responses[-1]
+
+        mock_llm.complete = mock_complete
+
+        mock_executor = AsyncMock()
+        if tool_results:
+            mock_executor.execute = AsyncMock(side_effect=tool_results)
+        else:
+            mock_executor.execute = AsyncMock(return_value="tool result")
+
+        loop = LLMLoop(
+            llm_client=mock_llm,
+            tool_executor=mock_executor,
+            max_iterations=max_iterations,
+        )
+        return loop, mock_llm, mock_executor
+
+    @pytest.mark.asyncio
+    async def test_hallucinated_tool_call_emits_retraction(self):
+        """When model hallucinates a tool call, StreamRetractEvent is emitted."""
+        hallucinated_json = '{"name": "fake_tool", "arguments": {"q": "test"}}'
+        responses = [
+            # First call: hallucinated tool call (content empty, raw_tool_call_text set)
+            LLMResponse(
+                content="",
+                tool_calls=[],
+                raw_tool_call_text=hallucinated_json,
+                input_tokens=100,
+                output_tokens=50,
+                model="test",
+            ),
+            # Second call: real text (retry without tools)
+            LLMResponse(
+                content="I cannot do that.",
+                tool_calls=[],
+                raw_tool_call_text="",
+                input_tokens=100,
+                output_tokens=30,
+                model="test",
+            ),
+        ]
+        loop, _, _ = self._make_loop(responses)
+        events = []
+
+        async def callback(event):
+            events.append(event)
+
+        result = await loop.run_streaming(
+            [{"role": "user", "content": "call fake_tool"}],
+            stream_callback=callback,
+        )
+
+        assert result.stopped_reason == "complete"
+        assert result.response_text == "I cannot do that."
+        assert result.iterations == 2
+
+        retract_events = [e for e in events if isinstance(e, StreamRetractEvent)]
+        assert len(retract_events) == 1
+        assert retract_events[0].retracted_text == hallucinated_json
+
+    @pytest.mark.asyncio
+    async def test_valid_tool_call_from_text_emits_retraction(self):
+        """When model emits a valid tool call as text, it should retract and execute."""
+        tool_json = '{"name": "search", "arguments": {"q": "test"}}'
+        tool_calls = [{"id": "reasoning_search", "name": "search", "arguments": {"q": "test"}}]
+        responses = [
+            # First call: valid tool call parsed from text (content empty, raw_tool_call_text + tool_calls set)
+            LLMResponse(
+                content="",
+                tool_calls=tool_calls,
+                raw_tool_call_text=tool_json,
+                input_tokens=100,
+                output_tokens=50,
+                model="test",
+            ),
+            # Second call: real text after tool execution
+            LLMResponse(
+                content="Found results.",
+                tool_calls=[],
+                raw_tool_call_text="",
+                input_tokens=100,
+                output_tokens=30,
+                model="test",
+            ),
+        ]
+        loop, _, _ = self._make_loop(responses, ["search result"])
+        events = []
+
+        async def callback(event):
+            events.append(event)
+
+        result = await loop.run_streaming(
+            [{"role": "user", "content": "search for test"}],
+            stream_callback=callback,
+        )
+
+        assert result.stopped_reason == "complete"
+        assert result.response_text == "Found results."
+
+        retract_events = [e for e in events if isinstance(e, StreamRetractEvent)]
+        assert len(retract_events) == 1
+        assert retract_events[0].retracted_text == tool_json
+
+    @pytest.mark.asyncio
+    async def test_no_retraction_when_no_raw_tool_call_text(self):
+        """Normal text responses should not trigger retraction."""
+        responses = [
+            LLMResponse(
+                content="Hello!",
+                tool_calls=[],
+                raw_tool_call_text="",
+                input_tokens=100,
+                output_tokens=10,
+                model="test",
+            ),
+        ]
+        loop, _, _ = self._make_loop(responses)
+        events = []
+
+        async def callback(event):
+            events.append(event)
+
+        result = await loop.run_streaming(
+            [{"role": "user", "content": "hi"}],
+            stream_callback=callback,
+        )
+
+        assert result.stopped_reason == "complete"
+        assert result.response_text == "Hello!"
+
+        retract_events = [e for e in events if isinstance(e, StreamRetractEvent)]
+        assert len(retract_events) == 0

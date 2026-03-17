@@ -291,6 +291,13 @@ class PipelineConfig(BaseModel):
         default_factory=list,
         description="Rules for transitioning between tool states.",
     )
+    tool_schema_max_tokens: int | None = Field(
+        default=None,
+        ge=100,
+        description="Max tokens to allocate for tool schemas. If set, schemas are truncated "
+        "to fit within this budget. None = no limit (all schemas sent as-is). "
+        "Truncation strategy: drop descriptions, then drop parameters, then drop entire tools.",
+    )
     degradation: DegradationConfig = Field(
         default_factory=DegradationConfig, description="Circuit breaker and degradation settings"
     )

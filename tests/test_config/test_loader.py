@@ -135,3 +135,68 @@ class TestCircularExtends:
         loader = ConfigLoader()
         with pytest.raises(ValueError, match="Circular config inheritance detected"):
             loader.load(str(a))
+
+
+class TestRootLevelPipelineFields:
+    """Test 9: Root-level PipelineConfig fields are extracted (not just from pipeline: dict)."""
+
+    def test_system_prompt_at_root_level(self, tmp_path):
+        """system_prompt defined at YAML root level should be extracted."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"system_prompt": "You are running autonomously..."}))
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.system_prompt == "You are running autonomously..."
+
+    def test_pipeline_dict_overrides_root_level(self, tmp_path):
+        """pipeline: dict values should override root-level values."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "system_prompt": "Root prompt",
+                    "pipeline": {"system_prompt": "Nested prompt"},
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.system_prompt == "Nested prompt"
+
+    def test_mixed_root_and_pipeline_fields(self, tmp_path):
+        """Root-level and pipeline: dict fields should merge correctly."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "system_prompt": "Root prompt",
+                    "pipeline": {"token_budget": 65536},
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.system_prompt == "Root prompt"
+        assert config.token_budget == 65536
+
+    def test_inheritance_with_root_level_fields(self, tmp_path):
+        """Root-level fields should work with inheritance chain."""
+        # Base config with system_prompt at root level
+        base = tmp_path / "base.yaml"
+        base.write_text(yaml.dump({"system_prompt": "Base prompt"}))
+
+        # Child config that extends and adds pipeline: dict
+        child = tmp_path / "child.yaml"
+        child.write_text(yaml.dump({"extends": "base.yaml", "pipeline": {"token_budget": 16000}}))
+
+        loader = ConfigLoader()
+        config = loader.load(str(child))
+
+        assert config.system_prompt == "Base prompt"
+        assert config.token_budget == 16000

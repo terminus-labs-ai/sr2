@@ -145,6 +145,10 @@ pipeline:
     #   trigger: agent_intent
     #   condition: ""
 
+  # Max tokens to allocate for tool schemas. If set, schemas are truncated to
+  # fit within this budget. None = no limit (all schemas sent as-is). Truncation
+  # strategy: drop descriptions, then drop parameters, then drop entire tools.
+  tool_schema_max_tokens: null
   # Circuit breaker and degradation settings
   degradation:
     # Number of consecutive failures before the circuit breaker opens. When

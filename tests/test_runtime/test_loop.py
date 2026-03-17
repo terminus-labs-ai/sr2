@@ -389,3 +389,85 @@ class TestLLMLoopWithToolMasking:
 
         passed_tools = mock_llm.complete.call_args.kwargs["tools"]
         assert len(passed_tools) == 2
+
+
+class TestMaxIterationsSynthesis:
+    """Tests for forced synthesis when max_iterations reached with pending tool calls."""
+
+    def _make_loop(self, llm_responses, tool_results=None, max_iterations=3):
+        mock_llm = AsyncMock()
+        mock_llm.complete = AsyncMock(side_effect=llm_responses)
+
+        mock_executor = AsyncMock()
+        if tool_results:
+            mock_executor.execute = AsyncMock(side_effect=tool_results)
+        else:
+            mock_executor.execute = AsyncMock(return_value="ok")
+
+        loop = LLMLoop(
+            llm_client=mock_llm, tool_executor=mock_executor, max_iterations=max_iterations
+        )
+        return loop, mock_llm, mock_executor
+
+    @pytest.mark.asyncio
+    async def test_structured_tool_calls_at_max_iter_forces_synthesis(self):
+        """When max_iterations is hit and the last response was a structured tool call
+        (has_tool_calls=True, content='', raw_tool_call_text=''), a final synthesis
+        call should be made so the user gets text, not an empty string."""
+        tool_calls = [{"id": "tc_1", "name": "search", "arguments": {}}]
+        # 3 iterations of tool calls, then synthesis response
+        responses = [
+            _tool_response(tool_calls) for _ in range(3)
+        ] + [_text_response("Here is my final answer.")]
+        loop, mock_llm, _ = self._make_loop(responses, max_iterations=3)
+
+        result = await loop.run([{"role": "user", "content": "find info"}])
+
+        assert result.stopped_reason == "max_iterations"
+        assert result.response_text == "Here is my final answer."
+        # 3 loop iterations + 1 synthesis call = 4 total LLM calls
+        assert mock_llm.complete.call_count == 4
+        # The synthesis call should have tools=None and tool_choice="none"
+        synthesis_call = mock_llm.complete.call_args_list[-1]
+        assert synthesis_call.kwargs.get("tools") is None
+        assert synthesis_call.kwargs.get("tool_choice") == "none"
+
+    @pytest.mark.asyncio
+    async def test_raw_tool_call_text_at_max_iter_forces_synthesis(self):
+        """Original behavior: raw_tool_call_text (XML-parsed) tool calls also
+        trigger synthesis at max_iterations."""
+        raw_response = LLMResponse(
+            content="",
+            tool_calls=[{"id": "tc_1", "name": "search", "arguments": {}}],
+            raw_tool_call_text="<tool_call>search</tool_call>",
+            input_tokens=100,
+            output_tokens=50,
+            model="test-model",
+        )
+        responses = [raw_response] * 3 + [_text_response("Synthesized.")]
+        loop, mock_llm, _ = self._make_loop(responses, max_iterations=3)
+
+        result = await loop.run([{"role": "user", "content": "go"}])
+
+        assert result.stopped_reason == "max_iterations"
+        assert result.response_text == "Synthesized."
+        assert mock_llm.complete.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_no_synthesis_when_last_response_has_content(self):
+        """If max_iterations is hit but last response already has content
+        (e.g., text + tool calls), no extra synthesis call is needed."""
+        tool_calls = [{"id": "tc_1", "name": "search", "arguments": {}}]
+        responses = [
+            _tool_response(tool_calls),
+            _tool_response(tool_calls),
+            _tool_response(tool_calls, content="I also have text"),
+        ]
+        loop, mock_llm, _ = self._make_loop(responses, max_iterations=3)
+
+        result = await loop.run([{"role": "user", "content": "go"}])
+
+        assert result.stopped_reason == "max_iterations"
+        assert result.response_text == "I also have text"
+        # No extra synthesis call — 3 iterations only
+        assert mock_llm.complete.call_count == 3

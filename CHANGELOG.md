@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - 2025-XX-XX
+## [0.1.0] - 2026-03-12
 
 Initial public release.
 
@@ -39,7 +39,7 @@ Initial public release.
 - Conflict resolution strategies: `latest_wins_archive`, `latest_wins_discard`, `keep_both`
 - Hybrid retrieval engine (keyword + semantic + recency/frequency boosts)
 - Dimensional matching (`best_fit`, `exact`, `fallback_to_generic`)
-- In-memory and PostgreSQL storage backends
+- Multiple storage backends: In-memory (testing), PostgreSQL (production), SQLite (lightweight)
 
 **Tool Masking**
 - Tool state machine with named states and conditional transitions
@@ -57,8 +57,15 @@ Initial public release.
 - Alert rule engine with configurable thresholds
 
 **Content Resolvers**
-- Built-in resolvers: `config`, `input`, `session`, `runtime`, `static_template`, `retrieval`, `mcp_resource`, `mcp_prompt`
+- Built-in resolvers: `config`, `input`, `session`, `runtime`, `static_template`, `retrieval`, `mcp_resource`, `mcp_prompt`, `intent_detection`, `preemptive_rotation`
 - Pluggable resolver registry for custom sources
+- Intent detection: Classify user messages to detect topic shifts for memory refresh
+- Pre-emptive rotation: Monitor token budget and proactively trigger context rotation
+
+**Tokenization**
+- Pluggable tokenizer interface with two implementations
+- Character-based heuristic tokenizer (fast, no dependencies)
+- Tiktoken-based accurate tokenizer (optional, for GPT models)
 
 **Agent Runtime** (optional, in `src/runtime/`)
 - Agentic LLM loop with LiteLLM
@@ -71,4 +78,4 @@ Initial public release.
 - Docker Compose development stack (agent, Ollama, Prometheus, Grafana, PostgreSQL)
 - GitHub Actions CI (unit tests, linting, integration tests, schema validation)
 - Ruff linting and formatting
-- 688 tests across 71 test files
+- 880+ tests across 95+ test files (added 38 new tests for Phase 1 features)

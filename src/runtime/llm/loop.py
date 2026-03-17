@@ -224,6 +224,25 @@ class LLMLoop:
                 active_tool_choice = "none"
 
         # Reached max iterations
+        # If last response had a tool call, force final synthesis without tools
+        if llm_response and (llm_response.raw_tool_call_text or (llm_response.has_tool_calls and not llm_response.content)):
+            logger.warning(
+                "Reached max iterations with pending tool call, forcing final synthesis"
+            )
+            try:
+                llm_response = await self._llm.complete(
+                    messages=messages,
+                    tools=None,
+                    tool_choice="none",
+                    model_config=resolved_config,
+                )
+                result.iterations += 1
+                result.total_input_tokens += llm_response.input_tokens
+                result.total_output_tokens += llm_response.output_tokens
+                result.cached_tokens += llm_response.cached_tokens
+            except Exception as e:
+                logger.error(f"Final synthesis call failed: {e}")
+        
         result.response_text = llm_response.content if llm_response else ""
         result.stopped_reason = "max_iterations"
         logger.warning(f"LLM loop reached max iterations ({self._max_iter})")
@@ -320,7 +339,7 @@ class LLMLoop:
             # If tool calls were parsed from streamed text (raw_tool_call_text
             # is set), the JSON was already sent to the user as TextDeltaEvents.
             # Retract it so the interface can clean up.
-            if llm_response.raw_tool_call_text and full_text:
+            if llm_response.raw_tool_call_text:
                 await stream_callback(
                     StreamRetractEvent(retracted_text=llm_response.raw_tool_call_text)
                 )
@@ -420,6 +439,26 @@ class LLMLoop:
                 active_tool_choice = "none"
 
         # Reached max iterations
+        # If last response had a tool call, force final synthesis without tools
+        if llm_response and (llm_response.raw_tool_call_text or (llm_response.has_tool_calls and not llm_response.content)):
+            logger.warning(
+                "Reached max iterations with pending tool call, forcing final synthesis"
+            )
+            try:
+                llm_response = await self._llm.complete(
+                    messages=messages,
+                    tools=None,
+                    tool_choice="none",
+                    model_config=resolved_config,
+                )
+                result.iterations += 1
+                result.total_input_tokens += llm_response.input_tokens
+                result.total_output_tokens += llm_response.output_tokens
+                result.cached_tokens += llm_response.cached_tokens
+                full_text = llm_response.content
+            except Exception as e:
+                logger.error(f"Final synthesis call failed: {e}")
+        
         result.response_text = full_text
         result.stopped_reason = "max_iterations"
         logger.warning(f"LLM streaming loop reached max iterations ({self._max_iter})")
