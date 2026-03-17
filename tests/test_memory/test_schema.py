@@ -80,14 +80,17 @@ class TestMemory:
             confidence=0.9,
             confidence_source="direct_answer",
             dimensions={"channel": "chat"},
-            source_conversation="conv_123",
-            source_turn=5,
+            scope="project",
+            scope_ref="sr2",
+            source="session:conv_123",
             archived=False,
             raw_text="I work at Anthropic",
         )
         assert mem.memory_type == "identity"
         assert mem.confidence_source == "direct_answer"
-        assert mem.source_conversation == "conv_123"
+        assert mem.scope == "project"
+        assert mem.scope_ref == "sr2"
+        assert mem.source == "session:conv_123"
 
 
 class TestMemorySearchResult:
@@ -118,9 +121,9 @@ class TestExtractionResult:
     def test_extraction_result(self):
         """ExtractionResult holds a list of memories."""
         mem = Memory(key="k", value="v")
-        result = ExtractionResult(memories=[mem], source_conversation="conv_1")
+        result = ExtractionResult(memories=[mem], source="session:conv_1")
         assert len(result.memories) == 1
-        assert result.source_conversation == "conv_1"
+        assert result.source == "session:conv_1"
 
 
 class TestConstants:

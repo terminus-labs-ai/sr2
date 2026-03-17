@@ -4,6 +4,7 @@ import math
 import time
 from datetime import UTC, datetime
 
+from sr2.config.models import MemoryScopeConfig
 from sr2.memory.schema import MemorySearchResult
 from sr2.memory.store import MemoryStore
 
@@ -22,10 +23,14 @@ class HybridRetriever:
         recency_weight: float = 0.2,
         semantic_weight: float = 0.5,
         keyword_weight: float = 0.2,
+        scope_config: MemoryScopeConfig | None = None,
+        current_context: dict | None = None,
     ):
         self._store = store
         self._embed = embedding_callable
         self._strategy = strategy
+        self._scope_config = scope_config
+        self._current_context = current_context
         self._top_k = top_k
         self._recency_decay = recency_decay_days
         self._weights = {
@@ -42,6 +47,23 @@ class HybridRetriever:
         self._empty_retrievals: int = 0
         # IDs of memories accessed in the last retrieve() call, for deferred touch
         self._pending_touch_ids: list[str] = []
+
+    def _build_scope_params(self) -> tuple[list[str] | None, list[str] | None]:
+        """Build scope_filter and scope_refs from config and context."""
+        if not self._scope_config:
+            return None, None
+
+        scope_filter = list(self._scope_config.default_read)
+        scope_refs: list[str] = []
+
+        if "private" in scope_filter and self._scope_config.agent_name:
+            scope_refs.append(f"agent:{self._scope_config.agent_name}")
+        if "project" in scope_filter:
+            project_id = (self._current_context or {}).get("project_id")
+            if project_id:
+                scope_refs.append(project_id)
+
+        return scope_filter, scope_refs if scope_refs else None
 
     async def retrieve(
         self,
@@ -61,16 +83,24 @@ class HybridRetriever:
         t0 = time.perf_counter()
         candidates: dict[str, MemorySearchResult] = {}
 
+        scope_filter, scope_refs = self._build_scope_params()
+
         # Semantic search
         if self._strategy in ("hybrid", "semantic") and self._embed:
             embedding = await self._embed(query)
-            semantic_results = await self._store.search_vector(embedding, top_k=k * 2)
+            semantic_results = await self._store.search_vector(
+                embedding, top_k=k * 2,
+                scope_filter=scope_filter, scope_refs=scope_refs,
+            )
             for r in semantic_results:
                 candidates[r.memory.id] = r
 
         # Keyword search
         if self._strategy in ("hybrid", "keyword"):
-            keyword_results = await self._store.search_keyword(query, top_k=k * 2)
+            keyword_results = await self._store.search_keyword(
+                query, top_k=k * 2,
+                scope_filter=scope_filter, scope_refs=scope_refs,
+            )
             for r in keyword_results:
                 if r.memory.id in candidates:
                     existing = candidates[r.memory.id]

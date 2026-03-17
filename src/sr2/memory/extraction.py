@@ -5,6 +5,7 @@ import logging
 import re
 
 from sr2.memory.schema import CONFIDENCE_SCORES, STABILITY_DEFAULTS, ExtractionResult, Memory
+from sr2.config.models import MemoryScopeConfig
 from sr2.memory.store import MemoryStore
 from sr2.normalization.normalizer import ResponseNormalizer
 
@@ -39,6 +40,7 @@ class MemoryExtractor:
         key_schema: list[dict] | None = None,
         max_memories_per_turn: int = 5,
         embed_callable=None,
+        scope_config: MemoryScopeConfig | None = None,
     ):
         """Args:
         llm_callable: async function(prompt: str) -> str.
@@ -49,12 +51,14 @@ class MemoryExtractor:
         embed_callable: optional async function(text: str) -> list[float].
                         When provided, embeddings are generated and stored
                         with each memory to enable semantic search.
+        scope_config: optional scope configuration for memory isolation.
         """
         self._llm = llm_callable
         self._store = store
         self._key_schema = key_schema or []
         self._max = max_memories_per_turn
         self._embed = embed_callable
+        self._scope_config = scope_config
         self._normalizer = ResponseNormalizer()
 
     async def extract(
@@ -62,19 +66,25 @@ class MemoryExtractor:
         conversation_turn: str,
         conversation_id: str | None = None,
         turn_number: int | None = None,
+        current_context: dict | None = None,
     ) -> ExtractionResult:
         """Extract memories from a conversation turn.
 
         1. Build extraction prompt (include key schema for guidance)
         2. Call LLM
         3. Parse and filter response
-        4. Deduplicate against existing store entries
-        5. Save novel memories (with embedding if available)
-        6. Return ExtractionResult
+        4. Stamp scope on each memory
+        5. Deduplicate against existing store entries
+        6. Save novel memories (with embedding if available)
+        7. Return ExtractionResult
         """
         prompt = self._build_prompt(conversation_turn)
         raw_response = await self._llm(prompt)
-        candidates = self._parse_response(raw_response, conversation_id, turn_number)
+        candidates = self._parse_response(raw_response)
+
+        # Stamp scope on each candidate
+        for mem in candidates:
+            self._stamp_scope(mem, current_context)
 
         saved: list[Memory] = []
         for mem in candidates:
@@ -90,11 +100,34 @@ class MemoryExtractor:
             await self._store.save(mem, embedding=embedding)
             saved.append(mem)
 
+        source = (current_context or {}).get("source") if current_context else None
         return ExtractionResult(
             memories=saved,
-            source_conversation=conversation_id,
-            source_turn=turn_number,
+            source=source,
         )
+
+    def _stamp_scope(self, memory: Memory, current_context: dict | None) -> None:
+        """Stamp scope fields on a memory based on scope_config."""
+        if not self._scope_config:
+            return
+
+        ctx = current_context or {}
+        if self._scope_config.default_write == "project":
+            project_id = ctx.get("project_id")
+            if project_id:
+                memory.scope = "project"
+                memory.scope_ref = project_id
+            else:
+                # Can't create unscoped shared memory — fall back to private
+                memory.scope = "private"
+                if self._scope_config.agent_name:
+                    memory.scope_ref = f"agent:{self._scope_config.agent_name}"
+        elif self._scope_config.default_write == "private":
+            memory.scope = "private"
+            if self._scope_config.agent_name:
+                memory.scope_ref = f"agent:{self._scope_config.agent_name}"
+
+        memory.source = ctx.get("source")
 
     async def _is_duplicate(self, mem: Memory) -> bool:
         """Return True if the store already has this exact key+value."""
@@ -137,8 +170,6 @@ Conversation turn:
     def _parse_response(
         self,
         raw: str,
-        conversation_id: str | None,
-        turn_number: int | None,
     ) -> list[Memory]:
         """Parse LLM JSON response into Memory objects, filtering noise."""
         cleaned = self._normalizer.normalize(raw)
@@ -207,8 +238,6 @@ Conversation turn:
                     stability_score=STABILITY_DEFAULTS.get(mem_type, 0.7),
                     confidence=CONFIDENCE_SCORES[conf_source],
                     confidence_source=conf_source,
-                    source_conversation=conversation_id,
-                    source_turn=turn_number,
                     raw_text=None,
                 )
             )

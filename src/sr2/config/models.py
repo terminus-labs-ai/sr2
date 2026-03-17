@@ -232,7 +232,29 @@ class KeySchemaEntry(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class MemoryScopeConfig(BaseModel):
+    """Scope configuration for memory isolation and sharing."""
+
+    default_read: list[Literal["private", "project"]] = Field(
+        default_factory=lambda: ["private"],
+        description="Which scopes to read from during retrieval.",
+    )
+    default_write: Literal["private", "project"] = Field(
+        default="private",
+        description="Default scope for newly extracted memories.",
+    )
+    agent_name: str | None = Field(
+        default=None,
+        description="Agent name for private memory isolation. Required for multi-agent setups.",
+    )
+
+
 class MemoryConfig(BaseModel):
+    scope: MemoryScopeConfig | None = Field(
+        default=None,
+        description="Scope configuration for memory isolation and sharing. "
+        "When absent, all memories are accessible (backward compatible).",
+    )
     key_schema: list[KeySchemaEntry] = Field(
         default_factory=list,
         description="Key prefix schema for memory extraction. Guides the LLM to use "

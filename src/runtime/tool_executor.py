@@ -95,7 +95,7 @@ class SaveMemoryTool:
             key=key,
             value=value,
             memory_type=memory_type,
-            source_conversation=session_id,
+            source=f"session:{session_id}" if session_id else None,
         )
         return f"Remembered: [{key}] = {value}"
 

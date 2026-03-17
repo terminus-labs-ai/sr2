@@ -60,12 +60,18 @@ class ConflictDetector:
         return conflicts
 
     async def _detect_key_conflicts(self, new: Memory) -> list[Conflict]:
-        """Find existing memories with the same key but different value."""
+        """Find existing memories with the same key but different value.
+
+        Conflicts only fire within the same scope (same scope + scope_ref).
+        """
         existing = await self._store.get_by_key(new.key, include_archived=False)
         conflicts = []
         for mem in existing:
             if mem.id == new.id:
                 continue  # Don't conflict with self
+            # Only conflict within the same scope
+            if mem.scope != new.scope or mem.scope_ref != new.scope_ref:
+                continue
             if mem.value.strip().lower() != new.value.strip().lower():
                 conflicts.append(
                     Conflict(

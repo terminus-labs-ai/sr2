@@ -19,6 +19,8 @@ class ResolverContext:
     trigger_input: Any
     session_id: str | None = None
     interface_type: str = ""
+    scope_config: Any = None  # MemoryScopeConfig | None
+    current_context: dict | None = None
 
 
 @dataclass
