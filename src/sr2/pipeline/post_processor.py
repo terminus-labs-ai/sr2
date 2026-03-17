@@ -48,8 +48,10 @@ class PostLLMProcessor:
         self,
         latest_turn: ConversationTurn,
         conversation_id: str | None = None,
+        current_context: dict | None = None,
     ) -> PipelineResult:
         """Run all post-LLM steps. Each step is independent — failures don't block others."""
+        self._current_context = current_context
         result = PipelineResult(config_used="post_llm")
         session_id = conversation_id or "default"
 
@@ -120,6 +122,7 @@ class PostLLMProcessor:
             conversation_turn=turn.content,
             conversation_id=conversation_id,
             turn_number=turn.turn_number,
+            current_context=self._current_context,
         )
         self.last_memories_extracted = len(extraction.memories)
         if self._detector and self._resolver:

@@ -227,7 +227,11 @@ class Agent:
         self._heartbeat_tools: list = []
         self._tool_executor.register(
             "save_memory",
-            SaveMemoryTool(self._sr2, session_resolver=lambda: self._current_session_id),
+            SaveMemoryTool(
+                self._sr2,
+                session_resolver=lambda: self._current_session_id,
+                context_resolver=lambda: self._build_current_context(),
+            ),
         )
 
         self._recall_memory_tool = RecallMemoryTool(
@@ -751,6 +755,17 @@ class Agent:
         return None
 
     # --- Internal helpers ---
+
+    def _build_current_context(self) -> dict | None:
+        """Build current_context dict from env vars for scope stamping."""
+        ctx: dict[str, str] = {}
+        project_id = os.environ.get("SR2_PROJECT_ID")
+        if project_id:
+            ctx["project_id"] = project_id
+        task_source = os.environ.get("SR2_TASK_SOURCE")
+        if task_source:
+            ctx["source"] = task_source
+        return ctx or None
 
     @staticmethod
     def _make_http_callable():

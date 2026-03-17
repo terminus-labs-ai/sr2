@@ -77,9 +77,10 @@ class SaveMemoryTool:
     the agent to remember something specific.
     """
 
-    def __init__(self, sr2_facade, session_resolver=None):
+    def __init__(self, sr2_facade, session_resolver=None, context_resolver=None):
         self._sr2 = sr2_facade
         self._session_resolver = session_resolver  # callable() -> current session_id
+        self._context_resolver = context_resolver  # callable() -> dict | None
 
     async def execute(
         self,
@@ -91,11 +92,13 @@ class SaveMemoryTool:
         if not key or not value:
             return "Error: 'key' and 'value' are required."
         session_id = self._session_resolver() if self._session_resolver else None
+        current_context = self._context_resolver() if self._context_resolver else None
         await self._sr2.save_memory(
             key=key,
             value=value,
             memory_type=memory_type,
             source=f"session:{session_id}" if session_id else None,
+            current_context=current_context,
         )
         return f"Remembered: [{key}] = {value}"
 
