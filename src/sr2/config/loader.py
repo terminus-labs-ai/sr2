@@ -15,11 +15,19 @@ class ConfigLoader:
         self._loading_chain = set()
         raw = self._load_with_inheritance(path)
         raw.pop("extends", None)
-        # Extract pipeline fields from the nested pipeline: key
-        pipeline_raw = raw.get("pipeline", {})
+
         pipeline_fields = PipelineConfig.model_fields
-        filtered = {k: v for k, v in pipeline_raw.items() if k in pipeline_fields and v is not None}
-        return PipelineConfig(**filtered)
+        # Root-level PipelineConfig fields (e.g. system_prompt at top level)
+        root_level = {k: v for k, v in raw.items() if k in pipeline_fields and v is not None}
+        # pipeline: dict fields override root-level
+        pipeline_raw = raw.get("pipeline", {})
+        nested_level = {
+            k: v for k, v in pipeline_raw.items() if k in pipeline_fields and v is not None
+        }
+
+        # Merge: root-level first, then pipeline: dict overrides
+        merged = {**root_level, **nested_level}
+        return PipelineConfig(**merged)
 
     def _load_with_inheritance(self, path: Path) -> dict:
         """Recursively load and merge configs following extends chain."""
