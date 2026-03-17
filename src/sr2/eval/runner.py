@@ -167,29 +167,22 @@ class EvalRunner:
         """
         # Coherence: Check if key facts appear in context
         coherence_hits = sum(
-            1 for fact in case.expected_key_facts
-            if fact.lower() in result.content.lower()
+            1 for fact in case.expected_key_facts if fact.lower() in result.content.lower()
         )
         coherence_score = (
-            coherence_hits / len(case.expected_key_facts)
-            if case.expected_key_facts
-            else 0.5
+            coherence_hits / len(case.expected_key_facts) if case.expected_key_facts else 0.5
         )
 
         # Decision preservation: Check if decisions appear
         decision_hits = sum(
-            1 for decision in case.expected_decisions
-            if decision.lower() in result.content.lower()
+            1 for decision in case.expected_decisions if decision.lower() in result.content.lower()
         )
         decision_preservation = (
-            decision_hits / len(case.expected_decisions)
-            if case.expected_decisions
-            else 0.5
+            decision_hits / len(case.expected_decisions) if case.expected_decisions else 0.5
         )
 
         # Token efficiency: Actual tokens vs expected
         expected_upper = int(case.expected_tokens * 1.1)
-        expected_lower = int(case.expected_tokens * 0.9)
         token_efficiency = 1.0
         if result.tokens <= expected_upper:
             token_efficiency = result.tokens / case.expected_tokens
@@ -244,5 +237,5 @@ class EvalRunner:
                 print(f"  Cache Hit Rate: {result.metrics.prefix_hit_rate:.1%}")
                 print(f"  Compilation: {result.metrics.compilation_time_ms:.0f}ms")
 
-        print(f"\nSummary: {passed}/{total} passed ({passed/total*100:.0f}%)")
+        print(f"\nSummary: {passed}/{total} passed ({passed / total * 100:.0f}%)")
         print("=" * 80)

@@ -801,10 +801,9 @@ class Agent:
             "skills": [],
         }
 
-
     def _truncate_tool_schemas(self, schemas: list[dict], max_tokens: int | None) -> list[dict]:
         """Truncate tool schemas to fit within token budget.
-        
+
         Strategy:
         1. Calculate tokens for each schema (simple JSON size estimate)
         2. If within budget, return all
@@ -812,29 +811,32 @@ class Agent:
         """
         if not max_tokens or not schemas:
             return schemas
-        
+
         import json
-        
+
         def estimate_tokens(obj):
             """Estimate tokens using character heuristic (1 token ≈ 4 chars)."""
             try:
-                s = json.dumps(obj, separators=(',', ':'))
+                s = json.dumps(obj, separators=(",", ":"))
                 return max(1, len(s) // 4)
-            except:
+            except Exception as e:
+                logger.warning(f"Agent Token estimation failed, returning default value. {e}")
                 return 100  # fallback
-        
+
         total_tokens = sum(estimate_tokens(s) for s in schemas)
         if total_tokens <= max_tokens:
             return schemas
-        
-        logger.info(f"Tool schemas exceed max_tokens budget: {total_tokens} > {max_tokens}, truncating")
-        
+
+        logger.info(
+            f"Tool schemas exceed max_tokens budget: {total_tokens} > {max_tokens}, truncating"
+        )
+
         truncated = []
         remaining_tokens = max_tokens
-        
+
         for schema in schemas:
             schema_tokens = estimate_tokens(schema)
-            
+
             if schema_tokens <= remaining_tokens:
                 truncated.append(schema)
                 remaining_tokens -= schema_tokens
@@ -842,9 +844,9 @@ class Agent:
                 # Try truncating this schema
                 truncated_schema = {
                     "name": schema.get("name"),
-                    "parameters": schema.get("parameters", {"type": "object"})
+                    "parameters": schema.get("parameters", {"type": "object"}),
                 }
-                
+
                 if estimate_tokens(truncated_schema) <= remaining_tokens:
                     truncated.append(truncated_schema)
                     remaining_tokens -= estimate_tokens(truncated_schema)
@@ -853,77 +855,78 @@ class Agent:
                     # Try minimal schema: name + empty params
                     min_schema = {
                         "name": schema.get("name"),
-                        "parameters": {"type": "object", "properties": {}}
+                        "parameters": {"type": "object", "properties": {}},
                     }
                     if estimate_tokens(min_schema) <= remaining_tokens:
                         truncated.append(min_schema)
                         remaining_tokens -= estimate_tokens(min_schema)
                         logger.debug(f"  Dropped parameters for {schema.get('name')}")
-        
-        if len(truncated) < len(schemas):
-            logger.warning(f"Tool schema truncation: {len(truncated)}/{len(schemas)} tools fit in {max_tokens} tokens")
-        
-        return truncated
 
+        if len(truncated) < len(schemas):
+            logger.warning(
+                f"Tool schema truncation: {len(truncated)}/{len(schemas)} tools fit in {max_tokens} tokens"
+            )
+
+        return truncated
 
     def _compress_tool_schema(self, schema: dict) -> dict:
         """Compress tool schema by removing redundant/verbose fields.
-        
+
         Keeps: name, description, parameters
         Removes from properties:
         - Descriptions for non-required parameters
         - minLength, maxLength, pattern, examples, title, default
-        
+
         Keeps enums and required list (compact and essential).
         Saves ~20% tokens without losing functionality.
         """
         if not schema:
             return schema
-        
+
         compressed = {
             "name": schema.get("name"),
             "description": schema.get("description", ""),
         }
-        
+
         params = schema.get("parameters", {})
         if params:
             compressed["parameters"] = {
                 "type": params.get("type", "object"),
             }
-            
+
             properties = params.get("properties", {})
             required = params.get("required", [])
-            
+
             if properties:
                 compressed_props = {}
-                
+
                 for prop_name, prop_def in properties.items():
                     # Minimal: type + enum (if present) + description (if required)
                     compressed_prop = {"type": prop_def.get("type", "string")}
-                    
+
                     # Keep enum - it's compact and critical
                     if "enum" in prop_def:
                         compressed_prop["enum"] = prop_def["enum"]
-                    
+
                     # Keep description ONLY for required params
                     if prop_name in required and "description" in prop_def:
                         compressed_prop["description"] = prop_def["description"]
-                    
+
                     # Drop: minLength, maxLength, pattern, examples, title, default
-                    
+
                     compressed_props[prop_name] = compressed_prop
-                
+
                 compressed["parameters"]["properties"] = compressed_props
-            
+
             # Keep required list - essential for LLM
             if required:
                 compressed["parameters"]["required"] = required
-        
+
         return compressed
 
     def _get_tool_schemas(self, interface_name: str | None = None) -> list[dict]:
         """Get tool schemas for the LLM call.
-        
+
         Args:
             interface_name: Name of the interface (for looking up pipeline config)
         """
@@ -974,15 +977,15 @@ class Agent:
 
         # Compress schemas to reduce token usage
         schemas = [self._compress_tool_schema(s) for s in schemas]
-        
+
         # Truncate schemas if tool_schema_max_tokens is set
         # Get pipeline config from SR2 which has the resolved config
-        if interface_name and hasattr(self._sr2, '_pipeline_configs'):
+        if interface_name and hasattr(self._sr2, "_pipeline_configs"):
             resolved_config = self._sr2._pipeline_configs.get(interface_name)
             max_tool_tokens = resolved_config.tool_schema_max_tokens if resolved_config else None
         else:
             max_tool_tokens = None
-        
+
         if max_tool_tokens:
             schemas = self._truncate_tool_schemas(schemas, max_tool_tokens)
 

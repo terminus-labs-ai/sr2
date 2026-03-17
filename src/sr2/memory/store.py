@@ -608,7 +608,7 @@ class SQLiteMemoryStore:
         if not words:
             words = [query.strip().lower()]
 
-        conditions = " OR ".join(f"key LIKE ? OR value LIKE ?" for _ in words)
+        conditions = " OR ".join("key LIKE ? OR value LIKE ?" for _ in words)
         params = [item for w in words for item in (f"%{w}%", f"%{w}%")]
 
         sql = f"SELECT * FROM memories WHERE ({conditions})"
