@@ -220,6 +220,9 @@ class Agent:
         self._current_session_id: str | None = None
         self._current_session_turns: list[dict] = []
 
+        # Pending post-processing task (awaited during shutdown)
+        self._pending_post_process: asyncio.Task | None = None
+
         # Heartbeat system
         self._heartbeat_config = self._agent_config.runtime.heartbeat
         self._heartbeat_scanner: object | None = None  # HeartbeatScanner
@@ -474,6 +477,13 @@ class Agent:
 
     async def shutdown(self) -> None:
         """Stop all plugins + MCP."""
+        # Await pending post-processing (memory extraction) before exit
+        if self._pending_post_process and not self._pending_post_process.done():
+            try:
+                await self._pending_post_process
+            except Exception as e:
+                logger.warning(f"Pending post-processing failed during shutdown: {e}")
+
         # Stop heartbeat scanner first
         if self._heartbeat_scanner:
             try:
@@ -607,14 +617,16 @@ class Agent:
         if trigger.session_lifecycle != "ephemeral":
             asyncio.create_task(self._sessions.save_session(session.id))
 
-        # Post-process async
-        asyncio.create_task(
+        # Post-process async (ephemeral agents only extract memories, skip compaction)
+        is_ephemeral = trigger.session_lifecycle == "ephemeral"
+        self._pending_post_process = asyncio.create_task(
             self._sr2.post_process(
                 turn_number=session.turn_count,
                 role="assistant",
                 content=loop_result.response_text or "",
                 session_id=session.id,
                 user_message=str(trigger.input_data) if trigger.input_data else None,
+                extract_only=is_ephemeral,
             )
         )
 
