@@ -372,3 +372,96 @@ class TestPromptVariants:
             scope_config=MemoryScopeConfig(default_write="private", agent_name="tali"),
         )
         assert error_marker in ext_task._build_prompt("test")
+
+
+class TestCommentaryBeforeJson:
+    """Tests for LLM responses with commentary text before JSON output."""
+
+    @pytest.mark.asyncio
+    async def test_thinking_commentary_with_brackets_in_prose(self, store):
+        """Commentary containing '[]' before the actual JSON output is handled."""
+        # This is the exact pattern that caused 0 memories in production:
+        # qwen3.5:9b outputs commentary mentioning "[]" then the real JSON
+        response = (
+            'The instructions say "[]", I should return an empty array.\n'
+            '\n'
+            '[]'
+        )
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("tool call with no useful content")
+
+        # Should parse successfully (empty array = 0 memories, not an error)
+        assert len(result.memories) == 0
+
+    @pytest.mark.asyncio
+    async def test_commentary_with_brackets_before_real_memories(self, store):
+        """Commentary with brackets before actual JSON memories still extracts."""
+        response = (
+            'Looking at this conversation, I found some facts.\n'
+            'The expected format is [{"key": "..."}] so here it is:\n'
+            '\n'
+            '[{"key": "user.name", "value": "Alice", "memory_type": "identity", '
+            '"confidence_source": "explicit_statement"}]'
+        )
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("I am Alice")
+
+        assert len(result.memories) == 1
+        assert result.memories[0].key == "user.name"
+        assert result.memories[0].value == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_thinking_tags_with_brackets_inside(self, store):
+        """Thinking tags containing [] are stripped before JSON extraction."""
+        response = (
+            '<think>\n'
+            'Nothing to extract. Return [].\n'
+            '</think>\n'
+            '[]'
+        )
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("empty turn")
+
+        assert len(result.memories) == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_llm_response(self, store):
+        """None/empty LLM response returns empty result without crashing."""
+
+        async def mock_llm(prompt: str) -> str:
+            return ""
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("test")
+
+        assert len(result.memories) == 0
+
+    @pytest.mark.asyncio
+    async def test_find_last_json_array_nested(self, store):
+        """_find_last_json_array handles nested arrays correctly."""
+        text = 'prefix [{"key": "a", "tags": ["x", "y"]}] suffix'
+        result = MemoryExtractor._find_last_json_array(text)
+        parsed = json.loads(result)
+        assert len(parsed) == 1
+        assert parsed[0]["key"] == "a"
+
+    @pytest.mark.asyncio
+    async def test_find_last_json_array_multiple_arrays(self, store):
+        """_find_last_json_array returns the last array, not the first."""
+        text = '[1, 2, 3] some text [{"key": "real", "value": "data"}]'
+        result = MemoryExtractor._find_last_json_array(text)
+        parsed = json.loads(result)
+        assert len(parsed) == 1
+        assert parsed[0]["key"] == "real"

@@ -90,9 +90,19 @@ class MemoryExtractor:
         6. Save novel memories (with embedding if available)
         7. Return ExtractionResult
         """
+        logger.debug(
+            "Memory extraction: turn length=%d chars, conversation_id=%s, turn=%s",
+            len(conversation_turn), conversation_id, turn_number,
+        )
         prompt = self._build_prompt(conversation_turn)
         raw_response = await self._llm(prompt)
+        logger.debug(
+            "Memory extraction: raw LLM response (%d chars): %.300s",
+            len(raw_response) if raw_response else 0,
+            raw_response[:300] if raw_response else "<None>",
+        )
         candidates = self._parse_response(raw_response)
+        logger.debug("Memory extraction: %d candidates after parsing", len(candidates))
 
         # Stamp scope on each candidate
         for mem in candidates:
@@ -107,8 +117,8 @@ class MemoryExtractor:
             if self._embed:
                 try:
                     embedding = await self._embed(f"{mem.key}: {mem.value}")
-                except Exception:
-                    pass  # save without embedding if generation fails
+                except Exception as e:
+                    logger.warning("Memory embedding failed for key=%s: %s", mem.key, e)
             await self._store.save(mem, embedding=embedding)
             saved.append(mem)
 
@@ -239,36 +249,76 @@ Max {self._max} memories. If nothing durable to extract, return [].
 Conversation turn:
 {conversation_turn}"""
 
+    @staticmethod
+    def _find_last_json_array(text: str) -> str | None:
+        """Find the last balanced JSON array in text by bracket matching.
+
+        LLMs typically place JSON output at the end of their response,
+        after any commentary. Searching from the end avoids picking up
+        quoted array literals (e.g. "[]") embedded in commentary text.
+        """
+        end = text.rfind("]")
+        if end == -1:
+            return None
+        depth = 0
+        for i in range(end, -1, -1):
+            if text[i] == "]":
+                depth += 1
+            elif text[i] == "[":
+                depth -= 1
+            if depth == 0:
+                return text[i : end + 1]
+        return None
+
     def _parse_response(
         self,
         raw: str,
     ) -> list[Memory]:
         """Parse LLM JSON response into Memory objects, filtering noise."""
+        if not raw:
+            logger.debug("Memory extraction: empty LLM response")
+            return []
+
         cleaned = self._normalizer.normalize(raw)
         cleaned = re.sub(r"</?json>", "", cleaned).strip()
 
+        items = None
+
+        # Strategy 1: direct parse (ideal case — cleaned text is valid JSON)
         try:
             items = json.loads(cleaned)
         except json.JSONDecodeError:
-            # LLM may have wrapped the array in prose; try to extract it
+            pass
+
+        # Strategy 2: extract the last JSON array in the text.
+        # LLMs often emit commentary before the JSON; searching from the
+        # end avoids confusing quoted "[]" in prose with the real output.
+        if items is None:
+            last_arr = self._find_last_json_array(cleaned)
+            if last_arr:
+                try:
+                    items = json.loads(last_arr)
+                except json.JSONDecodeError:
+                    pass
+
+        # Strategy 3: greedy first-to-last bracket match (legacy fallback)
+        if items is None:
             match = re.search(r"\[.*\]", cleaned, re.DOTALL)
             if match:
                 try:
                     items = json.loads(match.group())
                 except json.JSONDecodeError:
-                    logger.warning(
-                        "Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200]
-                    )
-                    return []
-            else:
-                logger.warning(
-                    "Memory extraction failed: LLM returned invalid JSON: %s", cleaned[:200]
-                )
-                return []
+                    pass
+
+        if items is None:
+            logger.warning(
+                "Memory extraction: LLM returned unparseable response: %.200s", cleaned
+            )
+            return []
 
         if not isinstance(items, list):
             logger.warning(
-                "Memory extraction failed: expected JSON array, got %s", type(items).__name__
+                "Memory extraction: expected JSON array, got %s", type(items).__name__
             )
             return []
 
