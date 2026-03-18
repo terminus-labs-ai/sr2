@@ -135,7 +135,7 @@ class MemoryExtractor:
         return any(e.value.strip().lower() == mem.value.strip().lower() for e in existing)
 
     def _build_prompt(self, conversation_turn: str) -> str:
-        """Build the extraction prompt."""
+        """Build the extraction prompt, scoped to project or private context."""
         schema_text = ""
         if self._key_schema:
             schema_text = "Keys MUST use one of these dot-notation prefixes:\n"
@@ -150,7 +150,31 @@ class MemoryExtractor:
                 "Format: <prefix>.<specific_attribute> in lowercase with dots, no spaces.\n"
             )
 
-        return f"""Extract durable, personal facts from this conversation turn.
+        is_project_scope = (
+            self._scope_config is not None
+            and self._scope_config.default_write == "project"
+        )
+
+        if is_project_scope:
+            return f"""Extract technical findings, decisions, patterns, constraints, and reusable knowledge from this conversation.
+Output ONLY a JSON array. No markdown, no explanation.
+Each object: {{"key": "...", "value": "...", "memory_type": "identity|semi_stable|dynamic", "confidence_source": "explicit_statement|direct_answer|contextual_mention|inferred|offhand"}}
+{schema_text}
+EXTRACT: Research conclusions, API specifications, architectural decisions, implementation patterns, limitations discovered, and recommendations.
+DO NOT EXTRACT:
+- Raw data dumps, step-by-step reasoning, or tool call details
+- Function names, search queries, or raw JSON/code
+- Transient stats (GitHub stars/forks, API counts, prices that change)
+- Empty, null, or placeholder values
+- Information that only makes sense in the context of this specific task
+- Restatements of something already obvious from context
+
+Max {self._max} memories. If nothing durable to extract, return [].
+
+Conversation turn:
+{conversation_turn}"""
+        else:
+            return f"""Extract durable, personal facts from this conversation turn.
 Output ONLY a JSON array. No markdown, no explanation.
 Each object: {{"key": "...", "value": "...", "memory_type": "identity|semi_stable|dynamic", "confidence_source": "explicit_statement|direct_answer|contextual_mention|inferred|offhand"}}
 {schema_text}
@@ -173,6 +197,7 @@ Conversation turn:
     ) -> list[Memory]:
         """Parse LLM JSON response into Memory objects, filtering noise."""
         cleaned = self._normalizer.normalize(raw)
+        cleaned = re.sub(r"</?json>", "", cleaned).strip()
 
         try:
             items = json.loads(cleaned)
