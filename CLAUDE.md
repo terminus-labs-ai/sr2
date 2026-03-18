@@ -38,6 +38,15 @@ configs/defaults.yaml → agent.yaml → interfaces/*.yaml
 ```
 All behavior is config-driven (YAML). Zero hardcoded context logic.
 
+## Fresh Environment Setup
+
+For setting up EDI on a new machine, see **SETUP.md**. Quick summary:
+- **Docker (AMD GPU):** `docker compose up` then `docker exec ollama ollama pull llama3.1:8b llama3.2:3b`
+- **Docker (NVIDIA/CPU):** `docker compose -f docker-compose.nvidia.yaml up` then pull models
+- **Local dev:** Python 3.12+, PostgreSQL with pgvector, Ollama with `llama3.1:8b` + `llama3.2:3b`
+- **Embeddings:** `OPENAI_API_KEY` in `.env` for `text-embedding-3-small` (optional, needed for memory retrieval)
+- **MCP servers:** Optional. Require Node.js 20+ for stdio transport.
+
 ## Build & Run
 
 ```bash
@@ -66,7 +75,8 @@ sr2-agent configs/agents/edi --single-shot task_runner "implement auth"
 echo "long prompt" | sr2-agent configs/agents/edi --single-shot task_runner
 
 # Docker (full stack: agent + Ollama + Prometheus + Grafana + PostgreSQL)
-docker compose up
+docker compose up                                    # AMD GPU
+docker compose -f docker-compose.nvidia.yaml up      # NVIDIA GPU / CPU
 ```
 
 ## Code Conventions
