@@ -49,8 +49,16 @@ class PostLLMProcessor:
         latest_turn: ConversationTurn,
         conversation_id: str | None = None,
         current_context: dict | None = None,
+        extract_only: bool = False,
     ) -> PipelineResult:
-        """Run all post-LLM steps. Each step is independent — failures don't block others."""
+        """Run all post-LLM steps. Each step is independent — failures don't block others.
+
+        Args:
+            extract_only: When True, only run memory extraction (skip compaction
+                and summarization). Used by ephemeral agents that run one task
+                and exit — they need to persist memories but don't need
+                conversation management.
+        """
         self._current_context = current_context
         result = PipelineResult(config_used="post_llm")
         session_id = conversation_id or "default"
@@ -80,21 +88,22 @@ class PostLLMProcessor:
             conversation_id,
         )
 
-        # 4. Compaction
-        await self._run_stage(
-            result,
-            "compaction",
-            self._run_compaction,
-            session_id,
-        )
+        if not extract_only:
+            # 4. Compaction
+            await self._run_stage(
+                result,
+                "compaction",
+                self._run_compaction,
+                session_id,
+            )
 
-        # 5. Summarization
-        await self._run_stage(
-            result,
-            "summarization",
-            self._run_summarization,
-            session_id,
-        )
+            # 5. Summarization
+            await self._run_stage(
+                result,
+                "summarization",
+                self._run_summarization,
+                session_id,
+            )
 
         return result
 

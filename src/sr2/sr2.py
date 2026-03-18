@@ -335,6 +335,7 @@ class SR2:
         session_id: str,
         user_message: str | None = None,
         current_context: dict | None = None,
+        extract_only: bool = False,
     ) -> None:
         """Fire-and-forget post-LLM processing (memory extraction, compaction).
 
@@ -342,6 +343,9 @@ class SR2:
         prepended to content so the extractor sees the full exchange — this is
         critical for capturing explicit "remember X" commands that only appear
         in the user's message, not in the assistant's reply.
+
+        extract_only: When True, only run memory extraction (skip compaction
+            and summarization). Used by ephemeral agents.
         """
         try:
             extract_content = content
@@ -363,7 +367,9 @@ class SR2:
                 if _src:
                     ctx["source"] = _src
                 ctx = ctx or None
-            await self._post_processor.process(turn, session_id, current_context=ctx)
+            await self._post_processor.process(
+                turn, session_id, current_context=ctx, extract_only=extract_only,
+            )
         except Exception as e:
             logger.warning(f"Post-processing failed: {e}")
 
