@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import re
 
 from sr2.memory.schema import CONFIDENCE_SCORES, STABILITY_DEFAULTS, ExtractionResult, Memory
@@ -26,6 +27,17 @@ _JSON_VALUE = re.compile(r"^\s*[\[{]")
 _TRANSIENT_KEYS = re.compile(
     r"^(forks|stars|contributors|license|sla_\w+|c\d+|"
     r"number_of_users_\w+|price_free|premium_plan_pricing)$",
+    re.IGNORECASE,
+)
+
+# Keys that start with "files_to_modify" — too task-specific
+_TASK_SPECIFIC_KEYS = re.compile(r"^files_to_modify", re.IGNORECASE)
+
+# Keys containing error/failure indicators paired with operational values
+_ERROR_ARTIFACT_KEYS = re.compile(r"(failure|error|fix_pattern)", re.IGNORECASE)
+_ERROR_ARTIFACT_VALUES = re.compile(
+    r"(task metadata|dispatcher|validation error|tool error|"
+    r"task.?fail|processing error|galaxy.?map.*metadata)",
     re.IGNORECASE,
 )
 
@@ -134,8 +146,13 @@ class MemoryExtractor:
         existing = await self._store.get_by_key(mem.key, include_archived=False)
         return any(e.value.strip().lower() == mem.value.strip().lower() for e in existing)
 
+    @staticmethod
+    def _is_task_runner_mode() -> bool:
+        """Detect if running in task_runner/single-shot mode."""
+        return bool(os.environ.get("SR2_TASK_SOURCE"))
+
     def _build_prompt(self, conversation_turn: str) -> str:
-        """Build the extraction prompt, scoped to project or private context."""
+        """Build the extraction prompt, scoped to project, task, or private context."""
         schema_text = ""
         if self._key_schema:
             schema_text = "Keys MUST use one of these dot-notation prefixes:\n"
@@ -150,10 +167,16 @@ class MemoryExtractor:
                 "Format: <prefix>.<specific_attribute> in lowercase with dots, no spaces.\n"
             )
 
+        # Shared rule: never extract own execution errors
+        do_not_extract_errors = """\
+- Errors, failures, or issues encountered during YOUR OWN execution (tool failures, validation errors, task processing errors, file not found errors). These are transient operational issues, not durable knowledge.
+- Debugging steps you took to resolve your own errors
+- Task metadata or dispatcher behavior observations"""
+
         is_project_scope = (
-            self._scope_config is not None
-            and self._scope_config.default_write == "project"
+            self._scope_config is not None and self._scope_config.default_write == "project"
         )
+        is_private_task_runner = not is_project_scope and self._is_task_runner_mode()
 
         if is_project_scope:
             return f"""Extract technical findings, decisions, patterns, constraints, and reusable knowledge from this conversation.
@@ -168,6 +191,30 @@ DO NOT EXTRACT:
 - Empty, null, or placeholder values
 - Information that only makes sense in the context of this specific task
 - Restatements of something already obvious from context
+{do_not_extract_errors}
+
+Max {self._max} memories. If nothing durable to extract, return [].
+
+Conversation turn:
+{conversation_turn}"""
+        elif is_private_task_runner:
+            return f"""Extract reusable implementation patterns and technical decisions from this task.
+Output ONLY a JSON array. No markdown, no explanation.
+Each object: {{"key": "...", "value": "...", "memory_type": "identity|semi_stable|dynamic", "confidence_source": "explicit_statement|direct_answer|contextual_mention|inferred|offhand"}}
+{schema_text}
+EXTRACT: Focus on:
+- Patterns that would help with FUTURE tasks (not just this one)
+- Coding conventions discovered in the codebase
+- Architectural patterns that affect how changes should be made
+- Gotchas or non-obvious behaviors found during implementation
+
+DO NOT EXTRACT:
+- File paths, class names, or function names from this specific task
+- Repository names or filesystem locations (the task already provides these)
+- Generic language or framework facts (e.g., 'codebase uses Python')
+- Project names or ownership information
+- Anything that's only relevant to THIS task and won't help future tasks
+{do_not_extract_errors}
 
 Max {self._max} memories. If nothing durable to extract, return [].
 
@@ -185,6 +232,7 @@ DO NOT EXTRACT:
 - Empty, null, or placeholder values
 - Temporary task statuses that will be irrelevant next session (e.g. "task is in progress")
 - Restatements of something already obvious from context
+{do_not_extract_errors}
 
 Max {self._max} memories. If nothing durable to extract, return [].
 
@@ -241,6 +289,14 @@ Conversation turn:
 
             # Drop keys that are always transient/low-value
             if _TRANSIENT_KEYS.match(key):
+                continue
+
+            # Drop task-specific keys (e.g. files_to_modify.*)
+            if _TASK_SPECIFIC_KEYS.match(key):
+                continue
+
+            # Drop error/failure keys whose values reference operational artifacts
+            if _ERROR_ARTIFACT_KEYS.search(key) and _ERROR_ARTIFACT_VALUES.search(value):
                 continue
 
             # Drop values that are raw JSON blobs

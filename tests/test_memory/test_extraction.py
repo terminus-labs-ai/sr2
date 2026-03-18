@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from sr2.config.models import MemoryScopeConfig
 from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.store import InMemoryMemoryStore
 
@@ -19,16 +20,30 @@ class TestMemoryExtractor:
     @pytest.mark.asyncio
     async def test_valid_json_response(self, store):
         """Valid JSON response extracts correct number of memories."""
-        response = json.dumps([
-            {"key": "user.name", "value": "Alice", "memory_type": "identity", "confidence_source": "explicit_statement"},
-            {"key": "user.employer", "value": "Anthropic", "memory_type": "identity", "confidence_source": "direct_answer"},
-        ])
+        response = json.dumps(
+            [
+                {
+                    "key": "user.name",
+                    "value": "Alice",
+                    "memory_type": "identity",
+                    "confidence_source": "explicit_statement",
+                },
+                {
+                    "key": "user.employer",
+                    "value": "Anthropic",
+                    "memory_type": "identity",
+                    "confidence_source": "direct_answer",
+                },
+            ]
+        )
 
         async def mock_llm(prompt: str) -> str:
             return response
 
         extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
-        result = await extractor.extract("I'm Alice and I work at Anthropic", conversation_id="conv_1", turn_number=1)
+        result = await extractor.extract(
+            "I'm Alice and I work at Anthropic", conversation_id="conv_1", turn_number=1
+        )
 
         assert len(result.memories) == 2
         assert result.memories[0].key == "user.name"
@@ -53,6 +68,7 @@ class TestMemoryExtractor:
     @pytest.mark.asyncio
     async def test_malformed_json(self, store):
         """Malformed JSON returns empty ExtractionResult."""
+
         async def mock_llm(prompt: str) -> str:
             return "not valid json at all {"
 
@@ -77,12 +93,14 @@ class TestMemoryExtractor:
     @pytest.mark.asyncio
     async def test_items_missing_key_or_value_skipped(self, store):
         """Items missing key or value are skipped."""
-        response = json.dumps([
-            {"key": "user.name", "value": "Alice"},
-            {"key": "no_value"},
-            {"value": "no_key"},
-            {"random": "data"},
-        ])
+        response = json.dumps(
+            [
+                {"key": "user.name", "value": "Alice"},
+                {"key": "no_value"},
+                {"value": "no_key"},
+                {"random": "data"},
+            ]
+        )
 
         async def mock_llm(prompt: str) -> str:
             return response
@@ -96,9 +114,7 @@ class TestMemoryExtractor:
     @pytest.mark.asyncio
     async def test_invalid_memory_type_defaults(self, store):
         """Invalid memory_type defaults to semi_stable."""
-        response = json.dumps([
-            {"key": "k", "value": "v", "memory_type": "invalid_type"}
-        ])
+        response = json.dumps([{"key": "k", "value": "v", "memory_type": "invalid_type"}])
 
         async def mock_llm(prompt: str) -> str:
             return response
@@ -130,7 +146,10 @@ class TestMemoryExtractor:
     async def test_build_prompt_includes_key_schema(self, store):
         """_build_prompt() includes key schema when provided."""
         schema = [
-            {"prefix": "user.identity", "examples": ["user.identity.name", "user.identity.employer"]},
+            {
+                "prefix": "user.identity",
+                "examples": ["user.identity.name", "user.identity.employer"],
+            },
         ]
 
         async def mock_llm(prompt: str) -> str:
@@ -159,6 +178,7 @@ class TestMemoryExtractor:
     @pytest.mark.asyncio
     async def test_empty_conversation(self, store):
         """Empty conversation turn → LLM returns [] → empty result."""
+
         async def mock_llm(prompt: str) -> str:
             return "[]"
 
@@ -166,3 +186,189 @@ class TestMemoryExtractor:
         result = await extractor.extract("")
 
         assert len(result.memories) == 0
+
+
+class TestNoiseFilters:
+    """Tests for extraction noise filters."""
+
+    @pytest.mark.asyncio
+    async def test_files_to_modify_key_filtered(self, store):
+        """Keys starting with files_to_modify are dropped."""
+        response = json.dumps(
+            [
+                {
+                    "key": "files_to_modify.task_failure",
+                    "value": "dispatcher/core/dispatcher.py lines 223-245",
+                },
+                {"key": "user.name", "value": "Alice"},
+            ]
+        )
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("test")
+
+        assert len(result.memories) == 1
+        assert result.memories[0].key == "user.name"
+
+    @pytest.mark.asyncio
+    async def test_error_key_with_operational_value_filtered(self, store):
+        """Error/failure keys referencing operational artifacts are dropped."""
+        response = json.dumps(
+            [
+                {
+                    "key": "research.task_failure_root_cause",
+                    "value": "Task failure details exist in Galaxy Map metadata",
+                },
+                {
+                    "key": "decision.error_extraction",
+                    "value": "Extract error fields from task metadata",
+                },
+                {"key": "pattern.error_handling", "value": "Use circuit breakers for resilience"},
+            ]
+        )
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("test")
+
+        # Only the legitimate error_handling pattern survives
+        assert len(result.memories) == 1
+        assert result.memories[0].key == "pattern.error_handling"
+
+    @pytest.mark.asyncio
+    async def test_error_key_with_domain_value_kept(self, store):
+        """Error keys with genuine domain knowledge values are kept."""
+        response = json.dumps(
+            [
+                {
+                    "key": "pattern.error_handling",
+                    "value": "Use retry with exponential backoff for HTTP 429",
+                },
+            ]
+        )
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("test")
+
+        assert len(result.memories) == 1
+
+
+class TestPromptVariants:
+    """Tests for extraction prompt selection logic."""
+
+    @pytest.mark.asyncio
+    async def test_project_scope_prompt(self, store):
+        """Project scope uses project extraction prompt with error rules."""
+        scope_config = MemoryScopeConfig(default_write="project", agent_name="liara")
+
+        async def mock_llm(prompt: str) -> str:
+            return "[]"
+
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm,
+            store=store,
+            scope_config=scope_config,
+        )
+        prompt = extractor._build_prompt("test turn")
+
+        assert "technical findings" in prompt
+        assert "YOUR OWN execution" in prompt
+        assert "Task metadata or dispatcher" in prompt
+
+    @pytest.mark.asyncio
+    async def test_private_interactive_prompt(self, store, monkeypatch):
+        """Private scope without SR2_TASK_SOURCE uses personal facts prompt."""
+        monkeypatch.delenv("SR2_TASK_SOURCE", raising=False)
+        scope_config = MemoryScopeConfig(default_write="private", agent_name="miranda")
+
+        async def mock_llm(prompt: str) -> str:
+            return "[]"
+
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm,
+            store=store,
+            scope_config=scope_config,
+        )
+        prompt = extractor._build_prompt("test turn")
+
+        assert "personal facts" in prompt.lower()
+        assert "YOUR OWN execution" in prompt
+
+    @pytest.mark.asyncio
+    async def test_task_runner_prompt(self, store, monkeypatch):
+        """Private scope + SR2_TASK_SOURCE uses task runner extraction prompt."""
+        monkeypatch.setenv("SR2_TASK_SOURCE", "gm_task:GM-99")
+        scope_config = MemoryScopeConfig(default_write="private", agent_name="tali")
+
+        async def mock_llm(prompt: str) -> str:
+            return "[]"
+
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm,
+            store=store,
+            scope_config=scope_config,
+        )
+        prompt = extractor._build_prompt("test turn")
+
+        assert "reusable implementation patterns" in prompt.lower()
+        assert "FUTURE tasks" in prompt
+        assert "File paths, class names" in prompt
+        assert "YOUR OWN execution" in prompt
+        # Should NOT contain personal facts language
+        assert "personal facts" not in prompt.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_scope_config_uses_personal_prompt(self, store, monkeypatch):
+        """No scope config defaults to personal facts prompt."""
+        monkeypatch.delenv("SR2_TASK_SOURCE", raising=False)
+
+        async def mock_llm(prompt: str) -> str:
+            return "[]"
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        prompt = extractor._build_prompt("test turn")
+
+        assert "personal facts" in prompt.lower()
+
+    @pytest.mark.asyncio
+    async def test_all_prompts_include_error_rules(self, store, monkeypatch):
+        """All three prompt variants include the execution error rules."""
+
+        async def mock_llm(prompt: str) -> str:
+            return "[]"
+
+        error_marker = "YOUR OWN execution"
+
+        # Project scope
+        ext_project = MemoryExtractor(
+            llm_callable=mock_llm,
+            store=store,
+            scope_config=MemoryScopeConfig(default_write="project", agent_name="liara"),
+        )
+        assert error_marker in ext_project._build_prompt("test")
+
+        # Private interactive
+        monkeypatch.delenv("SR2_TASK_SOURCE", raising=False)
+        ext_private = MemoryExtractor(
+            llm_callable=mock_llm,
+            store=store,
+            scope_config=MemoryScopeConfig(default_write="private", agent_name="miranda"),
+        )
+        assert error_marker in ext_private._build_prompt("test")
+
+        # Task runner
+        monkeypatch.setenv("SR2_TASK_SOURCE", "gm_task:GM-100")
+        ext_task = MemoryExtractor(
+            llm_callable=mock_llm,
+            store=store,
+            scope_config=MemoryScopeConfig(default_write="private", agent_name="tali"),
+        )
+        assert error_marker in ext_task._build_prompt("test")
