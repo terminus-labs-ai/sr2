@@ -988,6 +988,11 @@ class Agent:
         # Add recall_memory tool schema
         if hasattr(self, "_recall_memory_tool"):
             schemas.append(self._recall_memory_tool.tool_definition)
+        # Add save_memory tool schema
+        if hasattr(self, "_tool_executor") and self._tool_executor.has("save_memory"):
+            save_tool = self._tool_executor._handlers["save_memory"]
+            if hasattr(save_tool, "tool_definition"):
+                schemas.append(save_tool.tool_definition)
         # Add tool_definitions from agent.yaml (e.g. post_to_session)
         for tool_def in self._agent_yaml.get("tool_definitions", []):
             properties = {}
