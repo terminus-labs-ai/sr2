@@ -103,6 +103,41 @@ class SaveMemoryTool:
         return f"Remembered: [{key}] = {value}"
 
 
+
+    @property
+    def tool_definition(self) -> dict:
+        return {
+            "name": "save_memory",
+            "description": (
+                "Save a finding or decision to shared project memory. "
+                "Use this to store research results, architectural decisions, "
+                "or other durable knowledge that other agents should access."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": (
+                            "Dot-notation key like 'research.slowapi_features' or "
+                            "'decision.recommended_library'"
+                        ),
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "The content to remember (be specific and substantive)",
+                    },
+                    "memory_type": {
+                        "type": "string",
+                        "enum": ["identity", "semi_stable", "dynamic"],
+                        "description": "How stable this memory is. Default: semi_stable",
+                    },
+                },
+                "required": ["key", "value"],
+            },
+        }
+
+
 class PostToSessionTool:
     """Built-in tool that writes a message to a named session.
 
