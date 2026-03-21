@@ -117,8 +117,8 @@ class MemoryExtractor:
             if self._embed:
                 try:
                     embedding = await self._embed(f"{mem.key}: {mem.value}")
-                except Exception as e:
-                    logger.warning("Memory embedding failed for key=%s: %s", mem.key, e)
+                except Exception:
+                    logger.error("Memory embedding failed for key=%s", mem.key, exc_info=True)
             await self._store.save(mem, embedding=embedding)
             saved.append(mem)
 

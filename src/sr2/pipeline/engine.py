@@ -240,8 +240,9 @@ class PipelineEngine:
                     resolved.append(content)
                 except Exception as e:
                     if item.optional:
-                        logger.debug(
-                            f"Optional item '{item.key}' in layer '{layer.name}' failed: {e}"
+                        logger.error(
+                            "Optional item %s in layer %s failed",
+                            item.key, layer.name, exc_info=True,
                         )
                         continue
                     had_required_failure = True

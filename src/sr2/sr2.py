@@ -370,8 +370,8 @@ class SR2:
             await self._post_processor.process(
                 turn, session_id, current_context=ctx, extract_only=extract_only,
             )
-        except Exception as e:
-            logger.warning(f"Post-processing failed: {e}")
+        except Exception:
+            logger.error("Post-processing failed", exc_info=True)
 
     async def save_memory(
         self,
@@ -406,7 +406,7 @@ class SR2:
             try:
                 embedding = await self._config.embed(f"{key}: {value}")
             except Exception:
-                pass
+                logger.error("Embedding failed for save_memory key=%s", key, exc_info=True)
         await self._memory_store.save(mem, embedding=embedding)
 
     async def get_memory_store_size(self) -> int:
@@ -414,6 +414,7 @@ class SR2:
         try:
             return await self._memory_store.count()
         except Exception:
+            logger.error("Failed to get memory store size", exc_info=True)
             return 0
 
     def set_memory_store(self, store) -> None:
@@ -564,7 +565,7 @@ class SR2:
             store_size = await self._memory_store.count()
             extra[MetricNames.MEMORY_STORE_SIZE] = float(store_size)
         except Exception:
-            pass
+            logger.error("Failed to collect memory store size metric", exc_info=True)
 
         # --- Retrieval metrics ---
         if self._retriever._total_retrievals > 0:

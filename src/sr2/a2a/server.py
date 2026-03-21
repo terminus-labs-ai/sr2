@@ -86,7 +86,7 @@ class A2AServerAdapter:
                 },
             )
         except Exception as e:
-            logger.error(f"A2A message handling failed: {e}")
+            logger.error("A2A message handling failed", exc_info=True)
             return A2AResponse(
                 task_id=request.task_id,
                 status="failed",
