@@ -1,4 +1,7 @@
+import logging
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 DegradationLevel = Literal[
     "full",
@@ -31,7 +34,16 @@ class DegradationLadder:
         """Move one step down the ladder. Returns new level."""
         idx = DEGRADATION_ORDER.index(self._level)
         if idx < len(DEGRADATION_ORDER) - 1:
+            old_level = self._level
             self._level = DEGRADATION_ORDER[idx + 1]
+            logger.warning(
+                "Degradation ladder stepped down: %s -> %s", old_level, self._level,
+            )
+        else:
+            logger.warning(
+                "Degradation ladder already at lowest level %r, cannot degrade further",
+                self._level,
+            )
         return self._level
 
     def reset(self) -> None:

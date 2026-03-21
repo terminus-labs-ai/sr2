@@ -1,4 +1,8 @@
+import logging
+
 from sr2.config.models import PipelineConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigValidationError(Exception):
@@ -70,5 +74,8 @@ def validate_config(config: PipelineConfig) -> list[str]:
 
     if errors:
         raise ConfigValidationError(errors)
+
+    for w in warnings:
+        logger.warning("Config validation: %s", w)
 
     return warnings

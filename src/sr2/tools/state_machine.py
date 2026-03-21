@@ -1,7 +1,11 @@
 """Tool state machine managing availability transitions during agent execution."""
 
+import logging
+
 from sr2.tools.masking import get_masking_strategy
 from sr2.tools.models import ToolManagementConfig, ToolStateConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ToolStateMachine:
@@ -61,6 +65,10 @@ class ToolStateMachine:
             if t.from_state != "any" and t.from_state != self._current_state_name:
                 continue
             if t.to_state not in self._states:
+                logger.warning(
+                    "Tool transition rule %r -> %r references non-existent state %r, skipping",
+                    t.from_state, t.to_state, t.to_state,
+                )
                 continue
             if t.condition and not self._evaluate_condition(t.condition, context):
                 continue

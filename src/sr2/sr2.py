@@ -239,6 +239,10 @@ class SR2:
             if pipeline_path and pipeline_path in self._router.registered_interfaces:
                 config = self._router.route(pipeline_path)
             elif "user_message" in self._router.registered_interfaces:
+                logger.warning(
+                    "Interface %r not found, falling back to 'user_message' pipeline config",
+                    interface_name,
+                )
                 config = self._router.route("user_message")
             elif "_default" in self._router.registered_interfaces:
                 logger.info("Falling back to agent-level pipeline config")

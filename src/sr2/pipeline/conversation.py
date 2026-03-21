@@ -1,5 +1,6 @@
 """Three-zone conversation manager: summarized -> compacted -> raw."""
 
+import logging
 from dataclasses import dataclass, field
 
 from sr2.compaction.engine import (
@@ -8,6 +9,8 @@ from sr2.compaction.engine import (
     ConversationTurn,
 )
 from sr2.summarization.engine import StructuredSummary, SummarizationEngine, SummarizationResult
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -111,6 +114,10 @@ class ConversationManager:
         # Exclude preserve_recent_turns from summarization
         preserve_n = self._summarization.preserve_recent_turns
         if preserve_n >= len(zones.compacted):
+            logger.warning(
+                "Summarization triggered but skipped: preserve_recent_turns (%d) >= compacted turns (%d)",
+                preserve_n, len(zones.compacted),
+            )
             return None
         to_summarize = zones.compacted[:-preserve_n] if preserve_n > 0 else zones.compacted
         to_preserve = zones.compacted[-preserve_n:] if preserve_n > 0 else []

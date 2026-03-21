@@ -141,6 +141,11 @@ class MemoryExtractor:
                 memory.scope_ref = project_id
             else:
                 # Can't create unscoped shared memory — fall back to private
+                logger.warning(
+                    "Memory scope configured as 'project' but no project_id in context, "
+                    "falling back to 'private' scope for key=%s",
+                    memory.key,
+                )
                 memory.scope = "private"
                 if self._scope_config.agent_name:
                     memory.scope_ref = f"agent:{self._scope_config.agent_name}"
@@ -323,42 +328,59 @@ Conversation turn:
             return []
 
         memories = []
+        filtered_count = 0
+        candidate_count = min(len(items), self._max)
         for item in items[: self._max]:
             if not isinstance(item, dict):
+                filtered_count += 1
                 continue
             key = str(item.get("key", "")).strip()
             value = str(item.get("value", "")).strip()
 
             # Drop empty or missing key/value
             if not key or not value:
+                filtered_count += 1
                 continue
 
             # Drop tool/system artifact keys
             if _TOOL_ARTIFACT_KEYS.match(key):
+                filtered_count += 1
                 continue
 
             # Drop keys that are always transient/low-value
             if _TRANSIENT_KEYS.match(key):
+                filtered_count += 1
                 continue
 
             # Drop task-specific keys (e.g. files_to_modify.*)
             if _TASK_SPECIFIC_KEYS.match(key):
+                filtered_count += 1
                 continue
 
             # Drop error/failure keys whose values reference operational artifacts
             if _ERROR_ARTIFACT_KEYS.search(key) and _ERROR_ARTIFACT_VALUES.search(value):
+                filtered_count += 1
                 continue
 
             # Drop values that are raw JSON blobs
             if _JSON_VALUE.match(value):
+                filtered_count += 1
                 continue
 
             mem_type = item.get("memory_type", "semi_stable")
             if mem_type not in STABILITY_DEFAULTS:
+                logger.warning(
+                    "Memory extraction: invalid memory_type %r from LLM, defaulting to 'semi_stable'",
+                    mem_type,
+                )
                 mem_type = "semi_stable"
 
             conf_source = item.get("confidence_source", "contextual_mention")
             if conf_source not in CONFIDENCE_SCORES:
+                logger.warning(
+                    "Memory extraction: invalid confidence_source %r from LLM, defaulting to 'contextual_mention'",
+                    conf_source,
+                )
                 conf_source = "contextual_mention"
 
             memories.append(
@@ -373,4 +395,9 @@ Conversation turn:
                 )
             )
 
+        if filtered_count:
+            logger.warning(
+                "Memory extraction: filtered %d/%d candidates (artifact/transient/task-specific/JSON)",
+                filtered_count, candidate_count,
+            )
         return memories

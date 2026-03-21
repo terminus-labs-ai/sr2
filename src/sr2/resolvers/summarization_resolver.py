@@ -1,7 +1,11 @@
 """Content resolver that returns previously generated summaries."""
 
+import logging
+
 from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_tokens
 from sr2.summarization.engine import StructuredSummary
+
+logger = logging.getLogger(__name__)
 
 
 class SummarizationResolver:
@@ -36,10 +40,17 @@ class SummarizationResolver:
         max_tokens = config.get("max_tokens")
 
         if max_tokens and tokens > max_tokens:
+            original_count = len(summaries)
             while tokens > max_tokens and len(summaries) > 1:
                 summaries.pop(0)
                 content = "\n---\n".join(summaries)
                 tokens = estimate_tokens(content)
+            dropped = original_count - len(summaries)
+            if dropped:
+                logger.warning(
+                    "Summary token budget exceeded, dropped %d/%d oldest summaries to fit (%d tokens)",
+                    dropped, original_count, tokens,
+                )
 
         return ResolvedContent(
             key=key,

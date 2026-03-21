@@ -1,4 +1,7 @@
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 
 class CircuitBreaker:
@@ -21,6 +24,10 @@ class CircuitBreaker:
         self._failure_counts[stage] = self._failure_counts.get(stage, 0) + 1
         if self._failure_counts[stage] >= self._threshold:
             self._open_since[stage] = time.monotonic()
+            logger.warning(
+                "Circuit breaker OPEN for stage %r after %d consecutive failures (cooldown: %.0fs)",
+                stage, self._failure_counts[stage], self._cooldown,
+            )
 
     def is_open(self, stage: str) -> bool:
         """Return True if the breaker is open (stage should be skipped)."""
@@ -30,6 +37,10 @@ class CircuitBreaker:
         if elapsed >= self._cooldown:
             self._open_since.pop(stage)
             self._failure_counts.pop(stage, None)
+            logger.warning(
+                "Circuit breaker CLOSED for stage %r after %.0fs cooldown, will retry",
+                stage, elapsed,
+            )
             return False
         return True
 

@@ -94,6 +94,10 @@ class CompactionEngine:
                 compacted_tokens += est_tokens
                 continue
             if turn.content_type not in self._rule_map:
+                logger.warning(
+                    "No compaction rule for content_type %r on turn %d (%d tokens), passing through uncompacted",
+                    turn.content_type, turn.turn_number, est_tokens,
+                )
                 compacted_tokens += est_tokens
                 continue
 
