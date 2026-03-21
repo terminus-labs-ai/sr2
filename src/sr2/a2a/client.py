@@ -160,6 +160,6 @@ class A2AClientTool:
                 timeout=10.0,
             )
             return response
-        except Exception as e:
+        except Exception:
             logger.error("Failed to fetch agent card", exc_info=True)
             return None

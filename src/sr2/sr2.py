@@ -370,7 +370,7 @@ class SR2:
             await self._post_processor.process(
                 turn, session_id, current_context=ctx, extract_only=extract_only,
             )
-        except Exception as e:
+        except Exception:
             logger.error("Post-processing failed", exc_info=True)
 
     async def save_memory(
