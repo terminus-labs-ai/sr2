@@ -1,5 +1,7 @@
 """Token counting implementations: character heuristic and tiktoken-based."""
 
+import logging
+
 from typing import Protocol
 
 
@@ -36,6 +38,9 @@ class CharacterTokenizer:
     def name(self) -> str:
         """Return tokenizer name."""
         return "character"
+
+
+logger = logging.getLogger(__name__)
 
 
 class TiktokenTokenizer:
@@ -75,7 +80,7 @@ class TiktokenTokenizer:
             tokens = self._encoder.encode(text, disallowed_special=())
             return len(tokens)
         except Exception:
-            # Fallback to character heuristic if encoding fails
+            logger.error("tiktoken encoding failed, falling back to character heuristic", exc_info=True)
             return max(1, len(text) // 4)
 
     def name(self) -> str:

@@ -2,10 +2,13 @@
 
 import aiosqlite
 import json
+import logging
 import re
 from typing import Protocol
 
 from sr2.memory.schema import Memory, MemorySearchResult
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryStore(Protocol):
@@ -226,7 +229,7 @@ class PostgresMemoryStore:
             try:
                 await conn.execute("ALTER TABLE memories ALTER COLUMN embedding TYPE vector")
             except Exception:
-                pass
+                logger.error("Failed to migrate embedding column type", exc_info=True)
 
     async def save(self, memory: Memory, embedding: list[float] | None = None) -> None:
         """Save a memory. If ID exists, update it."""

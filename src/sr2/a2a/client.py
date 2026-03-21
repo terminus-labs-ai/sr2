@@ -161,5 +161,5 @@ class A2AClientTool:
             )
             return response
         except Exception as e:
-            logger.warning(f"Failed to fetch agent card: {e}")
+            logger.error("Failed to fetch agent card", exc_info=True)
             return None

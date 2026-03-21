@@ -96,7 +96,7 @@ class EvalRunner:
                 error=None,
             )
         except Exception as e:
-            logger.error(f"Error running eval case {case.id}: {e}")
+            logger.error("Error running eval case %s", case.id, exc_info=True)
             total_time_ms = (time.time() - start_time) * 1000
 
             return EvalResult(
