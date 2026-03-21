@@ -60,6 +60,11 @@ class ConversationManager:
     def add_turn(self, turn: ConversationTurn, session_id: str = "default") -> None:
         """Add a new turn to the raw zone."""
         self._get_zones(session_id).raw.append(turn)
+        logger.debug(
+            "Added turn %d to raw zone (role=%s, content_type=%s, %d tokens, session=%s)",
+            turn.turn_number, turn.role, turn.content_type,
+            len(turn.content) // 4, session_id,
+        )
 
     def run_compaction(self, session_id: str = "default") -> CompactionResult | None:
         """Run compaction on raw zone, moving compacted turns to compacted zone.
@@ -71,7 +76,12 @@ class ConversationManager:
         zones = self._get_zones(session_id)
         raw_count_before = len(zones.raw)
         all_turns = zones.compacted + zones.raw
+        logger.debug(
+            "run_compaction: session=%s, raw=%d, compacted=%d, total=%d, raw_window=%d",
+            session_id, len(zones.raw), len(zones.compacted), len(all_turns), self._raw_window,
+        )
         if len(all_turns) <= self._raw_window:
+            logger.debug("run_compaction: skipped (total turns %d <= raw_window %d)", len(all_turns), self._raw_window)
             return None
 
         result = self._compaction.compact(all_turns)
@@ -82,6 +92,13 @@ class ConversationManager:
         else:
             zones.compacted = []
             zones.raw = result.turns
+
+        logger.debug(
+            "run_compaction: result — compacted_zone=%d turns, raw_zone=%d turns, "
+            "turns_compacted=%d, tokens %d->%d",
+            len(zones.compacted), len(zones.raw),
+            result.turns_compacted, result.original_tokens, result.compacted_tokens,
+        )
 
         # Track zone transitions (messages that moved from raw to compacted)
         transitioned = max(0, raw_count_before - len(zones.raw))
@@ -105,7 +122,14 @@ class ConversationManager:
 
         zones = self._get_zones(session_id)
         compacted_tokens = sum(len(t.content) // 4 for t in zones.compacted)
+        threshold_tokens = self._summarization._config.threshold * self._compacted_max
+        logger.debug(
+            "run_summarization: session=%s, compacted_tokens=%d, threshold=%d (%.0f%% of %d)",
+            session_id, compacted_tokens, int(threshold_tokens),
+            self._summarization._config.threshold * 100, self._compacted_max,
+        )
         if not self._summarization.should_trigger(compacted_tokens, self._compacted_max):
+            logger.debug("run_summarization: not triggered (below threshold)")
             return None
 
         if not zones.compacted:
