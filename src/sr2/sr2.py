@@ -12,7 +12,7 @@ from sr2.cache.policies import create_default_cache_registry
 from sr2.degradation.circuit_breaker import CircuitBreaker
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
 from sr2.config.loader import ConfigLoader
-from sr2.config.models import LLMModelOverride
+from sr2.config.models import LLMModelOverride, PipelineConfig
 from sr2.memory.conflicts import ConflictDetector
 from sr2.memory.dimensions import DimensionalMatcher
 from sr2.memory.extraction import MemoryExtractor
@@ -30,7 +30,7 @@ from sr2.pipeline.result import PipelineResult
 from sr2.pipeline.router import InterfaceRouter
 from sr2.resolvers.config_resolver import ConfigResolver
 from sr2.resolvers.input_resolver import InputResolver
-from sr2.resolvers.registry import ContentResolverRegistry, ResolverContext
+from sr2.resolvers.registry import ContentResolverRegistry, ResolverContext, ResolvedContent, estimate_tokens
 from sr2.resolvers.runtime_resolver import RuntimeResolver
 from sr2.resolvers.session_resolver import SessionResolver
 from sr2.resolvers.static_template_resolver import StaticTemplateResolver
@@ -180,6 +180,9 @@ class SR2:
             raw_window=agent_config.compaction.raw_window,
             compacted_max_tokens=agent_config.token_budget // 2,
         )
+
+        # Wire budget overflow handler into engine
+        self._engine._budget_overflow_handler = self._handle_budget_overflow
 
         # Post-LLM processor
         self._post_processor = PostLLMProcessor(
@@ -641,6 +644,102 @@ class SR2:
         if not hasattr(self, "_exporter"):
             self._exporter = PrometheusExporter(self._collector)
         return self._exporter.export()
+
+
+    async def _handle_budget_overflow(
+        self,
+        layers: dict[str, list[ResolvedContent]],
+        budget: int,
+        config: PipelineConfig,
+        ctx: ResolverContext,
+    ) -> dict[str, list[ResolvedContent]] | None:
+        """Reduce context via compaction and summarization when over budget.
+
+        Called by PipelineEngine._enforce_budget() before truncation.
+        Finds the session layer, seeds the conversation manager if needed,
+        runs compaction and summarization, then rebuilds the session content.
+        """
+        session_id = ctx.session_id or "default"
+
+        # Find the session layer and item from config
+        session_layer_name = None
+        session_item_key = None
+        for layer_cfg in config.layers:
+            for item_cfg in layer_cfg.contents:
+                if item_cfg.source == "session":
+                    session_layer_name = layer_cfg.name
+                    session_item_key = item_cfg.key
+                    break
+            if session_layer_name:
+                break
+
+        if not session_layer_name or session_layer_name not in layers:
+            logger.debug("Budget overflow handler: no session layer found, skipping")
+            return None
+
+        # Find the session item in resolved layers
+        session_item_idx = None
+        for i, item in enumerate(layers[session_layer_name]):
+            if item.key == session_item_key:
+                session_item_idx = i
+                break
+
+        if session_item_idx is None:
+            return None
+
+        # Seed conversation manager from session history if zones are empty
+        zones = self._conversation.zones(session_id)
+        history = ctx.agent_config.get("session_history", [])
+        if not zones.raw and not zones.compacted and history:
+            for turn_num, msg in enumerate(history):
+                turn = ConversationTurn(
+                    turn_number=turn_num,
+                    role=msg.get("role", "unknown"),
+                    content=msg.get("content", ""),
+                )
+                self._conversation.add_turn(turn, session_id)
+
+        # Phase 1: Run compaction
+        self._conversation.run_compaction(session_id)
+
+        # Phase 2: Check if we need summarization
+        zones = self._conversation.zones(session_id)
+        non_session_tokens = sum(
+            c.tokens
+            for name, contents in layers.items()
+            for c in contents
+            if not (name == session_layer_name and c.key == session_item_key)
+        )
+        zone_tokens = zones.total_tokens
+        if zone_tokens + non_session_tokens > budget:
+            await self._conversation.run_summarization(session_id)
+
+        # Phase 3: Rebuild session content from zones
+        zones = self._conversation.zones(session_id)
+        parts = []
+        for summary in zones.summarized:
+            parts.append(f"[Previous conversation summary]\n{summary}")
+        for turn in zones.compacted + zones.raw:
+            parts.append(f"{turn.role}: {turn.content}")
+
+        new_content = "\n".join(parts)
+        new_tokens = estimate_tokens(new_content)
+
+        # Replace session item in layers
+        layers[session_layer_name][session_item_idx] = ResolvedContent(
+            key=session_item_key,
+            content=new_content,
+            tokens=new_tokens,
+            metadata=layers[session_layer_name][session_item_idx].metadata,
+        )
+
+        logger.info(
+            "Budget overflow handler: reduced session content from %d to %d tokens",
+            layers[session_layer_name][session_item_idx].tokens if session_item_idx < len(layers[session_layer_name]) else 0,
+            new_tokens,
+        )
+
+        return layers
 
     # --- Private helpers ---
 

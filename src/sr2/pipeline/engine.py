@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from sr2.config.models import PipelineConfig, LayerConfig, ContentItemConfig
@@ -10,6 +11,14 @@ from sr2.pipeline.serializer import ContextSerializer
 from sr2.pipeline.prefix_tracker import PrefixTracker, PrefixSnapshot
 
 logger = logging.getLogger(__name__)
+
+# Callback signature for budget overflow handling.
+# Receives: (layers, budget, config, resolver_context)
+# Returns updated layers dict, or None if no reduction was possible.
+BudgetOverflowHandler = Callable[
+    [dict[str, list[ResolvedContent]], int, PipelineConfig, ResolverContext],
+    Awaitable[dict[str, list[ResolvedContent]] | None],
+]
 
 
 @dataclass
@@ -38,10 +47,12 @@ class PipelineEngine:
         resolver_registry: ContentResolverRegistry,
         cache_registry: CachePolicyRegistry,
         circuit_breaker: CircuitBreaker | None = None,
+        budget_overflow_handler: BudgetOverflowHandler | None = None,
     ):
         self._resolvers = resolver_registry
         self._cache_policies = cache_registry
         self._circuit_breaker = circuit_breaker or CircuitBreaker()
+        self._budget_overflow_handler = budget_overflow_handler
         self._previous_state: PipelineState | None = None
         self._layer_cache: dict[str, list[ResolvedContent]] = {}
         self._serializer = ContextSerializer()
@@ -174,8 +185,8 @@ class PipelineEngine:
 
         self._previous_state = current_state
 
-        # Enforce token budget
-        layers = self._enforce_budget(layers, config.token_budget)
+        # Enforce token budget (with smart reduction before truncation)
+        layers = await self._enforce_budget(layers, config, context)
 
         # Build serialized layer strings for final content assembly
         serialized_layers: dict[str, str] = {}
@@ -282,20 +293,58 @@ class PipelineEngine:
             context=ctx,
         )
 
-    def _enforce_budget(
+    async def _enforce_budget(
         self,
         layers: dict[str, list[ResolvedContent]],
-        budget: int,
+        config: PipelineConfig,
+        ctx: ResolverContext,
     ) -> dict[str, list[ResolvedContent]]:
-        """If total tokens exceed budget, trim content from last layers first."""
+        """Enforce token budget with smart reduction before truncation.
+
+        Strategy (ordered by preference):
+        1. Call budget_overflow_handler (compaction + summarization)
+        2. Truncate trailing layers as last resort
+        """
+        budget = config.token_budget
         total = sum(c.tokens for contents in layers.values() for c in contents)
         if total <= budget:
             return layers
 
+        logger.warning(
+            "Token budget exceeded (%d/%d tokens, %d over), "
+            "attempting smart reduction before truncation",
+            total, budget, total - budget,
+        )
+
+        # Phase 1: Try smart reduction via handler (compaction + summarization)
+        if self._budget_overflow_handler:
+            try:
+                reduced = await self._budget_overflow_handler(layers, budget, config, ctx)
+                if reduced is not None:
+                    layers = reduced
+                    total = sum(c.tokens for contents in layers.values() for c in contents)
+                    if total <= budget:
+                        logger.info(
+                            "Budget enforcement: handler reduced context to %d/%d tokens",
+                            total, budget,
+                        )
+                        return layers
+                    logger.warning(
+                        "Budget enforcement: handler reduced to %d tokens but "
+                        "still %d over budget, falling back to truncation",
+                        total, total - budget,
+                    )
+            except Exception:
+                logger.error(
+                    "Budget overflow handler failed, falling back to truncation",
+                    exc_info=True,
+                )
+
+        # Phase 2: Last resort — truncate from trailing layers
         self.truncation_events += 1
         logger.warning(
-            "Token budget exceeded (%d/%d tokens), truncating %d excess tokens from trailing layers",
-            total, budget, total - budget,
+            "Truncating %d excess tokens from trailing layers (truncation_event #%d)",
+            total - budget, self.truncation_events,
         )
 
         excess = total - budget
