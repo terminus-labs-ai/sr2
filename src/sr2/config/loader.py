@@ -1,6 +1,10 @@
 import yaml
 from pathlib import Path
-from sr2.config.models import PipelineConfig
+from sr2.config.models import PipelineConfig, LLMModelOverride
+
+
+# Fields from LLMModelOverride that we allow through from runtime.llm
+_LLM_OVERRIDE_FIELDS = set(LLMModelOverride.model_fields.keys())
 
 
 class ConfigLoader:
@@ -25,9 +29,44 @@ class ConfigLoader:
             k: v for k, v in pipeline_raw.items() if k in pipeline_fields and v is not None
         }
 
+        # Extract runtime.llm as fallback for PipelineConfig.llm
+        runtime_llm = self._extract_llm_override(raw)
+
         # Merge: root-level first, then pipeline: dict overrides
         merged = {**root_level, **nested_level}
+
+        # Apply runtime.llm as lowest-priority fallback for llm field
+        if runtime_llm and "llm" not in nested_level:
+            if "llm" in root_level:
+                # Root-level llm wins over runtime.llm (deep merge, root on top)
+                merged["llm"] = self.merge(runtime_llm, root_level["llm"])
+            else:
+                merged["llm"] = runtime_llm
+
         return PipelineConfig(**merged)
+
+    def _extract_llm_override(self, raw: dict) -> dict | None:
+        """Extract runtime.llm from raw config dict, filtering to LLMModelOverride fields.
+
+        Returns an LLMConfig-shaped dict (with model/fast_model/embedding keys),
+        or None if runtime.llm is absent.
+        """
+        runtime = raw.get("runtime")
+        if not isinstance(runtime, dict):
+            return None
+        runtime_llm = runtime.get("llm")
+        if not isinstance(runtime_llm, dict):
+            return None
+
+        result = {}
+        for slot in ("model", "fast_model", "embedding"):
+            slot_data = runtime_llm.get(slot)
+            if isinstance(slot_data, dict):
+                filtered = {k: v for k, v in slot_data.items() if k in _LLM_OVERRIDE_FIELDS}
+                if filtered:
+                    result[slot] = filtered
+
+        return result if result else None
 
     def _load_with_inheritance(self, path: Path) -> dict:
         """Recursively load and merge configs following extends chain."""
