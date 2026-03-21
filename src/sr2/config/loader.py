@@ -1,6 +1,9 @@
+import logging
 import yaml
 from pathlib import Path
 from sr2.config.models import PipelineConfig, LLMModelOverride
+
+logger = logging.getLogger(__name__)
 
 
 # Fields from LLMModelOverride that we allow through from runtime.llm
@@ -55,6 +58,12 @@ class ConfigLoader:
         if not isinstance(runtime, dict):
             return None
         runtime_llm = runtime.get("llm")
+        if runtime_llm is not None and not isinstance(runtime_llm, dict):
+            logger.warning(
+                "runtime.llm config is present but not a dict (got %s), LLM overrides will be ignored",
+                type(runtime_llm).__name__,
+            )
+            return None
         if not isinstance(runtime_llm, dict):
             return None
 

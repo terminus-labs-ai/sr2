@@ -114,6 +114,11 @@ class SummarizationEngine:
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError:
+            logger.warning(
+                "Summarization LLM returned unparseable JSON for turns %s, "
+                "returning empty structured summary. Raw: %.200s",
+                turn_range, raw,
+            )
             return StructuredSummary(
                 summary_of_turns=turn_range,
                 key_decisions=[],

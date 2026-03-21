@@ -1,5 +1,6 @@
 """Hybrid retrieval engine combining semantic, keyword, and recency signals."""
 
+import logging
 import math
 import time
 from datetime import UTC, datetime
@@ -7,6 +8,8 @@ from datetime import UTC, datetime
 from sr2.config.models import MemoryScopeConfig
 from sr2.memory.schema import MemorySearchResult
 from sr2.memory.store import MemoryStore
+
+logger = logging.getLogger(__name__)
 
 
 class HybridRetriever:
@@ -200,4 +203,10 @@ class HybridRetriever:
                 break
             capped.append(r)
             total += est_tokens
+        dropped = len(results) - len(capped)
+        if dropped:
+            logger.warning(
+                "Retrieval token cap: kept %d/%d results (%d tokens), %d results dropped",
+                len(capped), len(results), total, dropped,
+            )
         return capped

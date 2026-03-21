@@ -293,6 +293,10 @@ class PipelineEngine:
             return layers
 
         self.truncation_events += 1
+        logger.warning(
+            "Token budget exceeded (%d/%d tokens), truncating %d excess tokens from trailing layers",
+            total, budget, total - budget,
+        )
 
         excess = total - budget
         layer_names = list(layers.keys())

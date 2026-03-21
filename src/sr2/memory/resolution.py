@@ -1,11 +1,14 @@
 """Conflict resolution pipeline for memory conflicts."""
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
 from sr2.memory.conflicts import Conflict
 from sr2.memory.schema import Memory
 from sr2.memory.store import MemoryStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,6 +63,10 @@ class ConflictResolver:
         elif strategy == "keep_both":
             return await self._keep_both(conflict)
         else:
+            logger.warning(
+                "Unknown conflict resolution strategy %r for memory_type %r, defaulting to latest_wins_archive",
+                strategy, conflict.new_memory.memory_type,
+            )
             return await self._latest_wins(conflict, archive=True)
 
     async def _latest_wins(self, conflict: Conflict, archive: bool) -> ResolutionResult:

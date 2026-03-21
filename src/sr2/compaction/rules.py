@@ -1,7 +1,10 @@
 """Built-in compaction rules for replacing verbose content with compact references."""
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,6 +52,10 @@ class SchemaAndSampleRule:
 
         # Truncate content if it exceeds the token budget
         if est_tokens > max_tokens:
+            logger.warning(
+                "Compacted output exceeded max_compacted_tokens (%d), truncating further to %d chars",
+                max_tokens, max_tokens * 4,
+            )
             max_chars = max_tokens * 4
             summary = summary[:max_chars] + "..."
             est_tokens = max_tokens
