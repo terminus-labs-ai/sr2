@@ -199,7 +199,11 @@ class TestAgent:
         await agent.handle_user_message("Hi", session_id="s_default")
 
         call_kwargs = agent._loop.run.call_args
-        assert call_kwargs.kwargs.get("model_config_override") is None
+        # runtime.llm is inherited from parent and extracted as override
+        # The override matches the base model, so it is functionally a no-op
+        override = call_kwargs.kwargs.get("model_config_override")
+        assert override is not None
+        assert override.name == "test-model"
 
     @pytest.mark.asyncio
     async def test_handle_trigger_with_ephemeral_session(self, agent):
@@ -373,8 +377,11 @@ class TestModelOverrides:
         await agent.handle_user_message("Hi", session_id="test")
 
         call_kwargs = agent._loop.run.call_args
-        # model_config_override should be None (no interface override)
-        assert call_kwargs.kwargs["model_config_override"] is None
+        # runtime.llm is inherited from parent and extracted as override
+        # The override matches the base model, so it is functionally a no-op
+        override = call_kwargs.kwargs["model_config_override"]
+        assert override is not None
+        assert override.name == "agent-default-model"
 
 
 class TestModelParamsFlow:

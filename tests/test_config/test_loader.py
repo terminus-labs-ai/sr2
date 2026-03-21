@@ -200,3 +200,200 @@ class TestRootLevelPipelineFields:
 
         assert config.system_prompt == "Base prompt"
         assert config.token_budget == 16000
+
+
+class TestRuntimeLLMExtraction:
+    """Test runtime.llm extraction into PipelineConfig.llm."""
+
+    def test_runtime_llm_extracted_as_pipeline_llm(self, tmp_path):
+        """runtime.llm.model should populate PipelineConfig.llm.model."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "runtime": {
+                        "llm": {
+                            "model": {
+                                "name": "openai/qwen3.5:40b-a3b",
+                                "api_base": "http://localhost:8080/v1",
+                            }
+                        }
+                    }
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.llm is not None
+        assert config.llm.model is not None
+        assert config.llm.model.name == "openai/qwen3.5:40b-a3b"
+        assert config.llm.model.api_base == "http://localhost:8080/v1"
+
+    def test_stream_field_stripped(self, tmp_path):
+        """runtime.llm fields not in LLMModelOverride (like stream) should be stripped."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "runtime": {
+                        "llm": {
+                            "model": {
+                                "name": "openai/qwen3.5:40b-a3b",
+                                "stream": True,
+                                "timeout": 30,
+                            }
+                        }
+                    }
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.llm is not None
+        assert config.llm.model.name == "openai/qwen3.5:40b-a3b"
+        # stream and timeout are not LLMModelOverride fields, should not be present
+        model_dict = config.llm.model.model_dump()
+        assert "stream" not in model_dict
+        assert "timeout" not in model_dict
+
+    def test_pipeline_llm_takes_priority_over_runtime(self, tmp_path):
+        """pipeline.llm should completely override runtime.llm."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "runtime": {
+                        "llm": {
+                            "model": {"name": "openai/runtime-model"},
+                        }
+                    },
+                    "pipeline": {
+                        "llm": {
+                            "model": {"name": "openai/pipeline-model"},
+                        }
+                    },
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.llm.model.name == "openai/pipeline-model"
+
+    def test_root_level_llm_takes_priority_over_runtime(self, tmp_path):
+        """Root-level llm: should override runtime.llm."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "runtime": {
+                        "llm": {
+                            "model": {"name": "openai/runtime-model", "max_tokens": 4096},
+                        }
+                    },
+                    "llm": {
+                        "model": {"name": "openai/root-model"},
+                    },
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        # Root-level wins for name
+        assert config.llm.model.name == "openai/root-model"
+        # But runtime max_tokens should merge through as fallback
+        assert config.llm.model.max_tokens == 4096
+
+    def test_inheritance_with_runtime_llm_in_child(self, tmp_path):
+        """Child config with runtime.llm should override parent's model."""
+        # Parent (agent.yaml style)
+        parent = tmp_path / "agent.yaml"
+        parent.write_text(
+            yaml.dump(
+                {
+                    "runtime": {
+                        "llm": {
+                            "model": {"name": "openai/base-model"},
+                        }
+                    },
+                    "pipeline": {"token_budget": 65536},
+                }
+            )
+        )
+
+        # Child interface
+        interfaces = tmp_path / "interfaces"
+        interfaces.mkdir()
+        child = interfaces / "user_message.yaml"
+        child.write_text(
+            yaml.dump(
+                {
+                    "extends": "agent",
+                    "runtime": {
+                        "llm": {
+                            "model": {"name": "openai/override-model"},
+                        }
+                    },
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(child))
+
+        assert config.llm.model.name == "openai/override-model"
+        assert config.token_budget == 65536
+
+    def test_fast_model_and_embedding_extracted(self, tmp_path):
+        """runtime.llm.fast_model and embedding should also be extracted."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "runtime": {
+                        "llm": {
+                            "model": {"name": "openai/main-model"},
+                            "fast_model": {"name": "openai/fast-model"},
+                            "embedding": {"name": "openai/embed-model"},
+                        }
+                    }
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.llm.model.name == "openai/main-model"
+        assert config.llm.fast_model.name == "openai/fast-model"
+        assert config.llm.embedding.name == "openai/embed-model"
+
+    def test_no_runtime_llm_no_effect(self, tmp_path):
+        """Config without runtime.llm should work as before (backward compat)."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"pipeline": {"token_budget": 16000}}))
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.llm.model is None
+        assert config.token_budget == 16000
+
+    def test_runtime_without_llm_key(self, tmp_path):
+        """runtime: dict without llm key should not affect anything."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump({"runtime": {"stream": True}, "pipeline": {"token_budget": 16000}})
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+
+        assert config.llm.model is None

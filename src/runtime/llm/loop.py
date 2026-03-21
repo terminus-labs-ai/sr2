@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 from runtime.llm.client import LLMClient
 from runtime.llm.context_bridge import ContextBridge
+from runtime.llm.loop_detector import detect_loop
+
 from runtime.llm.streaming import (
     StreamCallback,
     StreamEndEvent,
@@ -219,6 +221,18 @@ class LLMLoop:
                 logger.warning(
                     f"Tool '{last_failed_tool}' failed {consecutive_failures} times "
                     "consecutively, disabling tools for final response"
+                )
+                active_tool_schemas = None
+                active_tool_choice = "none"
+
+            # Loop detector: if the model keeps calling the same tool
+            # with identical args (or same tool dominates with same results),
+            # disable tools to force a text response.
+            loop_result = detect_loop(result.tool_calls)
+            if loop_result.detected:
+                logger.warning(
+                    "Loop detected: tool %r repeated %d times (%s) — disabling tools",
+                    loop_result.tool_name, loop_result.count, loop_result.pattern,
                 )
                 active_tool_schemas = None
                 active_tool_choice = "none"
@@ -434,6 +448,18 @@ class LLMLoop:
                 logger.warning(
                     f"Tool '{last_failed_tool}' failed {consecutive_failures} times "
                     "consecutively, disabling tools for final response"
+                )
+                active_tool_schemas = None
+                active_tool_choice = "none"
+
+            # Loop detector: if the model keeps calling the same tool
+            # with identical args (or same tool dominates with same results),
+            # disable tools to force a text response.
+            loop_result = detect_loop(result.tool_calls)
+            if loop_result.detected:
+                logger.warning(
+                    "Loop detected: tool %r repeated %d times (%s) — disabling tools",
+                    loop_result.tool_name, loop_result.count, loop_result.pattern,
                 )
                 active_tool_schemas = None
                 active_tool_choice = "none"
