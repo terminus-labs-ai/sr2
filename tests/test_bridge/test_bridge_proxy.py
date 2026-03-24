@@ -22,6 +22,7 @@ from sr2.compaction.engine import ConversationTurn
 from sr2.config.models import CompactionConfig, PipelineConfig
 
 from bridge.adapters.anthropic import AnthropicAdapter
+from bridge.app import create_bridge_app, _is_fast_model
 from bridge.bridge_metrics import BridgeMetricsExporter
 from bridge.config import BridgeConfig, BridgeSessionConfig
 from bridge.engine import BridgeEngine
@@ -436,13 +437,22 @@ def _make_mock_forwarder() -> BridgeForwarder:
     forwarder = MagicMock(spec=BridgeForwarder)
     forwarder.start = AsyncMock()
     forwarder.stop = AsyncMock()
+    forwarder.last_body = None  # Track last forwarded body
+    forwarder.response_json = None  # Override response content
 
-    # Non-streaming response
-    mock_response = MagicMock()
-    mock_response.content = json.dumps({"type": "message", "content": [{"type": "text", "text": "Hello"}]}).encode()
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "application/json"}
-    forwarder.forward = AsyncMock(return_value=mock_response)
+    # Non-streaming response — captures body
+    async def _capture_forward(path, body, headers, **kwargs):
+        forwarder.last_body = body
+        resp = MagicMock()
+        if forwarder.response_json:
+            resp.content = json.dumps(forwarder.response_json).encode()
+        else:
+            resp.content = json.dumps({"type": "message", "content": [{"type": "text", "text": "Hello"}]}).encode()
+        resp.status_code = 200
+        resp.headers = {"content-type": "application/json"}
+        return resp
+
+    forwarder.forward = AsyncMock(side_effect=_capture_forward)
 
     # Passthrough response
     passthrough_response = MagicMock()
@@ -466,12 +476,13 @@ def _make_mock_forwarder() -> BridgeForwarder:
     return forwarder
 
 
-def _make_test_app():
+def _make_test_app(forwarding: dict | None = None):
     """Create a test app with mock forwarder."""
-    from bridge.app import create_bridge_app
+    from bridge.config import BridgeForwardingConfig
     from bridge.llm import APIKeyCache
 
-    bridge_config = BridgeConfig()
+    fwd_config = BridgeForwardingConfig(**(forwarding or {}))
+    bridge_config = BridgeConfig(forwarding=fwd_config)
     key_cache = APIKeyCache()
     engine = BridgeEngine(PipelineConfig(), bridge_config=bridge_config, key_cache=key_cache)
     forwarder = _make_mock_forwarder()
@@ -892,6 +903,86 @@ class TestEngineRetrievalQuery:
         # Last user message has no text blocks, so falls through to the earlier one
         query = BridgeEngine._extract_retrieval_query(messages)
         assert query == "A question"
+
+
+class TestModelRewriting:
+    """Test model rewriting in the bridge proxy."""
+
+    def test_is_fast_model_haiku(self):
+        assert _is_fast_model("claude-haiku-4-5-20251001")
+
+    def test_is_fast_model_flash(self):
+        assert _is_fast_model("openai/glm-4.7-flash-cpu")
+
+    def test_is_fast_model_mini(self):
+        assert _is_fast_model("gpt-4o-mini")
+
+    def test_is_not_fast_model(self):
+        assert not _is_fast_model("claude-sonnet-4-20250514")
+        assert not _is_fast_model("openai/qwen-32b")
+
+    @pytest.mark.asyncio
+    async def test_model_rewritten_in_proxy(self):
+        """When forwarding.model is set, body model gets rewritten."""
+        app, forwarder = _make_test_app(
+            forwarding={"model": "openai/my-model", "fast_model": "openai/my-fast"},
+        )
+        forwarder.response_json = {"id": "1", "content": [{"type": "text", "text": "hi"}]}
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/messages", json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "hello"}],
+            }, headers={"x-api-key": "test"})
+            assert resp.status_code == 200
+            # Check that forwarder received the rewritten model
+            assert forwarder.last_body["model"] == "openai/my-model"
+
+    @pytest.mark.asyncio
+    async def test_fast_model_rewritten_in_proxy(self):
+        """Fast models get rewritten to fast_model config."""
+        app, forwarder = _make_test_app(
+            forwarding={"model": "openai/my-model", "fast_model": "openai/my-fast"},
+        )
+        forwarder.response_json = {"id": "1", "content": [{"type": "text", "text": "hi"}]}
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/messages", json={
+                "model": "claude-haiku-4-5-20251001",
+                "messages": [{"role": "user", "content": "hello"}],
+            }, headers={"x-api-key": "test"})
+            assert resp.status_code == 200
+            assert forwarder.last_body["model"] == "openai/my-fast"
+
+    @pytest.mark.asyncio
+    async def test_no_model_config_passthrough(self):
+        """Without model config, the original model passes through."""
+        app, forwarder = _make_test_app()
+        forwarder.response_json = {"id": "1", "content": [{"type": "text", "text": "hi"}]}
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/messages", json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "hello"}],
+            }, headers={"x-api-key": "test"})
+            assert resp.status_code == 200
+            assert forwarder.last_body["model"] == "claude-sonnet-4-20250514"
+
+    @pytest.mark.asyncio
+    async def test_fast_model_falls_back_to_model(self):
+        """When fast_model is None, fast models use the base model."""
+        app, forwarder = _make_test_app(
+            forwarding={"model": "openai/my-model"},
+        )
+        forwarder.response_json = {"id": "1", "content": [{"type": "text", "text": "hi"}]}
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/messages", json={
+                "model": "claude-haiku-4-5-20251001",
+                "messages": [{"role": "user", "content": "hello"}],
+            }, headers={"x-api-key": "test"})
+            assert resp.status_code == 200
+            assert forwarder.last_body["model"] == "openai/my-model"
 
 
 class TestEngineShutdown:

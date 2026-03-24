@@ -19,6 +19,16 @@ class BridgeForwardingConfig(BaseModel):
         ge=1.0,
         description="Timeout for upstream requests in seconds.",
     )
+    model: str | None = Field(
+        default=None,
+        description="Override model for upstream requests. When set, the bridge rewrites "
+        "the model field in the request body before forwarding. None = passthrough.",
+    )
+    fast_model: str | None = Field(
+        default=None,
+        description="Override model for 'fast/small' upstream requests (e.g. haiku). "
+        "When set, requests for known small models are rewritten to this. None = use 'model'.",
+    )
 
 
 class BridgeSessionConfig(BaseModel):

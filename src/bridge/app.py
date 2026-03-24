@@ -19,6 +19,16 @@ from bridge.session_tracker import BridgeSession, SessionTracker
 
 logger = logging.getLogger(__name__)
 
+# Models considered "fast/small" — if the incoming request uses one of these,
+# the bridge rewrites to forwarding.fast_model (or forwarding.model as fallback).
+_FAST_MODEL_MARKERS = {"haiku", "flash", "mini", "small", "fast"}
+
+
+def _is_fast_model(model_name: str) -> bool:
+    """Check if a model name looks like a fast/small model."""
+    lower = model_name.lower()
+    return any(marker in lower for marker in _FAST_MODEL_MARKERS)
+
 
 def create_bridge_app(
     bridge_config: BridgeConfig,
@@ -86,6 +96,17 @@ def create_bridge_app(
             "Session %s: %d messages, stream=%s",
             session_id, len(messages), is_streaming,
         )
+
+        # Rewrite model if configured
+        fwd = bridge_config.forwarding
+        if fwd.model:
+            original_model = body.get("model", "")
+            if fwd.fast_model and _is_fast_model(original_model):
+                body["model"] = fwd.fast_model
+            else:
+                body["model"] = fwd.model
+            if body["model"] != original_model:
+                logger.debug("Model rewrite: %s -> %s", original_model, body["model"])
 
         # Optimize context
         try:
