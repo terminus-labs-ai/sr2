@@ -201,79 +201,43 @@ class TestAnthropicAdapter:
 # ---------------------------------------------------------------------------
 
 class TestSessionTracker:
-    """Test session identification and lifecycle."""
+    """Test config-driven session identification."""
 
-    def test_system_hash_same_prompt(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="system_hash"))
-        sid1 = tracker.identify({}, {}, system_prompt="My system prompt")
-        sid2 = tracker.identify({}, {}, system_prompt="My system prompt")
-        assert sid1 == sid2
+    def test_uses_config_name(self):
+        """Session ID comes from config name."""
+        tracker = SessionTracker(BridgeSessionConfig(name="my-project"))
+        sid = tracker.identify({}, {})
+        assert sid == "my-project"
 
-    def test_system_hash_different_prompt(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="system_hash"))
-        sid1 = tracker.identify({}, {}, system_prompt="Prompt A")
-        sid2 = tracker.identify({}, {}, system_prompt="Prompt B")
-        assert sid1 != sid2
-
-    def test_system_hash_no_prompt(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="system_hash"))
-        sid = tracker.identify({}, {}, system_prompt=None)
-        assert sid == "no-system"
-
-    def test_header_strategy_explicit(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="header"))
-        sid = tracker.identify({}, {"x-sr2-session-id": "my-session"})
-        assert sid == "my-session"
-
-    def test_single_strategy(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="single"))
-        sid1 = tracker.identify({}, {}, system_prompt="A")
-        sid2 = tracker.identify({}, {}, system_prompt="B")
-        assert sid1 == sid2 == "default"
-
-
-    def test_header_explicit_session(self):
-        """User-provided header controls session identity."""
-        tracker = SessionTracker(BridgeSessionConfig())  # default = header
-        sid1 = tracker.identify({}, {"x-sr2-session-id": "my-session"})
-        sid2 = tracker.identify({}, {"x-sr2-session-id": "my-session"})
-        assert sid1 == sid2 == "my-session"
-
-    def test_header_different_sessions(self):
-        tracker = SessionTracker(BridgeSessionConfig())
-        sid1 = tracker.identify({}, {"x-sr2-session-id": "session-a"})
-        sid2 = tracker.identify({}, {"x-sr2-session-id": "session-b"})
-        assert sid1 != sid2
-
-    def test_header_fallback_to_api_key(self):
-        """No header → falls back to API key hash (stable session for Claude Code)."""
-        tracker = SessionTracker(BridgeSessionConfig())
-        sid1 = tracker.identify({}, {"x-api-key": "sk-test"}, system_prompt="Prompt A")
-        sid2 = tracker.identify({}, {"x-api-key": "sk-test"}, system_prompt="Prompt B")
-        assert sid1 == sid2  # same key, different prompts = same session
-        assert sid1.startswith("key-")
-
-    def test_header_fallback_bearer(self):
-        tracker = SessionTracker(BridgeSessionConfig())
-        sid = tracker.identify({}, {"authorization": "Bearer sk-test"})
-        assert sid.startswith("key-")
-
-    def test_header_cross_client_sharing(self):
-        """Different API keys but same header = same session (cross-client sharing)."""
-        tracker = SessionTracker(BridgeSessionConfig())
-        sid1 = tracker.identify({}, {"x-sr2-session-id": "shared", "x-api-key": "key-1"})
-        sid2 = tracker.identify({}, {"x-sr2-session-id": "shared", "x-api-key": "key-2"})
-        assert sid1 == sid2 == "shared"
-
-    def test_header_no_key_no_header(self):
+    def test_default_name(self):
+        """Default config name is 'default'."""
         tracker = SessionTracker(BridgeSessionConfig())
         sid = tracker.identify({}, {})
         assert sid == "default"
 
+    def test_header_overrides_config(self):
+        """X-SR2-Session-ID header overrides config name."""
+        tracker = SessionTracker(BridgeSessionConfig(name="my-project"))
+        sid = tracker.identify({}, {"x-sr2-session-id": "custom-session"})
+        assert sid == "custom-session"
+
+    def test_cross_client_sharing(self):
+        """Different clients with same header share session."""
+        tracker = SessionTracker(BridgeSessionConfig(name="my-project"))
+        sid1 = tracker.identify({}, {"x-sr2-session-id": "shared", "x-api-key": "key-1"})
+        sid2 = tracker.identify({}, {"x-sr2-session-id": "shared", "x-api-key": "key-2"})
+        assert sid1 == sid2 == "shared"
+
+    def test_no_header_ignores_system_prompt(self):
+        """Without header, different system prompts still get same session."""
+        tracker = SessionTracker(BridgeSessionConfig(name="stable"))
+        sid1 = tracker.identify({}, {}, system_prompt="Prompt A")
+        sid2 = tracker.identify({}, {}, system_prompt="Prompt B")
+        assert sid1 == sid2 == "stable"
+
     def test_idle_cleanup_removes_expired(self):
         tracker = SessionTracker(BridgeSessionConfig(idle_timeout_minutes=1))
-        tracker.identify({}, {}, system_prompt="old session")
-        # Manually expire
+        tracker.identify({}, {})
         for session in tracker.all_sessions().values():
             session.last_seen = time.time() - 120
         expired = tracker.cleanup_idle()
@@ -282,21 +246,22 @@ class TestSessionTracker:
 
     def test_idle_cleanup_keeps_active(self):
         tracker = SessionTracker(BridgeSessionConfig(idle_timeout_minutes=60))
-        tracker.identify({}, {}, system_prompt="active session")
+        tracker.identify({}, {})
         expired = tracker.cleanup_idle()
         assert len(expired) == 0
         assert tracker.active_sessions == 1
 
     def test_destroy_returns_id(self):
         tracker = SessionTracker(BridgeSessionConfig())
-        sid = tracker.identify({}, {}, system_prompt="test")
+        sid = tracker.identify({}, {})
         result = tracker.destroy(sid)
         assert result == sid
-        assert tracker.get(sid) is None
+        assert tracker.active_sessions == 0
 
     def test_destroy_nonexistent_returns_none(self):
         tracker = SessionTracker(BridgeSessionConfig())
-        assert tracker.destroy("nonexistent") is None
+        result = tracker.destroy("nonexistent")
+        assert result is None
 
 
 class TestBridgeSession:

@@ -22,16 +22,17 @@ class BridgeForwardingConfig(BaseModel):
 
 
 class BridgeSessionConfig(BaseModel):
-    """Session identification settings."""
+    """Session configuration — mirrors runtime SessionConfig pattern.
 
-    strategy: Literal["header", "system_hash", "single"] = Field(
-        default="header",
-        description=(
-            "How to identify sessions. "
-            "'system_hash' hashes the system prompt (works with Claude Code). "
-            "'header' uses X-SR2-Session-ID header. "
-            "'single' treats all requests as one session."
-        ),
+    The session name is defined here. All requests use this session unless the
+    client sends an X-SR2-Session-ID header to override (enabling cross-client
+    session sharing).
+    """
+
+    name: str = Field(
+        default="default",
+        description="Session name. All requests use this session unless the client "
+        "sends an X-SR2-Session-ID header to override.",
     )
     idle_timeout_minutes: int = Field(
         default=120,
