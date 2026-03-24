@@ -113,37 +113,7 @@ def create_bridge_app(
                 media_type=response.headers.get("content-type"),
             )
 
-    # --- Passthrough routes ---
-
-    @app.post("/v1/messages/count_tokens")
-    async def count_tokens(request: Request):
-        """Passthrough to upstream count_tokens endpoint."""
-        body = await request.body()
-        headers = dict(request.headers)
-        response = await forwarder.forward_passthrough(
-            "POST", "/v1/messages/count_tokens", body, headers
-        )
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type=response.headers.get("content-type"),
-        )
-
-    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def catchall(request: Request, path: str):
-        """Catchall passthrough for any other API endpoints."""
-        body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
-        headers = dict(request.headers)
-        response = await forwarder.forward_passthrough(
-            request.method, f"/{path}", body, headers
-        )
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type=response.headers.get("content-type"),
-        )
-
-    # --- Infrastructure endpoints ---
+    # --- Infrastructure endpoints (must be before catchall) ---
 
     @app.get("/health")
     async def health():
@@ -189,6 +159,36 @@ def create_bridge_app(
         return PlainTextResponse(
             content="\n".join(lines) + "\n",
             media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
+    # --- Passthrough routes ---
+
+    @app.post("/v1/messages/count_tokens")
+    async def count_tokens(request: Request):
+        """Passthrough to upstream count_tokens endpoint."""
+        body = await request.body()
+        headers = dict(request.headers)
+        response = await forwarder.forward_passthrough(
+            "POST", "/v1/messages/count_tokens", body, headers
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type=response.headers.get("content-type"),
+        )
+
+    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def catchall(request: Request, path: str):
+        """Catchall passthrough for any other API endpoints."""
+        body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
+        headers = dict(request.headers)
+        response = await forwarder.forward_passthrough(
+            request.method, f"/{path}", body, headers
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type=response.headers.get("content-type"),
         )
 
     return app
