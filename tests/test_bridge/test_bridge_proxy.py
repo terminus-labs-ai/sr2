@@ -220,7 +220,7 @@ class TestSessionTracker:
         sid = tracker.identify({}, {}, system_prompt=None)
         assert sid == "no-system"
 
-    def test_header_strategy(self):
+    def test_header_strategy_explicit(self):
         tracker = SessionTracker(BridgeSessionConfig(strategy="header"))
         sid = tracker.identify({}, {"x-sr2-session-id": "my-session"})
         assert sid == "my-session"
@@ -232,28 +232,43 @@ class TestSessionTracker:
         assert sid1 == sid2 == "default"
 
 
-    def test_api_key_same_key(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="api_key"))
-        sid1 = tracker.identify({}, {"x-api-key": "sk-ant-test123"}, system_prompt="Prompt A")
-        sid2 = tracker.identify({}, {"x-api-key": "sk-ant-test123"}, system_prompt="Prompt B")
-        assert sid1 == sid2  # same key = same session regardless of system prompt
+    def test_header_explicit_session(self):
+        """User-provided header controls session identity."""
+        tracker = SessionTracker(BridgeSessionConfig())  # default = header
+        sid1 = tracker.identify({}, {"x-sr2-session-id": "my-session"})
+        sid2 = tracker.identify({}, {"x-sr2-session-id": "my-session"})
+        assert sid1 == sid2 == "my-session"
 
-    def test_api_key_different_keys(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="api_key"))
-        sid1 = tracker.identify({}, {"x-api-key": "key-1"})
-        sid2 = tracker.identify({}, {"x-api-key": "key-2"})
+    def test_header_different_sessions(self):
+        tracker = SessionTracker(BridgeSessionConfig())
+        sid1 = tracker.identify({}, {"x-sr2-session-id": "session-a"})
+        sid2 = tracker.identify({}, {"x-sr2-session-id": "session-b"})
         assert sid1 != sid2
 
-    def test_api_key_bearer_token(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="api_key"))
-        sid1 = tracker.identify({}, {"authorization": "Bearer sk-test"})
-        sid2 = tracker.identify({}, {"authorization": "Bearer sk-test"})
-        assert sid1 == sid2
+    def test_header_fallback_to_api_key(self):
+        """No header → falls back to API key hash (stable session for Claude Code)."""
+        tracker = SessionTracker(BridgeSessionConfig())
+        sid1 = tracker.identify({}, {"x-api-key": "sk-test"}, system_prompt="Prompt A")
+        sid2 = tracker.identify({}, {"x-api-key": "sk-test"}, system_prompt="Prompt B")
+        assert sid1 == sid2  # same key, different prompts = same session
+        assert sid1.startswith("key-")
 
-    def test_api_key_no_key(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="api_key"))
+    def test_header_fallback_bearer(self):
+        tracker = SessionTracker(BridgeSessionConfig())
+        sid = tracker.identify({}, {"authorization": "Bearer sk-test"})
+        assert sid.startswith("key-")
+
+    def test_header_cross_client_sharing(self):
+        """Different API keys but same header = same session (cross-client sharing)."""
+        tracker = SessionTracker(BridgeSessionConfig())
+        sid1 = tracker.identify({}, {"x-sr2-session-id": "shared", "x-api-key": "key-1"})
+        sid2 = tracker.identify({}, {"x-sr2-session-id": "shared", "x-api-key": "key-2"})
+        assert sid1 == sid2 == "shared"
+
+    def test_header_no_key_no_header(self):
+        tracker = SessionTracker(BridgeSessionConfig())
         sid = tracker.identify({}, {})
-        assert sid == "no-key"
+        assert sid == "default"
 
     def test_idle_cleanup_removes_expired(self):
         tracker = SessionTracker(BridgeSessionConfig(idle_timeout_minutes=1))

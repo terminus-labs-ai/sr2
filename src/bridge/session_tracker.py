@@ -41,11 +41,12 @@ class SessionTracker:
     """Maps incoming requests to SR2 sessions.
 
     Strategies:
-    - api_key: Hash the API key from request headers. Stable across a Claude Code
-      session — the same key is sent on every request. Session resets are detected
-      by message count decrease (e.g. /clear in Claude Code).
+    - header (default): Use X-SR2-Session-ID request header if present. Falls
+      back to API key hash when no header is sent. This allows session sharing
+      across different clients (Claude Code, OpenCode, etc.) — any client that
+      sends the same header value joins the same session. Session resets are
+      detected by message count decrease (e.g. /clear).
     - system_hash: Hash the system prompt text.
-    - header: Use the X-SR2-Session-ID request header.
     - single: All requests map to a single session.
     """
 
@@ -61,19 +62,11 @@ class SessionTracker:
         system_prompt: str | None = None,
     ) -> str:
         """Determine the session ID for a request."""
-        if self._strategy == "api_key":
-            # Hash the API key for stable session identity
-            key = headers.get("x-api-key", "")
-            if not key:
-                auth = headers.get("authorization", "")
-                if auth.startswith("Bearer "):
-                    key = auth[7:]
-            if key:
-                session_id = "key-" + hashlib.sha256(key.encode()).hexdigest()[:12]
-            else:
-                session_id = "no-key"
-        elif self._strategy == "header":
-            session_id = headers.get("x-sr2-session-id", "default")
+        if self._strategy == "header":
+            # User-provided header takes precedence; fall back to API key hash
+            session_id = headers.get("x-sr2-session-id", "")
+            if not session_id:
+                session_id = self._session_from_api_key(headers)
         elif self._strategy == "single":
             session_id = "default"
         else:
@@ -103,6 +96,18 @@ class SessionTracker:
             logger.info("Destroyed session: %s", session_id)
             return session_id
         return None
+
+    @staticmethod
+    def _session_from_api_key(headers: dict[str, str]) -> str:
+        """Derive a stable session ID from the API key in request headers."""
+        key = headers.get("x-api-key", "")
+        if not key:
+            auth = headers.get("authorization", "")
+            if auth.startswith("Bearer "):
+                key = auth[7:]
+        if key:
+            return "key-" + hashlib.sha256(key.encode()).hexdigest()[:12]
+        return "default"
 
     def cleanup_idle(self) -> list[str]:
         """Remove sessions that have been idle past the timeout.

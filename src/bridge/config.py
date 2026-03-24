@@ -24,8 +24,8 @@ class BridgeForwardingConfig(BaseModel):
 class BridgeSessionConfig(BaseModel):
     """Session identification settings."""
 
-    strategy: Literal["system_hash", "header", "single", "api_key"] = Field(
-        default="api_key",
+    strategy: Literal["header", "system_hash", "single"] = Field(
+        default="header",
         description=(
             "How to identify sessions. "
             "'system_hash' hashes the system prompt (works with Claude Code). "
