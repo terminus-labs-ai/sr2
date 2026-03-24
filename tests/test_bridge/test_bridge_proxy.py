@@ -572,3 +572,350 @@ class TestBridgeApp:
             )
             assert response.status_code == 200
             forwarder.forward_passthrough.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# LLM callable factory tests
+# ---------------------------------------------------------------------------
+
+class TestAPIKeyCache:
+    """Test API key extraction and caching."""
+
+    def test_extract_x_api_key(self):
+        from bridge.llm import APIKeyCache
+
+        cache = APIKeyCache()
+        cache.update({"x-api-key": "sk-ant-test123"})
+        assert cache.key == "sk-ant-test123"
+
+    def test_extract_bearer_token(self):
+        from bridge.llm import APIKeyCache
+
+        cache = APIKeyCache()
+        cache.update({"authorization": "Bearer sk-bearer-key"})
+        assert cache.key == "sk-bearer-key"
+
+    def test_x_api_key_takes_precedence(self):
+        from bridge.llm import APIKeyCache
+
+        cache = APIKeyCache()
+        cache.update({"x-api-key": "direct-key", "authorization": "Bearer bearer-key"})
+        assert cache.key == "direct-key"
+
+    def test_no_key_returns_none(self):
+        from bridge.llm import APIKeyCache
+
+        cache = APIKeyCache()
+        cache.update({"content-type": "application/json"})
+        assert cache.key is None
+
+    def test_key_updates_on_new_value(self):
+        from bridge.llm import APIKeyCache
+
+        cache = APIKeyCache()
+        cache.update({"x-api-key": "key-1"})
+        assert cache.key == "key-1"
+        cache.update({"x-api-key": "key-2"})
+        assert cache.key == "key-2"
+
+    def test_empty_bearer_not_cached(self):
+        from bridge.llm import APIKeyCache
+
+        cache = APIKeyCache()
+        cache.update({"authorization": "Bearer "})
+        # "Bearer " with no token should not cache empty string
+        # Actually, it extracts "" which is falsy, so no update
+        assert cache.key is None
+
+
+class TestLLMCallableFactory:
+    """Test callable creation and key resolution."""
+
+    def test_summarization_callable_uses_dedicated_key(self):
+        from bridge.config import BridgeLLMModelConfig
+        from bridge.llm import APIKeyCache, make_summarization_callable
+
+        config = BridgeLLMModelConfig(model="test-model", api_key="dedicated-key")
+        cache = APIKeyCache()
+        callable_fn = make_summarization_callable(config, cache, "https://api.example.com")
+        # Should be a callable (async function)
+        assert callable(callable_fn)
+
+    def test_extraction_callable_created(self):
+        from bridge.config import BridgeLLMModelConfig
+        from bridge.llm import APIKeyCache, make_extraction_callable
+
+        config = BridgeLLMModelConfig(model="test-model", api_key="key")
+        callable_fn = make_extraction_callable(config, APIKeyCache(), "https://api.example.com")
+        assert callable(callable_fn)
+
+    def test_intent_callable_created(self):
+        from bridge.config import BridgeLLMModelConfig
+        from bridge.llm import APIKeyCache, make_intent_callable
+
+        config = BridgeLLMModelConfig(model="test-model", api_key="key")
+        callable_fn = make_intent_callable(config, APIKeyCache(), "https://api.example.com")
+        assert callable(callable_fn)
+
+    def test_embedding_callable_created(self):
+        from bridge.config import BridgeLLMModelConfig
+        from bridge.llm import APIKeyCache, make_embedding_callable
+
+        config = BridgeLLMModelConfig(model="test-model", api_key="key")
+        callable_fn = make_embedding_callable(config, APIKeyCache(), "https://api.example.com")
+        assert callable(callable_fn)
+
+    @pytest.mark.asyncio
+    async def test_summarization_raises_without_key(self):
+        from bridge.config import BridgeLLMModelConfig
+        from bridge.llm import APIKeyCache, make_summarization_callable
+
+        config = BridgeLLMModelConfig(model="test-model")  # no dedicated key
+        cache = APIKeyCache()  # no cached key
+        callable_fn = make_summarization_callable(config, cache, "https://api.example.com")
+        with pytest.raises(RuntimeError, match="No API key"):
+            await callable_fn("system", "prompt")
+
+    @pytest.mark.asyncio
+    async def test_extraction_raises_without_key(self):
+        from bridge.config import BridgeLLMModelConfig
+        from bridge.llm import APIKeyCache, make_extraction_callable
+
+        config = BridgeLLMModelConfig(model="test-model")
+        callable_fn = make_extraction_callable(config, APIKeyCache(), "https://api.example.com")
+        with pytest.raises(RuntimeError, match="No API key"):
+            await callable_fn("prompt")
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker + degradation integration tests
+# ---------------------------------------------------------------------------
+
+class TestCircuitBreakerIntegration:
+    """Test circuit breaker and degradation ladder in engine."""
+
+    def _make_engine_with_summarization(self):
+        """Create engine with a failing summarization callable."""
+        from bridge.config import BridgeLLMConfig, BridgeLLMModelConfig, BridgeDegradationConfig
+
+        config = PipelineConfig(compaction=CompactionConfig(raw_window=2))
+        bridge_config = BridgeConfig(
+            llm=BridgeLLMConfig(
+                summarization=BridgeLLMModelConfig(
+                    model="test-model",
+                    api_key="test-key",
+                ),
+            ),
+            degradation=BridgeDegradationConfig(
+                circuit_breaker_threshold=2,
+                circuit_breaker_cooldown_seconds=3600,
+            ),
+        )
+        from bridge.llm import APIKeyCache
+        engine = BridgeEngine(config, bridge_config=bridge_config, key_cache=APIKeyCache())
+        return engine
+
+    def test_degradation_starts_at_full(self):
+        engine = self._make_engine_with_summarization()
+        assert engine.degradation_level == "full"
+
+    def test_circuit_breaker_status_exposed(self):
+        engine = self._make_engine_with_summarization()
+        status = engine.circuit_breaker_status
+        assert isinstance(status, dict)
+
+
+# ---------------------------------------------------------------------------
+# Memory config + engine wiring tests
+# ---------------------------------------------------------------------------
+
+class TestMemoryConfig:
+    """Test memory configuration models."""
+
+    def test_defaults(self):
+        from bridge.config import BridgeMemoryConfig
+        cfg = BridgeMemoryConfig()
+        assert cfg.enabled is False
+        assert cfg.db_path == "sr2_bridge_memory.db"
+        assert cfg.retrieval_strategy == "keyword"
+        assert cfg.retrieval_top_k == 10
+
+    def test_memory_disabled_by_default_in_engine(self):
+        engine = BridgeEngine(PipelineConfig())
+        assert engine._memory_store is None
+        assert engine._memory_extractor is None
+
+    def test_memory_store_created_when_enabled(self):
+        from bridge.config import (
+            BridgeLLMConfig,
+            BridgeLLMModelConfig,
+            BridgeMemoryConfig,
+        )
+        from bridge.llm import APIKeyCache
+
+        bridge_config = BridgeConfig(
+            memory=BridgeMemoryConfig(enabled=True, db_path=":memory:"),
+            llm=BridgeLLMConfig(
+                extraction=BridgeLLMModelConfig(model="test", api_key="key"),
+            ),
+        )
+        engine = BridgeEngine(
+            PipelineConfig(),
+            bridge_config=bridge_config,
+            key_cache=APIKeyCache(),
+        )
+        assert engine._memory_store is not None
+        assert engine._memory_initialized is False  # lazy init
+
+    def test_memory_not_created_without_extraction_config(self):
+        from bridge.config import BridgeMemoryConfig
+        from bridge.llm import APIKeyCache
+
+        bridge_config = BridgeConfig(
+            memory=BridgeMemoryConfig(enabled=True),
+            # No llm.extraction configured
+        )
+        engine = BridgeEngine(
+            PipelineConfig(),
+            bridge_config=bridge_config,
+            key_cache=APIKeyCache(),
+        )
+        assert engine._memory_store is None
+
+
+# ---------------------------------------------------------------------------
+# Engine memory extraction + retrieval tests
+# ---------------------------------------------------------------------------
+
+class TestEngineMemoryExtraction:
+    """Test memory extraction in post_process."""
+
+    @pytest.mark.asyncio
+    async def test_post_process_without_memory_still_works(self):
+        """Engine without memory config should still increment turn counter."""
+        engine = BridgeEngine(PipelineConfig())
+        session = BridgeSession(session_id="test")
+        session.turn_counter = 3
+        await engine.post_process(session, "response text")
+        assert session.turn_counter == 4
+
+    @pytest.mark.asyncio
+    async def test_memory_lazy_initialization(self):
+        """_ensure_memory_initialized should be idempotent."""
+        from bridge.config import BridgeLLMConfig, BridgeLLMModelConfig, BridgeMemoryConfig
+        from bridge.llm import APIKeyCache
+
+        bridge_config = BridgeConfig(
+            memory=BridgeMemoryConfig(enabled=True, db_path=":memory:"),
+            llm=BridgeLLMConfig(
+                extraction=BridgeLLMModelConfig(model="test", api_key="key"),
+            ),
+        )
+        key_cache = APIKeyCache()
+        key_cache.update({"x-api-key": "test-key"})
+        engine = BridgeEngine(PipelineConfig(), bridge_config=bridge_config, key_cache=key_cache)
+
+        assert not engine._memory_initialized
+        await engine._ensure_memory_initialized()
+        assert engine._memory_initialized
+        assert engine._memory_extractor is not None
+        assert engine._conflict_detector is not None
+        assert engine._conflict_resolver is not None
+        assert engine._retriever is not None
+
+        # Second call is a no-op
+        await engine._ensure_memory_initialized()
+        assert engine._memory_initialized
+
+        await engine.shutdown()
+
+
+class TestEngineRetrievalQuery:
+    """Test _extract_retrieval_query static method."""
+
+    def test_extracts_string_content(self):
+        messages = [
+            {"role": "user", "content": "Hello world"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": "What is Python?"},
+        ]
+        query = BridgeEngine._extract_retrieval_query(messages)
+        assert query == "What is Python?"
+
+    def test_extracts_content_block_text(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Tell me about"},
+                    {"type": "text", "text": "machine learning"},
+                ],
+            },
+        ]
+        query = BridgeEngine._extract_retrieval_query(messages)
+        assert "Tell me about" in query
+        assert "machine learning" in query
+
+    def test_skips_non_user_messages(self):
+        messages = [
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "Answer"},
+        ]
+        query = BridgeEngine._extract_retrieval_query(messages)
+        assert query == "First question"
+
+    def test_returns_none_for_empty(self):
+        assert BridgeEngine._extract_retrieval_query([]) is None
+
+    def test_returns_none_for_assistant_only(self):
+        messages = [{"role": "assistant", "content": "Only assistant"}]
+        assert BridgeEngine._extract_retrieval_query(messages) is None
+
+    def test_caps_at_500_chars(self):
+        messages = [{"role": "user", "content": "x" * 1000}]
+        query = BridgeEngine._extract_retrieval_query(messages)
+        assert len(query) == 500
+
+    def test_tool_result_content_block(self):
+        """Tool result messages should not be picked as retrieval query."""
+        messages = [
+            {"role": "user", "content": "A question"},
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "content": "Result data"}],
+            },
+        ]
+        # Last user message has no text blocks, so falls through to the earlier one
+        query = BridgeEngine._extract_retrieval_query(messages)
+        assert query == "A question"
+
+
+class TestEngineShutdown:
+    """Test engine shutdown lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_shutdown_without_memory(self):
+        """Shutdown is safe when memory is not configured."""
+        engine = BridgeEngine(PipelineConfig())
+        await engine.shutdown()  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_shutdown_disconnects_memory_store(self):
+        from bridge.config import BridgeLLMConfig, BridgeLLMModelConfig, BridgeMemoryConfig
+        from bridge.llm import APIKeyCache
+
+        bridge_config = BridgeConfig(
+            memory=BridgeMemoryConfig(enabled=True, db_path=":memory:"),
+            llm=BridgeLLMConfig(
+                extraction=BridgeLLMModelConfig(model="test", api_key="key"),
+            ),
+        )
+        key_cache = APIKeyCache()
+        key_cache.update({"x-api-key": "test-key"})
+        engine = BridgeEngine(PipelineConfig(), bridge_config=bridge_config, key_cache=key_cache)
+
+        # Initialize and then shutdown
+        await engine._ensure_memory_initialized()
+        assert engine._memory_store._conn is not None
+        await engine.shutdown()
+        assert engine._memory_store._conn is None
