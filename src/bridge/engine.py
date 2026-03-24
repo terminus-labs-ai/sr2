@@ -11,6 +11,7 @@ from sr2.degradation.ladder import DegradationLadder
 from sr2.memory.conflicts import ConflictDetector
 from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
+from sr2.memory.retrieval import HybridRetriever
 from sr2.memory.store import SQLiteMemoryStore
 from sr2.pipeline.conversation import ConversationManager
 from sr2.summarization.engine import SummarizationEngine
@@ -19,6 +20,7 @@ from bridge.adapters.base import BridgeAdapter
 from bridge.config import BridgeConfig
 from bridge.llm import (
     APIKeyCache,
+    make_embedding_callable,
     make_extraction_callable,
     make_summarization_callable,
 )
@@ -93,6 +95,7 @@ class BridgeEngine:
         self._memory_extractor: MemoryExtractor | None = None
         self._conflict_detector: ConflictDetector | None = None
         self._conflict_resolver: ConflictResolver | None = None
+        self._retriever: HybridRetriever | None = None
 
         if mem_cfg.enabled and self._bridge_config.llm.extraction:
             self._memory_store = SQLiteMemoryStore(db_path=mem_cfg.db_path)
@@ -118,6 +121,22 @@ class BridgeEngine:
         )
         self._conflict_detector = ConflictDetector(store=self._memory_store)
         self._conflict_resolver = ConflictResolver(store=self._memory_store)
+
+        # Build retriever
+        embed_callable = None
+        if self._bridge_config.llm.embedding:
+            embed_callable = make_embedding_callable(
+                self._bridge_config.llm.embedding,
+                self._key_cache,
+                self._bridge_config.forwarding.upstream_url,
+            )
+        self._retriever = HybridRetriever(
+            store=self._memory_store,
+            embedding_callable=embed_callable,
+            strategy=mem_cfg.retrieval_strategy,
+            top_k=mem_cfg.retrieval_top_k,
+        )
+
         self._memory_initialized = True
         logger.info("Memory system initialized (db=%s)", mem_cfg.db_path)
 
@@ -185,17 +204,62 @@ class BridgeEngine:
                 self._breaker.record_failure("summarization")
                 self._ladder.degrade()
 
+        # Memory retrieval (guarded by circuit breaker + degradation)
+        memory_injection: str | None = None
+        if (
+            not self._ladder.should_skip("memory")
+            and not self._breaker.is_open("memory_retrieval")
+            and self._memory_store
+        ):
+            await self._ensure_memory_initialized()
+            if self._retriever:
+                try:
+                    query = self._extract_retrieval_query(messages)
+                    if query:
+                        mem_cfg = self._bridge_config.memory
+                        results = await self._retriever.retrieve(
+                            query,
+                            top_k=mem_cfg.retrieval_top_k,
+                            max_tokens=mem_cfg.retrieval_max_tokens,
+                        )
+                        if results:
+                            memory_lines = [
+                                f"- {r.memory.key}: {r.memory.value}"
+                                for r in results
+                            ]
+                            memory_injection = (
+                                "[Relevant memories from previous sessions]\n"
+                                + "\n".join(memory_lines)
+                                + "\n[End of memories]"
+                            )
+                            logger.info(
+                                "Session %s: retrieved %d memories",
+                                session_id, len(results),
+                            )
+                        self._breaker.record_success("memory_retrieval")
+                except Exception:
+                    logger.warning(
+                        "Session %s: memory retrieval failed",
+                        session_id, exc_info=True,
+                    )
+                    self._breaker.record_failure("memory_retrieval")
+
         # Rebuild message list from zones
         zones = self._conversation.zones(session_id)
 
-        # Inject summaries as system prompt context
+        # Inject summaries and memories as system prompt context
         system_injection: str | None = None
+        injection_parts: list[str] = []
         if zones.summarized:
             summary_text = "\n\n".join(zones.summarized)
-            system_injection = (
+            injection_parts.append(
                 f"[Previous conversation summary]\n{summary_text}\n"
                 f"[End of summary — recent conversation follows]"
             )
+        if memory_injection:
+            injection_parts.append(memory_injection)
+        if injection_parts:
+            system_injection = "\n\n".join(injection_parts)
 
         # Convert turns back to wire format via adapter
         all_turns = list(zones.compacted) + list(zones.raw)
@@ -251,6 +315,24 @@ class BridgeEngine:
                         session.session_id, exc_info=True,
                     )
                     self._breaker.record_failure("memory_extraction")
+
+    @staticmethod
+    def _extract_retrieval_query(messages: list[dict]) -> str | None:
+        """Extract text from the latest user message for memory retrieval."""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    return content[:500]  # cap query length
+                if isinstance(content, list):
+                    # Extract text blocks from content array
+                    texts = [
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    ]
+                    if texts:
+                        return " ".join(texts)[:500]
+        return None
 
     def _reset_session(self, session: BridgeSession) -> None:
         """Reset conversation state for a session."""
