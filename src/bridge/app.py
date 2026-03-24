@@ -9,11 +9,11 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 
-from runtime.bridge.adapters.anthropic import AnthropicAdapter
-from runtime.bridge.config import BridgeConfig
-from runtime.bridge.engine import BridgeEngine
-from runtime.bridge.forwarder import BridgeForwarder
-from runtime.bridge.session_tracker import SessionTracker
+from bridge.adapters.anthropic import AnthropicAdapter
+from bridge.config import BridgeConfig
+from bridge.engine import BridgeEngine
+from bridge.forwarder import BridgeForwarder
+from bridge.session_tracker import SessionTracker
 
 logger = logging.getLogger(__name__)
 

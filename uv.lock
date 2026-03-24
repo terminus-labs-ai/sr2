@@ -2048,10 +2048,16 @@ all = [
     { name = "a2a-sdk" },
     { name = "asyncpg" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "mcp" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-sdk" },
     { name = "python-telegram-bot" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+bridge = [
+    { name = "fastapi" },
+    { name = "httpx" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 dev = [
@@ -2093,7 +2099,9 @@ requires-dist = [
     { name = "a2a-sdk", marker = "extra == 'a2a'", specifier = ">=0.3" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29" },
+    { name = "fastapi", marker = "extra == 'bridge'", specifier = ">=0.110" },
     { name = "fastapi", marker = "extra == 'runtime'", specifier = ">=0.110" },
+    { name = "httpx", marker = "extra == 'bridge'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "litellm", specifier = ">=1.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
@@ -2109,10 +2117,11 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
     { name = "sr2", extras = ["all"], marker = "extra == 'dev'" },
-    { name = "sr2", extras = ["runtime", "telegram", "postgres", "a2a", "mcp", "otel"], marker = "extra == 'all'" },
+    { name = "sr2", extras = ["runtime", "telegram", "postgres", "a2a", "mcp", "otel", "bridge"], marker = "extra == 'all'" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'bridge'", specifier = ">=0.27" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'runtime'", specifier = ">=0.27" },
 ]
-provides-extras = ["runtime", "telegram", "postgres", "a2a", "mcp", "otel", "all", "dev"]
+provides-extras = ["runtime", "telegram", "postgres", "a2a", "mcp", "otel", "bridge", "all", "dev"]
 
 [[package]]
 name = "sse-starlette"

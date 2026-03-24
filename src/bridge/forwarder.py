@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from runtime.bridge.config import BridgeForwardingConfig
+from bridge.config import BridgeForwardingConfig
 
 logger = logging.getLogger(__name__)
 
