@@ -10,7 +10,7 @@ from sr2.config.models import CompactionConfig, PipelineConfig, SummarizationCon
 from sr2.pipeline.conversation import ConversationManager
 from sr2.summarization.engine import SummarizationEngine
 
-from runtime.bridge.adapters.base import BridgeAdapter
+from bridge.adapters.base import BridgeAdapter
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from runtime.bridge.config import BridgeSessionConfig
+from bridge.config import BridgeSessionConfig
 
 logger = logging.getLogger(__name__)
 

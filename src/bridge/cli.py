@@ -87,10 +87,10 @@ def build_components(raw_config: dict):
     from sr2.config.loader import ConfigLoader
     from sr2.config.models import PipelineConfig
 
-    from runtime.bridge.config import BridgeConfig
-    from runtime.bridge.engine import BridgeEngine
-    from runtime.bridge.forwarder import BridgeForwarder
-    from runtime.bridge.session_tracker import SessionTracker
+    from bridge.config import BridgeConfig
+    from bridge.engine import BridgeEngine
+    from bridge.forwarder import BridgeForwarder
+    from bridge.session_tracker import SessionTracker
 
     # Bridge config
     bridge_config = BridgeConfig(**(raw_config.get("bridge", {})))
@@ -129,7 +129,7 @@ def main():
     raw_config = load_config(args)
     bridge_config, engine, forwarder, session_tracker = build_components(raw_config)
 
-    from runtime.bridge.app import create_bridge_app
+    from bridge.app import create_bridge_app
 
     app = create_bridge_app(bridge_config, engine, forwarder, session_tracker)
 
