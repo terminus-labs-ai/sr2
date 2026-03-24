@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from bridge.engine import BridgeEngine
-from bridge.session_tracker import BridgeSession, SessionTracker
+from bridge.session_tracker import SessionTracker
 
 
 class BridgeMetricsExporter:
