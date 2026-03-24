@@ -16,11 +16,13 @@ def _make_heartbeat(
     prompt: str = "Check status",
     key: str | None = None,
     context_turns: list[dict] | None = None,
+    source_interface: str = "telegram",
 ) -> Heartbeat:
     return Heartbeat(
         id=hb_id,
         agent_name="test-agent",
         source_session="sess-1",
+        source_interface=source_interface,
         prompt=prompt,
         fire_at=fire_at or (datetime.now(UTC) - timedelta(minutes=1)),
         key=key,
@@ -157,27 +159,105 @@ class TestHeartbeatScanner:
 
         # Simulate one loop iteration — should skip
         scanner._running = True
-        # _loop sleeps first then checks _busy, so we test the flag directly
         assert scanner._busy is True
 
     @pytest.mark.asyncio
-    async def test_pipeline_sets_interface_name(self):
+    async def test_respond_fn_called_with_response(self):
         store = InMemoryHeartbeatStore()
-        hb = _make_heartbeat()
+        hb = _make_heartbeat(source_interface="telegram")
         await store.upsert(hb)
 
-        callback = AsyncMock(return_value="ok")
+        callback = AsyncMock(return_value="Deploy looks good!")
+        respond_fn = AsyncMock()
         scanner = HeartbeatScanner(
             store=store,
             agent_callback=callback,
             poll_interval_seconds=0,
-            pipeline="interfaces/heartbeat.yaml",
+            respond_fn=respond_fn,
         )
 
         await scanner._fire(hb)
 
-        trigger: TriggerContext = callback.call_args[0][0]
-        assert trigger.interface_name == "_heartbeat_interfaces/heartbeat.yaml"
+        respond_fn.assert_called_once_with("telegram", "sess-1", "Deploy looks good!")
+
+    @pytest.mark.asyncio
+    async def test_respond_fn_not_called_when_response_empty(self):
+        store = InMemoryHeartbeatStore()
+        hb = _make_heartbeat(source_interface="telegram")
+        await store.upsert(hb)
+
+        callback = AsyncMock(return_value="")
+        respond_fn = AsyncMock()
+        scanner = HeartbeatScanner(
+            store=store,
+            agent_callback=callback,
+            poll_interval_seconds=0,
+            respond_fn=respond_fn,
+        )
+
+        await scanner._fire(hb)
+
+        respond_fn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_respond_fn_not_called_when_none(self):
+        store = InMemoryHeartbeatStore()
+        hb = _make_heartbeat(source_interface="telegram")
+        await store.upsert(hb)
+
+        callback = AsyncMock(return_value="Some response")
+        scanner = HeartbeatScanner(
+            store=store,
+            agent_callback=callback,
+            poll_interval_seconds=0,
+            respond_fn=None,
+        )
+
+        # Should not raise
+        await scanner._fire(hb)
+
+        loaded = await store.get("hb-1")
+        assert loaded.status == HeartbeatStatus.completed
+
+    @pytest.mark.asyncio
+    async def test_respond_fn_not_called_when_no_source_interface(self):
+        store = InMemoryHeartbeatStore()
+        hb = _make_heartbeat(source_interface="")
+        await store.upsert(hb)
+
+        callback = AsyncMock(return_value="Some response")
+        respond_fn = AsyncMock()
+        scanner = HeartbeatScanner(
+            store=store,
+            agent_callback=callback,
+            poll_interval_seconds=0,
+            respond_fn=respond_fn,
+        )
+
+        await scanner._fire(hb)
+
+        respond_fn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_respond_fn_failure_does_not_fail_heartbeat(self):
+        store = InMemoryHeartbeatStore()
+        hb = _make_heartbeat(source_interface="telegram")
+        await store.upsert(hb)
+
+        callback = AsyncMock(return_value="response")
+        respond_fn = AsyncMock(side_effect=RuntimeError("plugin down"))
+        scanner = HeartbeatScanner(
+            store=store,
+            agent_callback=callback,
+            poll_interval_seconds=0,
+            respond_fn=respond_fn,
+        )
+
+        await scanner._fire(hb)
+
+        # Heartbeat should still be completed, delivery failure is non-fatal
+        loaded = await store.get("hb-1")
+        assert loaded.status == HeartbeatStatus.completed
 
     @pytest.mark.asyncio
     async def test_loop_processes_multiple_due(self):

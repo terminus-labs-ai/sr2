@@ -14,11 +14,13 @@ def _make_heartbeat(
     key: str | None = None,
     prompt: str = "Check status",
     source_session: str = "sess-1",
+    source_interface: str = "telegram",
 ) -> Heartbeat:
     return Heartbeat(
         id=hb_id,
         agent_name=agent_name,
         source_session=source_session,
+        source_interface=source_interface,
         prompt=prompt,
         fire_at=fire_at or (datetime.now(UTC) + timedelta(minutes=5)),
         key=key,
@@ -160,6 +162,18 @@ class TestInMemoryHeartbeatStore:
 
         # hb-2 ID should not exist
         assert await store.get("hb-2") is None
+
+    @pytest.mark.asyncio
+    async def test_idempotent_upsert_copies_source_interface(self):
+        store = InMemoryHeartbeatStore()
+        hb1 = _make_heartbeat("hb-1", key="retry-b", source_interface="telegram")
+        await store.upsert(hb1)
+
+        hb2 = _make_heartbeat("hb-2", key="retry-b", source_interface="http")
+        await store.upsert(hb2)
+
+        loaded = await store.get_by_key("retry-b")
+        assert loaded.source_interface == "http"
 
     @pytest.mark.asyncio
     async def test_list_pending(self):
