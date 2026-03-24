@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
 from sr2.config.models import CompactionConfig, PipelineConfig, SummarizationConfig
@@ -11,17 +10,9 @@ from sr2.pipeline.conversation import ConversationManager
 from sr2.summarization.engine import SummarizationEngine
 
 from bridge.adapters.base import BridgeAdapter
+from bridge.session_tracker import BridgeSession
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class SessionState:
-    """Per-session tracking for the bridge engine."""
-
-    last_message_count: int = 0
-    turn_counter: int = 0
-    turns: list[ConversationTurn] = field(default_factory=list)
 
 
 class BridgeEngine:
@@ -63,45 +54,36 @@ class BridgeEngine:
             raw_window=compaction_config.raw_window,
         )
 
-        # Per-session state (message count tracking)
-        self._session_states: dict[str, SessionState] = {}
-
-    def _get_state(self, session_id: str) -> SessionState:
-        if session_id not in self._session_states:
-            self._session_states[session_id] = SessionState()
-        return self._session_states[session_id]
-
     async def optimize(
         self,
         system: str | None,
         messages: list[dict],
-        session_id: str,
+        session: BridgeSession,
         adapter: BridgeAdapter,
     ) -> tuple[str | None, list[dict]]:
         """Optimize messages using SR2 pipeline.
 
         Returns (system_injection_or_None, optimized_messages).
         """
-        state = self._get_state(session_id)
+        session_id = session.session_id
         current_count = len(messages)
 
-        if current_count <= state.last_message_count:
+        if current_count <= session.last_message_count:
             # No new messages (or history was reset). If shorter, reset session.
-            if current_count < state.last_message_count:
+            if current_count < session.last_message_count:
                 logger.info(
                     "Session %s: message count decreased (%d -> %d), resetting",
-                    session_id, state.last_message_count, current_count,
+                    session_id, session.last_message_count, current_count,
                 )
-                self._reset_session(session_id)
-                state = self._get_state(session_id)
+                self._reset_session(session)
 
         # Ingest new messages as turns
-        new_messages = messages[state.last_message_count:]
+        new_messages = messages[session.last_message_count:]
         for msg in new_messages:
-            turn = self._message_to_turn(msg, state)
+            turn = self._message_to_turn(msg, session)
             self._conversation.add_turn(turn, session_id)
 
-        state.last_message_count = current_count
+        session.last_message_count = current_count
 
         # Run compaction
         compaction_result = self._conversation.run_compaction(session_id)
@@ -158,27 +140,23 @@ class BridgeEngine:
 
         return system_injection, optimized
 
-    async def post_process(self, session_id: str, assistant_text: str) -> None:
+    async def post_process(self, session: BridgeSession, assistant_text: str) -> None:
         """Post-process after a response stream completes.
 
         Adds the assistant response as a turn so it's tracked for future
         compaction/summarization.
         """
-        state = self._get_state(session_id)
         turn = ConversationTurn(
-            turn_number=state.turn_counter,
+            turn_number=session.turn_counter,
             role="assistant",
             content=assistant_text,
         )
-        state.turn_counter += 1
+        session.turn_counter += 1
         # Don't add to conversation manager — Claude Code will send the full
         # history including this response on the next request. We just increment
         # last_message_count so we know to expect it.
-        # Actually, the external caller sends full history, so we track via
-        # last_message_count. The assistant response will come back as part of
-        # the next request's messages array.
 
-    def _message_to_turn(self, msg: dict, state: SessionState) -> ConversationTurn:
+    def _message_to_turn(self, msg: dict, session: BridgeSession) -> ConversationTurn:
         """Convert an API message dict to a ConversationTurn."""
         role = msg.get("role", "user")
         content = msg.get("content", "")
@@ -212,13 +190,13 @@ class BridgeEngine:
             content_type = None
 
         turn = ConversationTurn(
-            turn_number=state.turn_counter,
+            turn_number=session.turn_counter,
             role=role,
             content=content_str,
             content_type=content_type,
             metadata={"_original_message": msg},
         )
-        state.turn_counter += 1
+        session.turn_counter += 1
         return turn
 
     def _detect_content_type(self, content_blocks: list) -> str | None:
@@ -234,39 +212,36 @@ class BridgeEngine:
         return None
 
     def _turn_to_message(self, turn: ConversationTurn) -> dict:
-        """Convert a ConversationTurn back to an API message dict.
-
-        For compacted turns, we emit plain text content. For raw turns that
-        still have their original structure, we'd ideally preserve it — but
-        since we've already flattened to text in _message_to_turn, we
-        reconstruct as simple text messages.
-        """
+        """Convert a ConversationTurn back to an API message dict."""
         return {"role": turn.role, "content": turn.content}
 
-    def _reset_session(self, session_id: str) -> None:
-        """Reset all state for a session."""
-        self._conversation.destroy_session(session_id)
-        self._session_states.pop(session_id, None)
+    def _reset_session(self, session: BridgeSession) -> None:
+        """Reset conversation state for a session."""
+        self._conversation.destroy_session(session.session_id)
+        session.last_message_count = 0
+        session.turn_counter = 0
+        session.turns = []
 
     def destroy_session(self, session_id: str) -> None:
-        """Public interface to clean up a session."""
-        self._reset_session(session_id)
+        """Clean up ConversationManager state for a session."""
+        self._conversation.destroy_session(session_id)
 
     def get_metrics(self) -> dict:
         """Return bridge engine metrics."""
-        metrics = {}
-        for sid, state in self._session_states.items():
-            zones = self._conversation.zones(sid)
-            metrics[sid] = {
-                "message_count": state.last_message_count,
-                "turn_counter": state.turn_counter,
-                "summarized_count": len(zones.summarized),
-                "compacted_count": len(zones.compacted),
-                "raw_count": len(zones.raw),
-                "total_tokens": zones.total_tokens,
-                "zone_transitions": self._conversation.get_zone_transitions(sid),
-            }
-        return metrics
+        return {}
+
+    def get_session_metrics(self, session: BridgeSession) -> dict:
+        """Return metrics for a specific session."""
+        zones = self._conversation.zones(session.session_id)
+        return {
+            "message_count": session.last_message_count,
+            "turn_counter": session.turn_counter,
+            "summarized_count": len(zones.summarized),
+            "compacted_count": len(zones.compacted),
+            "raw_count": len(zones.raw),
+            "total_tokens": zones.total_tokens,
+            "zone_transitions": self._conversation.get_zone_transitions(session.session_id),
+        }
 
 
 def _truncate(text: str, max_len: int) -> str:

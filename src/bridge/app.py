@@ -13,7 +13,7 @@ from bridge.adapters.anthropic import AnthropicAdapter
 from bridge.config import BridgeConfig
 from bridge.engine import BridgeEngine
 from bridge.forwarder import BridgeForwarder
-from bridge.session_tracker import SessionTracker
+from bridge.session_tracker import BridgeSession, SessionTracker
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,7 @@ def create_bridge_app(
         # Extract messages and identify session
         system, messages = adapter.extract_messages(body)
         session_id = session_tracker.identify(body, headers, system)
+        session = session_tracker.get(session_id)
 
         logger.debug(
             "Session %s: %d messages, stream=%s",
@@ -71,7 +72,7 @@ def create_bridge_app(
             system_injection, optimized_messages = await engine.optimize(
                 system=system,
                 messages=messages,
-                session_id=session_id,
+                session=session,
                 adapter=adapter,
             )
         except Exception:
@@ -96,7 +97,7 @@ def create_bridge_app(
         if is_streaming:
             return StreamingResponse(
                 _stream_and_capture(
-                    forwarder, engine, adapter, optimized_body, headers, session_id
+                    forwarder, engine, adapter, optimized_body, headers, session
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -126,7 +127,6 @@ def create_bridge_app(
 
     @app.get("/metrics")
     async def metrics():
-        engine_metrics = engine.get_metrics()
         sessions = session_tracker.all_sessions()
 
         lines = [
@@ -137,13 +137,14 @@ def create_bridge_app(
             "# HELP sr2_bridge_session_requests Total requests per session",
             "# TYPE sr2_bridge_session_requests counter",
         ]
-        for sid, info in sessions.items():
-            lines.append(f'sr2_bridge_session_requests{{session="{sid}"}} {info.request_count}')
+        for sid, session in sessions.items():
+            lines.append(f'sr2_bridge_session_requests{{session="{sid}"}} {session.request_count}')
 
         lines.append("")
         lines.append("# HELP sr2_bridge_session_tokens Estimated tokens per session zone")
         lines.append("# TYPE sr2_bridge_session_tokens gauge")
-        for sid, m in engine_metrics.items():
+        for sid, session in sessions.items():
+            m = engine.get_session_metrics(session)
             lines.append(
                 f'sr2_bridge_session_tokens{{session="{sid}",zone="summarized"}} '
                 f'{m["summarized_count"]}'
@@ -200,7 +201,7 @@ async def _stream_and_capture(
     adapter: AnthropicAdapter,
     body: dict,
     headers: dict[str, str],
-    session_id: str,
+    session: BridgeSession,
 ):
     """Stream SSE from upstream, passthrough each chunk, accumulate response text."""
     accumulated: list[str] = []
@@ -214,4 +215,4 @@ async def _stream_and_capture(
     # Post-process after stream completes (fire-and-forget)
     if accumulated:
         full_text = "".join(accumulated)
-        asyncio.create_task(engine.post_process(session_id, full_text))
+        asyncio.create_task(engine.post_process(session, full_text))
