@@ -138,13 +138,19 @@ class BridgeEngine:
                 f"[End of summary — recent conversation follows]"
             )
 
-        # Add compacted turns
+        # Add compacted turns (flattened text — original structure lost)
         for turn in zones.compacted:
-            optimized.append(self._turn_to_message(turn))
+            if turn.compacted:
+                optimized.append(self._turn_to_message(turn))
+            else:
+                # Not actually compacted — preserve original message if available
+                original = turn.metadata.get("_original_message") if turn.metadata else None
+                optimized.append(original if original else self._turn_to_message(turn))
 
-        # Add raw turns
+        # Add raw turns — always preserve original message structure
         for turn in zones.raw:
-            optimized.append(self._turn_to_message(turn))
+            original = turn.metadata.get("_original_message") if turn.metadata else None
+            optimized.append(original if original else self._turn_to_message(turn))
 
         # If we have no optimized messages, fall through to original
         if not optimized:
@@ -210,6 +216,7 @@ class BridgeEngine:
             role=role,
             content=content_str,
             content_type=content_type,
+            metadata={"_original_message": msg},
         )
         state.turn_counter += 1
         return turn
