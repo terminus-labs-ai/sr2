@@ -8,12 +8,20 @@ from sr2.compaction.engine import CompactionEngine, ConversationTurn
 from sr2.config.models import CompactionConfig, PipelineConfig, SummarizationConfig
 from sr2.degradation.circuit_breaker import CircuitBreaker
 from sr2.degradation.ladder import DegradationLadder
+from sr2.memory.conflicts import ConflictDetector
+from sr2.memory.extraction import MemoryExtractor
+from sr2.memory.resolution import ConflictResolver
+from sr2.memory.store import SQLiteMemoryStore
 from sr2.pipeline.conversation import ConversationManager
 from sr2.summarization.engine import SummarizationEngine
 
 from bridge.adapters.base import BridgeAdapter
-from bridge.config import BridgeConfig, BridgeDegradationConfig
-from bridge.llm import APIKeyCache, make_summarization_callable
+from bridge.config import BridgeConfig
+from bridge.llm import (
+    APIKeyCache,
+    make_extraction_callable,
+    make_summarization_callable,
+)
 from bridge.session_tracker import BridgeSession
 
 logger = logging.getLogger(__name__)
@@ -28,6 +36,7 @@ class BridgeEngine:
     3. Runs compaction on turns outside raw_window
     4. Checks summarization trigger (guarded by circuit breaker)
     5. Asks the adapter to rebuild the message array from zones
+    6. Post-process: extract memories from assistant response
     """
 
     def __init__(
@@ -39,6 +48,7 @@ class BridgeEngine:
         self._config = pipeline_config
         self._bridge_config = bridge_config or BridgeConfig()
         self._key_cache = key_cache or APIKeyCache()
+        self._memory_initialized = False
 
         # Build compaction engine
         compaction_config = pipeline_config.compaction or CompactionConfig()
@@ -76,6 +86,40 @@ class BridgeEngine:
             cooldown_seconds=deg.circuit_breaker_cooldown_seconds,
         )
         self._ladder = DegradationLadder()
+
+        # Memory system (deferred init — SQLite connect is async)
+        mem_cfg = self._bridge_config.memory
+        self._memory_store: SQLiteMemoryStore | None = None
+        self._memory_extractor: MemoryExtractor | None = None
+        self._conflict_detector: ConflictDetector | None = None
+        self._conflict_resolver: ConflictResolver | None = None
+
+        if mem_cfg.enabled and self._bridge_config.llm.extraction:
+            self._memory_store = SQLiteMemoryStore(db_path=mem_cfg.db_path)
+
+    async def _ensure_memory_initialized(self) -> None:
+        """Lazily connect to SQLite on first use."""
+        if self._memory_initialized or not self._memory_store:
+            return
+
+        await self._memory_store.connect()
+
+        extraction_callable = make_extraction_callable(
+            self._bridge_config.llm.extraction,
+            self._key_cache,
+            self._bridge_config.forwarding.upstream_url,
+        )
+
+        mem_cfg = self._bridge_config.memory
+        self._memory_extractor = MemoryExtractor(
+            llm_callable=extraction_callable,
+            store=self._memory_store,
+            max_memories_per_turn=mem_cfg.max_memories_per_turn,
+        )
+        self._conflict_detector = ConflictDetector(store=self._memory_store)
+        self._conflict_resolver = ConflictResolver(store=self._memory_store)
+        self._memory_initialized = True
+        logger.info("Memory system initialized (db=%s)", mem_cfg.db_path)
 
     async def optimize(
         self,
@@ -166,8 +210,8 @@ class BridgeEngine:
     async def post_process(self, session: BridgeSession, assistant_text: str) -> None:
         """Post-process after a response stream completes.
 
-        Adds the assistant response as a turn so it's tracked for future
-        compaction/summarization.
+        1. Track assistant turn
+        2. Extract memories (guarded by circuit breaker)
         """
         turn = ConversationTurn(
             turn_number=session.turn_counter,
@@ -175,6 +219,38 @@ class BridgeEngine:
             content=assistant_text,
         )
         session.turn_counter += 1
+
+        # Memory extraction (guarded)
+        if (
+            not self._ladder.should_skip("memory")
+            and not self._breaker.is_open("memory_extraction")
+        ):
+            await self._ensure_memory_initialized()
+            if self._memory_extractor:
+                try:
+                    result = await self._memory_extractor.extract(
+                        conversation_turn=assistant_text,
+                        conversation_id=session.session_id,
+                        turn_number=turn.turn_number,
+                    )
+                    if result.memories:
+                        logger.info(
+                            "Session %s: extracted %d memories",
+                            session.session_id, len(result.memories),
+                        )
+                        # Conflict detection + resolution
+                        if self._conflict_detector and self._conflict_resolver:
+                            for mem in result.memories:
+                                conflicts = await self._conflict_detector.detect(mem)
+                                if conflicts:
+                                    await self._conflict_resolver.resolve_all(conflicts)
+                    self._breaker.record_success("memory_extraction")
+                except Exception:
+                    logger.warning(
+                        "Session %s: memory extraction failed",
+                        session.session_id, exc_info=True,
+                    )
+                    self._breaker.record_failure("memory_extraction")
 
     def _reset_session(self, session: BridgeSession) -> None:
         """Reset conversation state for a session."""
@@ -186,6 +262,11 @@ class BridgeEngine:
     def destroy_session(self, session_id: str) -> None:
         """Clean up ConversationManager state for a session."""
         self._conversation.destroy_session(session_id)
+
+    async def shutdown(self) -> None:
+        """Clean up resources (close DB connections)."""
+        if self._memory_store:
+            await self._memory_store.disconnect()
 
     def get_session_metrics(self, session: BridgeSession) -> dict:
         """Return metrics for a specific session."""
