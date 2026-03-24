@@ -6,10 +6,13 @@ import logging
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
 from sr2.config.models import CompactionConfig, PipelineConfig, SummarizationConfig
+from sr2.degradation.circuit_breaker import CircuitBreaker
+from sr2.degradation.ladder import DegradationLadder
 from sr2.pipeline.conversation import ConversationManager
 from sr2.summarization.engine import SummarizationEngine
 
 from bridge.adapters.base import BridgeAdapter
+from bridge.config import BridgeDegradationConfig
 from bridge.session_tracker import BridgeSession
 
 logger = logging.getLogger(__name__)
@@ -22,7 +25,7 @@ class BridgeEngine:
     1. Compares incoming message count to last known count
     2. Delegates wire-format conversion to the adapter
     3. Runs compaction on turns outside raw_window
-    4. Checks summarization trigger
+    4. Checks summarization trigger (guarded by circuit breaker)
     5. Asks the adapter to rebuild the message array from zones
     """
 
@@ -30,6 +33,7 @@ class BridgeEngine:
         self,
         pipeline_config: PipelineConfig,
         llm_callable=None,
+        degradation_config: BridgeDegradationConfig | None = None,
     ):
         self._config = pipeline_config
         self._llm_callable = llm_callable
@@ -53,6 +57,14 @@ class BridgeEngine:
             summarization_engine=self._summarization,
             raw_window=compaction_config.raw_window,
         )
+
+        # Degradation: circuit breaker + ladder
+        deg = degradation_config or BridgeDegradationConfig()
+        self._breaker = CircuitBreaker(
+            threshold=deg.circuit_breaker_threshold,
+            cooldown_seconds=deg.circuit_breaker_cooldown_seconds,
+        )
+        self._ladder = DegradationLadder()
 
     async def optimize(
         self,
@@ -84,27 +96,39 @@ class BridgeEngine:
         session.turn_counter += len(new_turns)
         session.last_message_count = current_count
 
-        # Run compaction
-        compaction_result = self._conversation.run_compaction(session_id)
-        if compaction_result and compaction_result.turns_compacted > 0:
-            logger.info(
-                "Session %s: compacted %d turns (%d -> %d tokens)",
-                session_id,
-                compaction_result.turns_compacted,
-                compaction_result.original_tokens,
-                compaction_result.compacted_tokens,
-            )
+        # Run compaction (not gated — compaction is local, no external calls)
+        if not self._ladder.should_skip("compaction"):
+            compaction_result = self._conversation.run_compaction(session_id)
+            if compaction_result and compaction_result.turns_compacted > 0:
+                logger.info(
+                    "Session %s: compacted %d turns (%d -> %d tokens)",
+                    session_id,
+                    compaction_result.turns_compacted,
+                    compaction_result.original_tokens,
+                    compaction_result.compacted_tokens,
+                )
 
-        # Run summarization (async)
-        summarization_result = await self._conversation.run_summarization(session_id)
-        if summarization_result:
-            logger.info(
-                "Session %s: summarized turns %s (%d -> %d tokens)",
-                session_id,
-                summarization_result.turn_range,
-                summarization_result.original_tokens,
-                summarization_result.summary_tokens,
-            )
+        # Run summarization (guarded by circuit breaker + degradation ladder)
+        if not self._ladder.should_skip("summarization") and not self._breaker.is_open(
+            "summarization"
+        ):
+            try:
+                summarization_result = await self._conversation.run_summarization(session_id)
+                if summarization_result:
+                    logger.info(
+                        "Session %s: summarized turns %s (%d -> %d tokens)",
+                        session_id,
+                        summarization_result.turn_range,
+                        summarization_result.original_tokens,
+                        summarization_result.summary_tokens,
+                    )
+                    self._breaker.record_success("summarization")
+            except Exception:
+                logger.warning(
+                    "Session %s: summarization failed", session_id, exc_info=True
+                )
+                self._breaker.record_failure("summarization")
+                self._ladder.degrade()
 
         # Rebuild message list from zones
         zones = self._conversation.zones(session_id)
@@ -164,3 +188,11 @@ class BridgeEngine:
             "total_tokens": zones.total_tokens,
             "zone_transitions": self._conversation.get_zone_transitions(session.session_id),
         }
+
+    @property
+    def degradation_level(self) -> str:
+        return self._ladder.level
+
+    @property
+    def circuit_breaker_status(self) -> dict:
+        return self._breaker.status()
