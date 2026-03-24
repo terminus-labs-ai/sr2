@@ -26,16 +26,18 @@ def create_bridge_app(
     session_tracker: SessionTracker,
 ) -> FastAPI:
     """Create the FastAPI bridge proxy application."""
-    app = FastAPI(title="SR2 Bridge")
-    adapter = AnthropicAdapter()
+    async def _cleanup_loop():
+        """Periodically clean up idle sessions."""
+        while True:
+            await asyncio.sleep(60)
+            expired = session_tracker.cleanup_idle()
+            for sid in expired:
+                engine.destroy_session(sid)
 
-    # Track startup time for health endpoint
-    start_time = time.time()
+    from contextlib import asynccontextmanager
 
-    # --- Lifecycle ---
-
-    @app.on_event("startup")
-    async def startup():
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         await forwarder.start()
         logger.info(
             "SR2 Bridge started on %s:%d -> %s",
@@ -43,11 +45,21 @@ def create_bridge_app(
             bridge_config.port,
             bridge_config.forwarding.upstream_url,
         )
+        cleanup_task = asyncio.create_task(_cleanup_loop())
+        try:
+            yield
+        finally:
+            cleanup_task.cancel()
+            await forwarder.stop()
+            logger.info("SR2 Bridge stopped")
 
-    @app.on_event("shutdown")
-    async def shutdown():
-        await forwarder.stop()
-        logger.info("SR2 Bridge stopped")
+    app = FastAPI(title="SR2 Bridge", lifespan=lifespan)
+    adapter = AnthropicAdapter()
+
+    # Track startup time for health endpoint
+    start_time = time.time()
+
+    # Lifecycle handled via lifespan context manager (see below)
 
     # --- Main proxy route ---
 
