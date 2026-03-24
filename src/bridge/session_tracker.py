@@ -7,20 +7,30 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from sr2.compaction.engine import ConversationTurn
+
 from bridge.config import BridgeSessionConfig
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SessionInfo:
-    """Tracked state for a bridge session."""
+class BridgeSession:
+    """Tracked state for a bridge session.
+
+    Unifies session identification (tracker) and conversation state (engine)
+    into a single object. Previously split across SessionInfo and SessionState.
+    """
 
     session_id: str
     created_at: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     request_count: int = 0
     last_message_count: int = 0
+
+    # Conversation state (previously in engine.SessionState)
+    turn_counter: int = 0
+    turns: list[ConversationTurn] = field(default_factory=list)
 
     def touch(self) -> None:
         self.last_seen = time.time()
@@ -41,7 +51,7 @@ class SessionTracker:
     def __init__(self, config: BridgeSessionConfig):
         self._strategy = config.strategy
         self._idle_timeout = config.idle_timeout_minutes * 60
-        self._sessions: dict[str, SessionInfo] = {}
+        self._sessions: dict[str, BridgeSession] = {}
 
     def identify(
         self,
@@ -62,17 +72,25 @@ class SessionTracker:
             else:
                 session_id = "no-system"
 
-        # Get or create session info
+        # Get or create session
         if session_id not in self._sessions:
-            self._sessions[session_id] = SessionInfo(session_id=session_id)
+            self._sessions[session_id] = BridgeSession(session_id=session_id)
             logger.info("New session: %s (strategy=%s)", session_id, self._strategy)
 
         self._sessions[session_id].touch()
         return session_id
 
-    def get(self, session_id: str) -> SessionInfo | None:
-        """Get session info by ID."""
+    def get(self, session_id: str) -> BridgeSession | None:
+        """Get session by ID."""
         return self._sessions.get(session_id)
+
+    def destroy(self, session_id: str) -> str | None:
+        """Remove a session and return its ID, or None if not found."""
+        session = self._sessions.pop(session_id, None)
+        if session:
+            logger.info("Destroyed session: %s", session_id)
+            return session_id
+        return None
 
     def cleanup_idle(self) -> list[str]:
         """Remove sessions that have been idle past the timeout.
@@ -82,8 +100,8 @@ class SessionTracker:
         now = time.time()
         expired = [
             sid
-            for sid, info in self._sessions.items()
-            if (now - info.last_seen) > self._idle_timeout
+            for sid, session in self._sessions.items()
+            if (now - session.last_seen) > self._idle_timeout
         ]
         for sid in expired:
             del self._sessions[sid]
@@ -94,5 +112,5 @@ class SessionTracker:
     def active_sessions(self) -> int:
         return len(self._sessions)
 
-    def all_sessions(self) -> dict[str, SessionInfo]:
+    def all_sessions(self) -> dict[str, BridgeSession]:
         return dict(self._sessions)
