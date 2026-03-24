@@ -117,7 +117,8 @@ def create_bridge_app(
         if is_streaming:
             return StreamingResponse(
                 _stream_and_capture(
-                    forwarder, engine, adapter, optimized_body, headers, session
+                    forwarder, engine, adapter, optimized_body, headers, session,
+                    query_params=request.url.query,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -126,7 +127,10 @@ def create_bridge_app(
                 },
             )
         else:
-            response = await forwarder.forward("/v1/messages", optimized_body, headers)
+            response = await forwarder.forward(
+                "/v1/messages", optimized_body, headers,
+                query_params=request.url.query or None,
+            )
             return Response(
                 content=response.content,
                 status_code=response.status_code,
@@ -197,11 +201,14 @@ async def _stream_and_capture(
     body: dict,
     headers: dict[str, str],
     session: BridgeSession,
+    query_params: str | None = None,
 ):
     """Stream SSE from upstream, passthrough each chunk, accumulate response text."""
     accumulated: list[str] = []
 
-    async for chunk in forwarder.forward_streaming("/v1/messages", body, headers):
+    async for chunk in forwarder.forward_streaming(
+        "/v1/messages", body, headers, query_params=query_params or None,
+    ):
         yield chunk
         text = adapter.parse_sse_text(chunk)
         if text:
