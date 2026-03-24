@@ -136,35 +136,28 @@ def create_bridge_app(
         )
 
 
-    # --- Passthrough routes ---
+    # --- Passthrough routes (config-driven allowlist) ---
 
-    @app.post("/v1/messages/count_tokens")
-    async def count_tokens(request: Request):
-        """Passthrough to upstream count_tokens endpoint."""
-        body = await request.body()
-        headers = dict(request.headers)
-        response = await forwarder.forward_passthrough(
-            "POST", "/v1/messages/count_tokens", body, headers
-        )
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type=response.headers.get("content-type"),
-        )
+    def _make_passthrough_handler(path: str):
+        async def passthrough(request: Request):
+            body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
+            headers = dict(request.headers)
+            response = await forwarder.forward_passthrough(
+                request.method, path, body, headers
+            )
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                media_type=response.headers.get("content-type"),
+            )
+        return passthrough
 
-    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-    async def catchall(request: Request, path: str):
-        """Catchall passthrough for any other API endpoints."""
-        body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
-        headers = dict(request.headers)
-        response = await forwarder.forward_passthrough(
-            request.method, f"/{path}", body, headers
-        )
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type=response.headers.get("content-type"),
-        )
+    for passthrough_path in bridge_config.allowed_passthrough_paths:
+        app.api_route(
+            passthrough_path,
+            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+            name=f"passthrough_{passthrough_path.replace('/', '_')}",
+        )(_make_passthrough_handler(passthrough_path))
 
     return app
 

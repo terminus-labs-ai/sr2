@@ -53,3 +53,10 @@ class BridgeConfig(BaseModel):
         default_factory=BridgeSessionConfig,
         description="Session identification settings.",
     )
+    allowed_passthrough_paths: list[str] = Field(
+        default=["/v1/messages/count_tokens", "/v1/messages/batches"],
+        description=(
+            "API paths that are forwarded to upstream without optimization. "
+            "Paths not in this list (and not /v1/messages, /health, /metrics) return 404."
+        ),
+    )
