@@ -16,14 +16,59 @@ def _truncate(text: str, max_len: int) -> str:
     return text[:max_len] + "..."
 
 
-def _detect_content_type(content_blocks: list) -> str | None:
-    """Detect the dominant content type from Anthropic content blocks."""
+# Claude Code tool names -> content_type mapping.
+# Keys are substrings matched against the tool name (case-insensitive).
+_TOOL_CONTENT_TYPE_MAP = {
+    # File reading tools
+    "read": "file_content",
+    "cat": "file_content",
+    "view_file": "file_content",
+    # Code execution tools
+    "bash": "code_execution",
+    "shell": "code_execution",
+    "execute": "code_execution",
+    "run": "code_execution",
+    "terminal": "code_execution",
+}
+
+
+def _classify_tool_name(tool_name: str) -> str:
+    """Classify a tool name into a content_type for compaction rules."""
+    lower = tool_name.lower()
+    for marker, content_type in _TOOL_CONTENT_TYPE_MAP.items():
+        if marker in lower:
+            return content_type
+    # Default: any tool output we don't specifically classify
+    return "tool_output"
+
+
+def _detect_content_type(
+    content_blocks: list,
+    tool_name_map: dict[str, str] | None = None,
+) -> str | None:
+    """Detect the dominant content type from Anthropic content blocks.
+
+    For tool_use blocks: classifies based on tool name.
+    For tool_result blocks: looks up the tool_use_id in tool_name_map
+    to find the originating tool name, then classifies.
+    """
+    tool_name_map = tool_name_map or {}
+
     for block in content_blocks:
         if not isinstance(block, dict):
             continue
         block_type = block.get("type")
-        if block_type in ("tool_result", "tool_use"):
+
+        if block_type == "tool_use":
+            return _classify_tool_name(block.get("name", ""))
+
+        if block_type == "tool_result":
+            tool_use_id = block.get("tool_use_id", "")
+            if tool_use_id and tool_use_id in tool_name_map:
+                return _classify_tool_name(tool_name_map[tool_use_id])
+            # Fallback: can't determine specific type
             return "tool_output"
+
     return None
 
 
@@ -114,13 +159,27 @@ class AnthropicAdapter:
         """Convert Anthropic wire-format messages to ConversationTurns."""
         turns = []
         counter = turn_counter_start
+
+        # Build tool_use_id -> tool_name map from all messages (assistant tool_use
+        # blocks precede user tool_result blocks that reference them).
+        tool_name_map: dict[str, str] = {}
+        for msg in messages:
+            c = msg.get("content", "")
+            if isinstance(c, list):
+                for block in c:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tid = block.get("id", "")
+                        tname = block.get("name", "")
+                        if tid and tname:
+                            tool_name_map[tid] = tname
+
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
             # Handle Anthropic content blocks
             if isinstance(content, list):
-                content_type = _detect_content_type(content)
+                content_type = _detect_content_type(content, tool_name_map)
                 text_parts = []
                 for block in content:
                     if isinstance(block, dict):
@@ -139,7 +198,10 @@ class AnthropicAdapter:
                                     for b in result_content
                                     if isinstance(b, dict)
                                 )
-                            text_parts.append(f"[tool_result]\n{result_content}")
+                            # Resolve tool name from the tool_use_id
+                            tool_use_id = block.get("tool_use_id", "")
+                            resolved_name = tool_name_map.get(tool_use_id, "tool")
+                            text_parts.append(f"[tool_result: {resolved_name}]\n{result_content}")
                         else:
                             text_parts.append(str(block))
                     else:
@@ -149,12 +211,28 @@ class AnthropicAdapter:
                 content_str = str(content)
                 content_type = None
 
+            # Extract tool name for metadata (used by compaction recovery hints)
+            tool_name = None
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "tool_use":
+                            tool_name = block.get("name")
+                            break
+                        if block.get("type") == "tool_result":
+                            tool_name = tool_name_map.get(block.get("tool_use_id", ""))
+                            break
+
+            meta = {"_original_message": msg}
+            if tool_name:
+                meta["tool_name"] = tool_name
+
             turn = ConversationTurn(
                 turn_number=counter,
                 role=role,
                 content=content_str,
                 content_type=content_type,
-                metadata={"_original_message": msg},
+                metadata=meta,
             )
             counter += 1
             turns.append(turn)

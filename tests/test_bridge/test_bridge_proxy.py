@@ -905,6 +905,107 @@ class TestEngineRetrievalQuery:
         assert query == "A question"
 
 
+class TestContentTypeDetection:
+    """Test that the adapter correctly assigns content_type to turns."""
+
+    def test_tool_use_classified_as_tool_output(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Glob", "input": {"pattern": "*.py"}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "tool_output"
+
+    def test_bash_tool_use_classified_as_code_execution(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "code_execution"
+
+    def test_read_tool_result_classified_as_file_content(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "/foo.py"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "file contents here"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "file_content"  # assistant tool_use
+        assert turns[1].content_type == "file_content"  # user tool_result
+
+    def test_bash_tool_result_classified_as_code_execution(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "pytest"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "PASSED"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[1].content_type == "code_execution"
+
+    def test_unknown_tool_result_falls_back_to_tool_output(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "unknown_id", "content": "data"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "tool_output"
+
+    def test_plain_text_message_has_no_content_type(self):
+        adapter = AnthropicAdapter()
+        messages = [{"role": "user", "content": "hello"}]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type is None
+
+    def test_tool_name_in_metadata(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "data"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].metadata["tool_name"] == "Read"
+        assert turns[1].metadata["tool_name"] == "Read"
+
+    def test_view_file_classified_as_file_content(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "view_file", "input": {}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "file_content"
+
+    def test_execute_tool_classified_as_code_execution(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "execute_command", "input": {}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "code_execution"
+
+
 class TestModelRewriting:
     """Test model rewriting in the bridge proxy."""
 
