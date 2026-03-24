@@ -162,6 +162,15 @@ def create_bridge_app(
     return app
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Log exceptions from fire-and-forget tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error("Bridge post-processing failed: %s", exc, exc_info=exc)
+
+
 async def _stream_and_capture(
     forwarder: BridgeForwarder,
     engine: BridgeEngine,
@@ -179,7 +188,8 @@ async def _stream_and_capture(
         if text:
             accumulated.append(text)
 
-    # Post-process after stream completes (fire-and-forget)
+    # Post-process after stream completes (fire-and-forget with error logging)
     if accumulated:
         full_text = "".join(accumulated)
-        asyncio.create_task(engine.post_process(session, full_text))
+        task = asyncio.create_task(engine.post_process(session, full_text))
+        task.add_done_callback(_log_task_exception)
