@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from sr2.compaction.engine import ConversationTurn
+
 
 @runtime_checkable
 class BridgeAdapter(Protocol):
@@ -45,5 +47,40 @@ class BridgeAdapter(Protocol):
 
         Returns:
             The extracted text fragment, or None if this chunk has no text.
+        """
+        ...
+
+    def messages_to_turns(
+        self,
+        messages: list[dict],
+        turn_counter_start: int,
+    ) -> list[ConversationTurn]:
+        """Convert wire-format messages to SR2 ConversationTurns.
+
+        Args:
+            messages: List of message dicts in the adapter's wire format.
+            turn_counter_start: Starting turn number for numbering.
+
+        Returns:
+            List of ConversationTurns with metadata["_original_message"] preserved.
+        """
+        ...
+
+    def turns_to_messages(
+        self,
+        turns: list[ConversationTurn],
+        original_messages: list[dict],
+    ) -> list[dict]:
+        """Convert SR2 ConversationTurns back to wire-format messages.
+
+        For compacted turns, emits plain text content. For raw turns that
+        still have their original structure, preserves it.
+
+        Args:
+            turns: The ConversationTurns to convert.
+            original_messages: The original messages for fallback structure.
+
+        Returns:
+            List of wire-format message dicts.
         """
         ...

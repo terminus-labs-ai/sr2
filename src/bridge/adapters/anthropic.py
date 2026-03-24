@@ -5,7 +5,26 @@ from __future__ import annotations
 import json
 import logging
 
+from sr2.compaction.engine import ConversationTurn
+
 logger = logging.getLogger(__name__)
+
+
+def _truncate(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
+
+
+def _detect_content_type(content_blocks: list) -> str | None:
+    """Detect the dominant content type from Anthropic content blocks."""
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type in ("tool_result", "tool_use"):
+            return "tool_output"
+    return None
 
 
 class AnthropicAdapter:
@@ -86,3 +105,80 @@ class AnthropicAdapter:
             return delta.get("text")
 
         return None
+
+    def messages_to_turns(
+        self,
+        messages: list[dict],
+        turn_counter_start: int,
+    ) -> list[ConversationTurn]:
+        """Convert Anthropic wire-format messages to ConversationTurns."""
+        turns = []
+        counter = turn_counter_start
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            # Handle Anthropic content blocks
+            if isinstance(content, list):
+                content_type = _detect_content_type(content)
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            text_parts.append(
+                                f"[tool_use: {block.get('name', '?')}"
+                                f"({_truncate(str(block.get('input', '')), 200)})]"
+                            )
+                        elif block.get("type") == "tool_result":
+                            result_content = block.get("content", "")
+                            if isinstance(result_content, list):
+                                result_content = " ".join(
+                                    b.get("text", "")
+                                    for b in result_content
+                                    if isinstance(b, dict)
+                                )
+                            text_parts.append(f"[tool_result]\n{result_content}")
+                        else:
+                            text_parts.append(str(block))
+                    else:
+                        text_parts.append(str(block))
+                content_str = "\n".join(text_parts)
+            else:
+                content_str = str(content)
+                content_type = None
+
+            turn = ConversationTurn(
+                turn_number=counter,
+                role=role,
+                content=content_str,
+                content_type=content_type,
+                metadata={"_original_message": msg},
+            )
+            counter += 1
+            turns.append(turn)
+
+        return turns
+
+    def turns_to_messages(
+        self,
+        turns: list[ConversationTurn],
+        original_messages: list[dict],
+    ) -> list[dict]:
+        """Convert ConversationTurns back to Anthropic wire-format messages.
+
+        For compacted turns, emits plain text content. For raw turns that
+        still have their original structure, preserves it.
+        """
+        messages = []
+        for turn in turns:
+            if turn.compacted:
+                messages.append({"role": turn.role, "content": turn.content})
+            else:
+                original = turn.metadata.get("_original_message") if turn.metadata else None
+                if original:
+                    messages.append(original)
+                else:
+                    messages.append({"role": turn.role, "content": turn.content})
+        return messages

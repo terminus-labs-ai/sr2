@@ -20,10 +20,10 @@ class BridgeEngine:
 
     On each request (Claude Code sends full history every time), the engine:
     1. Compares incoming message count to last known count
-    2. Converts new messages to SR2 ConversationTurns
+    2. Delegates wire-format conversion to the adapter
     3. Runs compaction on turns outside raw_window
     4. Checks summarization trigger
-    5. Rebuilds the message array: [summary exchange] + [compacted] + [raw recent]
+    5. Asks the adapter to rebuild the message array from zones
     """
 
     def __init__(
@@ -69,7 +69,6 @@ class BridgeEngine:
         current_count = len(messages)
 
         if current_count <= session.last_message_count:
-            # No new messages (or history was reset). If shorter, reset session.
             if current_count < session.last_message_count:
                 logger.info(
                     "Session %s: message count decreased (%d -> %d), resetting",
@@ -77,12 +76,12 @@ class BridgeEngine:
                 )
                 self._reset_session(session)
 
-        # Ingest new messages as turns
+        # Convert new messages to turns via adapter (engine never sees wire format)
         new_messages = messages[session.last_message_count:]
-        for msg in new_messages:
-            turn = self._message_to_turn(msg, session)
+        new_turns = adapter.messages_to_turns(new_messages, session.turn_counter)
+        for turn in new_turns:
             self._conversation.add_turn(turn, session_id)
-
+        session.turn_counter += len(new_turns)
         session.last_message_count = current_count
 
         # Run compaction
@@ -109,9 +108,8 @@ class BridgeEngine:
 
         # Rebuild message list from zones
         zones = self._conversation.zones(session_id)
-        optimized: list[dict] = []
 
-        # Inject summaries as a synthetic user/assistant exchange at the start
+        # Inject summaries as system prompt context
         system_injection: str | None = None
         if zones.summarized:
             summary_text = "\n\n".join(zones.summarized)
@@ -120,19 +118,9 @@ class BridgeEngine:
                 f"[End of summary — recent conversation follows]"
             )
 
-        # Add compacted turns (flattened text — original structure lost)
-        for turn in zones.compacted:
-            if turn.compacted:
-                optimized.append(self._turn_to_message(turn))
-            else:
-                # Not actually compacted — preserve original message if available
-                original = turn.metadata.get("_original_message") if turn.metadata else None
-                optimized.append(original if original else self._turn_to_message(turn))
-
-        # Add raw turns — always preserve original message structure
-        for turn in zones.raw:
-            original = turn.metadata.get("_original_message") if turn.metadata else None
-            optimized.append(original if original else self._turn_to_message(turn))
+        # Convert turns back to wire format via adapter
+        all_turns = list(zones.compacted) + list(zones.raw)
+        optimized = adapter.turns_to_messages(all_turns, messages)
 
         # If we have no optimized messages, fall through to original
         if not optimized:
@@ -152,68 +140,6 @@ class BridgeEngine:
             content=assistant_text,
         )
         session.turn_counter += 1
-        # Don't add to conversation manager — Claude Code will send the full
-        # history including this response on the next request. We just increment
-        # last_message_count so we know to expect it.
-
-    def _message_to_turn(self, msg: dict, session: BridgeSession) -> ConversationTurn:
-        """Convert an API message dict to a ConversationTurn."""
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        # Handle Anthropic content blocks
-        if isinstance(content, list):
-            content_type = self._detect_content_type(content)
-            text_parts = []
-            for block in content:
-                if isinstance(block, dict):
-                    if block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-                    elif block.get("type") == "tool_use":
-                        text_parts.append(
-                            f"[tool_use: {block.get('name', '?')}({_truncate(str(block.get('input', '')), 200)})]"
-                        )
-                    elif block.get("type") == "tool_result":
-                        result_content = block.get("content", "")
-                        if isinstance(result_content, list):
-                            result_content = " ".join(
-                                b.get("text", "") for b in result_content if isinstance(b, dict)
-                            )
-                        text_parts.append(f"[tool_result]\n{result_content}")
-                    else:
-                        text_parts.append(str(block))
-                else:
-                    text_parts.append(str(block))
-            content_str = "\n".join(text_parts)
-        else:
-            content_str = str(content)
-            content_type = None
-
-        turn = ConversationTurn(
-            turn_number=session.turn_counter,
-            role=role,
-            content=content_str,
-            content_type=content_type,
-            metadata={"_original_message": msg},
-        )
-        session.turn_counter += 1
-        return turn
-
-    def _detect_content_type(self, content_blocks: list) -> str | None:
-        """Detect the dominant content type from Anthropic content blocks."""
-        for block in content_blocks:
-            if not isinstance(block, dict):
-                continue
-            block_type = block.get("type")
-            if block_type == "tool_result":
-                return "tool_output"
-            if block_type == "tool_use":
-                return "tool_output"
-        return None
-
-    def _turn_to_message(self, turn: ConversationTurn) -> dict:
-        """Convert a ConversationTurn back to an API message dict."""
-        return {"role": turn.role, "content": turn.content}
 
     def _reset_session(self, session: BridgeSession) -> None:
         """Reset conversation state for a session."""
@@ -225,10 +151,6 @@ class BridgeEngine:
     def destroy_session(self, session_id: str) -> None:
         """Clean up ConversationManager state for a session."""
         self._conversation.destroy_session(session_id)
-
-    def get_metrics(self) -> dict:
-        """Return bridge engine metrics."""
-        return {}
 
     def get_session_metrics(self, session: BridgeSession) -> dict:
         """Return metrics for a specific session."""
@@ -242,9 +164,3 @@ class BridgeEngine:
             "total_tokens": zones.total_tokens,
             "zone_transitions": self._conversation.get_zone_transitions(session.session_id),
         }
-
-
-def _truncate(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[:max_len] + "..."
