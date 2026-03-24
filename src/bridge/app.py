@@ -52,6 +52,7 @@ def create_bridge_app(
             yield
         finally:
             cleanup_task.cancel()
+            await engine.shutdown()
             await forwarder.stop()
             logger.info("SR2 Bridge stopped")
 
