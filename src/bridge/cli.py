@@ -84,12 +84,12 @@ def load_config(args: argparse.Namespace) -> dict:
 
 def build_components(raw_config: dict):
     """Build bridge components from raw config dict."""
-    from sr2.config.loader import ConfigLoader
     from sr2.config.models import PipelineConfig
 
     from bridge.config import BridgeConfig
     from bridge.engine import BridgeEngine
     from bridge.forwarder import BridgeForwarder
+    from bridge.llm import APIKeyCache
     from bridge.session_tracker import SessionTracker
 
     # Bridge config
@@ -99,18 +99,15 @@ def build_components(raw_config: dict):
     pipeline_raw = raw_config.get("pipeline", {})
     pipeline_config = PipelineConfig(**pipeline_raw)
 
-    # LLM callable for summarization (optional)
-    # The bridge will attempt to create an LLM callable using the borrowed
-    # auth token from proxied requests. For now, start without one —
-    # summarization requires a fast_model call which we wire up at request time.
-    llm_callable = None
+    # Shared API key cache — updated from proxied request headers
+    key_cache = APIKeyCache()
 
-    # Build components
-    engine = BridgeEngine(pipeline_config, llm_callable=llm_callable)
+    # Build components (engine creates LLM callables from bridge_config.llm)
+    engine = BridgeEngine(pipeline_config, bridge_config=bridge_config, key_cache=key_cache)
     forwarder = BridgeForwarder(bridge_config.forwarding)
     session_tracker = SessionTracker(bridge_config.session)
 
-    return bridge_config, engine, forwarder, session_tracker
+    return bridge_config, engine, forwarder, session_tracker, key_cache
 
 
 def main():
@@ -127,11 +124,11 @@ def main():
     )
 
     raw_config = load_config(args)
-    bridge_config, engine, forwarder, session_tracker = build_components(raw_config)
+    bridge_config, engine, forwarder, session_tracker, key_cache = build_components(raw_config)
 
     from bridge.app import create_bridge_app
 
-    app = create_bridge_app(bridge_config, engine, forwarder, session_tracker)
+    app = create_bridge_app(bridge_config, engine, forwarder, session_tracker, key_cache)
 
     import uvicorn
 

@@ -14,6 +14,7 @@ from bridge.config import BridgeConfig
 from bridge.engine import BridgeEngine
 from bridge.forwarder import BridgeForwarder
 from bridge.bridge_metrics import BridgeMetricsExporter
+from bridge.llm import APIKeyCache
 from bridge.session_tracker import BridgeSession, SessionTracker
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ def create_bridge_app(
     engine: BridgeEngine,
     forwarder: BridgeForwarder,
     session_tracker: SessionTracker,
+    key_cache: APIKeyCache | None = None,
 ) -> FastAPI:
     """Create the FastAPI bridge proxy application."""
     async def _cleanup_loop():
@@ -55,6 +57,7 @@ def create_bridge_app(
 
     app = FastAPI(title="SR2 Bridge", lifespan=lifespan)
     adapter = AnthropicAdapter()
+    _key_cache = key_cache or APIKeyCache()
 
     # Track startup time for health endpoint
     start_time = time.time()
@@ -69,6 +72,9 @@ def create_bridge_app(
         body = await request.json()
         headers = dict(request.headers)
         is_streaming = body.get("stream", False)
+
+        # Cache API key for bridge-internal LLM calls
+        _key_cache.update(headers)
 
         # Extract messages and identify session
         system, messages = adapter.extract_messages(body)

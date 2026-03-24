@@ -12,7 +12,8 @@ from sr2.pipeline.conversation import ConversationManager
 from sr2.summarization.engine import SummarizationEngine
 
 from bridge.adapters.base import BridgeAdapter
-from bridge.config import BridgeDegradationConfig
+from bridge.config import BridgeConfig, BridgeDegradationConfig
+from bridge.llm import APIKeyCache, make_summarization_callable
 from bridge.session_tracker import BridgeSession
 
 logger = logging.getLogger(__name__)
@@ -32,15 +33,25 @@ class BridgeEngine:
     def __init__(
         self,
         pipeline_config: PipelineConfig,
-        llm_callable=None,
-        degradation_config: BridgeDegradationConfig | None = None,
+        bridge_config: BridgeConfig | None = None,
+        key_cache: APIKeyCache | None = None,
     ):
         self._config = pipeline_config
-        self._llm_callable = llm_callable
+        self._bridge_config = bridge_config or BridgeConfig()
+        self._key_cache = key_cache or APIKeyCache()
 
         # Build compaction engine
         compaction_config = pipeline_config.compaction or CompactionConfig()
         self._compaction = CompactionEngine(compaction_config)
+
+        # Build summarization callable from bridge LLM config
+        llm_callable = None
+        if self._bridge_config.llm.summarization:
+            llm_callable = make_summarization_callable(
+                self._bridge_config.llm.summarization,
+                self._key_cache,
+                self._bridge_config.forwarding.upstream_url,
+            )
 
         # Build summarization engine (optional — requires llm_callable)
         summarization_config = pipeline_config.summarization or SummarizationConfig()
@@ -59,7 +70,7 @@ class BridgeEngine:
         )
 
         # Degradation: circuit breaker + ladder
-        deg = degradation_config or BridgeDegradationConfig()
+        deg = self._bridge_config.degradation
         self._breaker = CircuitBreaker(
             threshold=deg.circuit_breaker_threshold,
             cooldown_seconds=deg.circuit_breaker_cooldown_seconds,
