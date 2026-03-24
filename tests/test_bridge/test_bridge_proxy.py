@@ -465,12 +465,14 @@ def _make_mock_forwarder() -> BridgeForwarder:
 def _make_test_app():
     """Create a test app with mock forwarder."""
     from bridge.app import create_bridge_app
+    from bridge.llm import APIKeyCache
 
     bridge_config = BridgeConfig()
-    engine = BridgeEngine(PipelineConfig())
+    key_cache = APIKeyCache()
+    engine = BridgeEngine(PipelineConfig(), bridge_config=bridge_config, key_cache=key_cache)
     forwarder = _make_mock_forwarder()
     tracker = SessionTracker(BridgeSessionConfig())
-    app = create_bridge_app(bridge_config, engine, forwarder, tracker)
+    app = create_bridge_app(bridge_config, engine, forwarder, tracker, key_cache)
     return app, forwarder
 
 
