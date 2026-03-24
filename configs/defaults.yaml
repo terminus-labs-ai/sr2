@@ -6,6 +6,29 @@
 # Fields without defaults (required) are commented out with placeholders.
 
 #=====================================================================
+# Bridge Config (sr2-bridge)
+#=====================================================================
+
+bridge:
+  # Port to listen on.
+  port: 9200
+  # Host to bind to.
+  host: 127.0.0.1
+
+  forwarding:
+    # Upstream API base URL to forward requests to.
+    upstream_url: https://api.anthropic.com
+    # Timeout for upstream requests in seconds.
+    timeout_seconds: 300
+
+  session:
+    # How to identify sessions: system_hash | header | single
+    strategy: system_hash
+    # Minutes of inactivity before a session is cleaned up.
+    idle_timeout_minutes: 120
+
+
+#=====================================================================
 # Pipeline Config
 #=====================================================================
 

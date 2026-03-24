@@ -113,3 +113,42 @@ Agent calls schedule_heartbeat(delay=300, prompt="check X", key="k")
 ```
 
 Heartbeats support idempotent keys (same key updates instead of duplicating), cancellation, and DB persistence. See [Heartbeat Guide](guide-heartbeats.md).
+
+## Bridge Mode
+
+The bridge is a separate runtime mode that applies SR2's context optimization to *external* LLM callers without owning the LLM loop.
+
+```
+External Caller (Claude Code, LangChain, etc.)
+    │  Full message history
+    ▼
+┌──────────────────────────────────────────────┐
+│              SR2 Bridge Server               │
+│                                              │
+│  ┌────────────────┐  ┌───────────────────┐   │
+│  │ProtocolAdapter │  │  SessionTracker   │   │
+│  │ (Anthropic)    │  │  (system_hash)    │   │
+│  └───────┬────────┘  └────────┬──────────┘   │
+│          │                    │               │
+│  ┌───────▼────────────────────▼──────────┐   │
+│  │           BridgeEngine                │   │
+│  │  CompactionEngine + ConversationMgr   │   │
+│  │  + SummarizationEngine (optional)     │   │
+│  └───────────────────┬───────────────────┘   │
+│                      │  Optimized messages    │
+│  ┌───────────────────▼───────────────────┐   │
+│  │         BridgeForwarder (httpx)       │   │
+│  └───────────────────┬───────────────────┘   │
+└──────────────────────┼───────────────────────┘
+                       │  Original auth headers
+                       ▼
+              Upstream API (api.anthropic.com)
+```
+
+Key differences from the agent runtime:
+- **Doesn't own the LLM loop** — the external caller drives the conversation
+- **Full history on every request** — Claude Code sends all messages each time, so the bridge compares to last known count and only processes new messages
+- **Auth passthrough** — preserves the caller's OAuth/API key headers for upstream forwarding
+- **Session tracking by system prompt hash** — Claude Code's system prompt is session-specific, so hashing it naturally groups related requests
+
+The bridge reuses the same CompactionEngine, ConversationManager, and SummarizationEngine as the agent runtime, just wired differently. See [Bridge Guide](guide-bridge.md).

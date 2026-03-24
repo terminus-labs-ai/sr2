@@ -59,6 +59,9 @@ pip install -e .
 # With the agent runtime (FastAPI + uvicorn)
 pip install -e ".[runtime]"
 
+# With the bridge proxy (for Claude Code, LangChain, etc.)
+pip install -e ".[bridge]"
+
 # Everything
 pip install -e ".[all]"
 
@@ -206,6 +209,8 @@ Config inheritance: `defaults.yaml` → `agent.yaml` → `interfaces/user_messag
 
 **Pre-emptive context rotation.** Early warning system that monitors token budget pressure and triggers proactive rotation before cache invalidation. Prevents degradation from emergency truncation.
 
+**Bridge proxy.** Optimize context for external LLM callers (Claude Code, LangChain, OpenCode) without modifying them. The bridge sits as a reverse proxy, applying compaction and summarization to requests in flight. Point Claude Code at `localhost:9200` and get 30-60% token reduction on long sessions with zero behavioral change.
+
 **Pluggable tokenizers.** Choose between fast character heuristic (default) or accurate tiktoken counting with support for specific LLM encoding schemes.
 
 **Tool state machine.** Dynamic tool masking with named states and transitions. Start in "default" (all tools), transition to "planning" (read-only tools), back to "execution" (write tools enabled). Supports allowed-list, prefill, and logit-mask strategies.
@@ -280,7 +285,8 @@ src/
 │   ├── mcp/           #   MCP client and transports
 │   ├── plugins/       #   Interface plugins (http, telegram, timer, a2a, single-shot)
 │   ├── session/       #   Session lifecycle management
-│   └── heartbeat/     #   Scheduled agent callbacks
+│   ├── heartbeat/     #   Scheduled agent callbacks
+│   └── bridge/        #   Context optimization proxy for external LLM callers
 │
 configs/               # Example configs
 │   ├── defaults.yaml  #   Library defaults
@@ -293,6 +299,23 @@ tests/                 # 844 tests
 │   ├── test_compaction/
 │   └── ...
 ```
+
+## Running the Bridge
+
+The bridge optimizes context for external LLM callers like Claude Code.
+
+```bash
+# Install bridge dependencies
+pip install -e ".[bridge]"
+
+# Terminal 1: start the bridge (zero-config)
+sr2-bridge
+
+# Terminal 2: point Claude Code at the bridge
+ANTHROPIC_BASE_URL=http://localhost:9200 claude
+```
+
+The bridge compacts tool outputs, summarizes old conversation turns, and forwards optimized requests to the real API. See the [Bridge Guide](docs/guide-bridge.md) for configuration and details.
 
 ## Running the Example Agent
 
@@ -352,6 +375,7 @@ sr2-config-docs --format md > docs/configuration.md
 - **[Custom Resolvers](docs/guide-custom-resolvers.md)** — Build pluggable content sources (5 patterns + examples)
 - **[Circuit Breakers](docs/guide-circuit-breakers.md)** — Graceful degradation when layers fail
 - **[Agent-to-Agent](docs/guide-a2a.md)** — Multi-agent workflows and service composition
+- **[Bridge](docs/guide-bridge.md)** — Context optimization proxy for Claude Code and external LLM callers
 - **[Heartbeats](docs/guide-heartbeats.md)** — Scheduling agent callbacks for async tasks and retries
 - **[Evaluation Harness](docs/guide-eval-harness.md)** — Multi-turn benchmarking framework and evaluation
 - **[Observability](docs/observability.md)** — Prometheus and OpenTelemetry setup
