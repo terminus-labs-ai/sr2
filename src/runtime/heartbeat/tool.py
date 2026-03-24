@@ -27,12 +27,14 @@ class ScheduleHeartbeatTool:
         max_context_turns: int,
         session_resolver: Callable[[], str | None],
         session_turns_resolver: Callable[[], list[dict]],
+        interface_resolver: Callable[[], str | None] = lambda: None,
     ) -> None:
         self._store = store
         self._agent_name = agent_name
         self._max_context_turns = max_context_turns
         self._session_resolver = session_resolver
         self._session_turns_resolver = session_turns_resolver
+        self._interface_resolver = interface_resolver
 
     @property
     def tool_definition(self) -> dict:
@@ -93,6 +95,7 @@ class ScheduleHeartbeatTool:
             id=str(uuid.uuid4()),
             agent_name=self._agent_name,
             source_session=session_id,
+            source_interface=self._interface_resolver() or "",
             prompt=prompt,
             fire_at=fire_at,
             context_turns=context_turns,

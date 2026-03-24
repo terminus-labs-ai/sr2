@@ -26,6 +26,7 @@ class Heartbeat:
     source_session: str
     prompt: str
     fire_at: datetime
+    source_interface: str = ""
     context_turns: list[dict] = field(default_factory=list)
     status: HeartbeatStatus = HeartbeatStatus.pending
     key: str | None = None

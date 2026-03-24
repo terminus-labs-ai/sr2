@@ -116,27 +116,6 @@ class Agent:
             embedding=runtime_conf.llm.embedding,
         )
 
-        # Inject synthetic heartbeat interface before SR2 sees the YAML,
-        # so the InterfaceRouter registers it for pipeline routing.
-        hb_cfg = self._agent_config.runtime.heartbeat
-        if hb_cfg.enabled:
-            if hb_cfg.pipeline:
-                synthetic_name = f"_heartbeat_{hb_cfg.pipeline}"
-                iface_def = {
-                    "plugin": "timer",
-                    "session": {"name": "heartbeat", "lifecycle": hb_cfg.session_lifecycle},
-                    "pipeline": hb_cfg.pipeline,
-                }
-            else:
-                synthetic_name = "heartbeat"
-                iface_def = {
-                    "plugin": "timer",
-                    "session": {"name": "heartbeat", "lifecycle": hb_cfg.session_lifecycle},
-                }
-            interfaces = self._agent_yaml.setdefault("interfaces", {})
-            if synthetic_name not in interfaces:
-                interfaces[synthetic_name] = iface_def
-
         # SR2 facade — owns memory, pipeline, resolvers, compaction, metrics
         # MCP resource/prompt readers are wired after MCPManager is created below
         self._sr2 = SR2(
@@ -218,6 +197,7 @@ class Agent:
         )
         # _current_session_id and _current_session_turns are set per-trigger
         self._current_session_id: str | None = None
+        self._current_interface_name: str | None = None
         self._current_session_turns: list[dict] = []
 
         # Pending post-processing task (awaited during shutdown)
@@ -420,6 +400,7 @@ class Agent:
                 max_context_turns=self._heartbeat_config.max_context_turns,
                 session_resolver=lambda: self._current_session_id,
                 session_turns_resolver=lambda: self._current_session_turns,
+                interface_resolver=lambda: self._current_interface_name,
             )
             cancel_tool = CancelHeartbeatTool(store=hb_store)
 
@@ -431,8 +412,7 @@ class Agent:
                 store=hb_store,
                 agent_callback=self._handle_trigger,
                 poll_interval_seconds=self._heartbeat_config.poll_interval_seconds,
-                session_lifecycle=self._heartbeat_config.session_lifecycle,
-                pipeline=self._heartbeat_config.pipeline,
+                respond_fn=self._deliver_heartbeat_response,
             )
             self._heartbeat_scanner = scanner
             await scanner.start()
@@ -542,13 +522,8 @@ class Agent:
         else:
             session = await self._sessions.get_or_create(trigger.session_name)
         self._current_session_id = session.id
+        self._current_interface_name = trigger.interface_name
         self._current_session_turns = session.turns
-
-        # Inject heartbeat context turns into session before processing
-        if trigger.metadata and trigger.metadata.get("context_turns"):
-            for turn in trigger.metadata["context_turns"]:
-                session.turns.append(turn)
-            self._current_session_turns = session.turns
 
         # Special commands
         special = self._handle_special_command(trigger, session)
@@ -671,6 +646,18 @@ class Agent:
             asyncio.create_task(_delayed_destroy())
 
         return loop_result.response_text or ""
+
+    async def _deliver_heartbeat_response(self, interface_name: str, session_name: str, content: str) -> None:
+        """Deliver heartbeat response to the source session and interface plugin."""
+        session = await self._sessions.get_or_create(session_name)
+        session.add_assistant_message(content)
+        if self._sessions._store:
+            asyncio.create_task(self._sessions.save_session(session.id))
+        plugin = self._plugins.get(interface_name)
+        if plugin:
+            await plugin.send(session_name, content)
+        else:
+            logger.warning(f"Heartbeat delivery failed: no plugin for interface {interface_name}")
 
     # --- Special command dispatcher ---
 

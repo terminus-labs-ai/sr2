@@ -33,7 +33,9 @@ Model: `PipelineConfig`
 | `tool_masking` | any | — |  | Tool visibility and masking settings |
 | `tool_states` | list[any] | — |  | Tool visibility states. Each state defines allowed/denied tools. |
 | `tool_transitions` | list[any] | — |  | Rules for transitioning between tool states. |
+| `tool_schema_max_tokens` | integer \| null | `null` |  | Max tokens to allocate for tool schemas. If set, schemas are truncated to fit within this budget. None = no limit (all schemas sent as-is). Truncation strategy: drop descriptions, then drop parameters, then drop entire tools. |
 | `degradation` | any | — |  | Circuit breaker and degradation settings |
+| `memory` | any | — |  | Memory extraction settings |
 | `layers` | list[any] | — |  | Context window layers, ordered from most stable to least stable |
 
 **Example:**
@@ -51,7 +53,9 @@ intent_detection: <intent_detection>
 tool_masking: <tool_masking>
 tool_states: []
 tool_transitions: []
+tool_schema_max_tokens: null
 degradation: <degradation>
+memory: <memory>
 layers: []
 ```
 
@@ -310,7 +314,7 @@ Model: `RuntimeConfig`
 | `loop` | any | — |  |  |
 | `session` | any | — |  | Default session settings. |
 | `stream_content` | any | — |  |  |
-| `heartbeat` | any | — |  | Dynamic heartbeat scheduling settings. |
+| `heartbeat` | any | — |  |  |
 
 **Example:**
 ```yaml
@@ -428,31 +432,20 @@ max_turns: 200
 idle_timeout_minutes: 60
 ```
 
-### Heartbeat
+### Stream Content
 
-Model: `HeartbeatConfig`
+Model: `StreamContentConfig`
 
 | Field | Type | Default | Required | Description |
 |---|---|---|---|---|
-| `enabled` | boolean | `false` |  | Enable heartbeat scheduling. |
-| `poll_interval_seconds` | integer | `30` |  | How often the scanner checks for due heartbeats (min: 5). |
-| `max_context_turns` | integer | `10` |  | Max turns from source session to carry into heartbeat. |
-| `session_lifecycle` | string | `"ephemeral"` |  | Session lifecycle for heartbeat sessions. |
-| `pipeline` | string \| null | `null` |  | Pipeline config path for heartbeat sessions. |
-| `max_pending_per_agent` | integer | `100` |  | Max pending heartbeats per agent. |
+| `tool_status` | boolean | `true` |  | Stream tool invocation status. |
+| `tool_results` | boolean | `false` |  | Stream tool result content. |
 
 **Example:**
 ```yaml
-heartbeat:
-  enabled: true
-  poll_interval_seconds: 30
-  max_context_turns: 10
-  session_lifecycle: ephemeral
-  pipeline: interfaces/heartbeat.yaml
-  max_pending_per_agent: 100
+tool_status: true
+tool_results: false
 ```
-
-See [Heartbeat Guide](guide-heartbeats.md) for usage details.
 
 ## Interfaces & Plugins
 
@@ -484,7 +477,7 @@ Model: `MCPServerConfig`
 | `transport` | enum | `"stdio"` |  | Transport protocol. |
 | `tools` | array \| null | `null` |  | Curated tool list. None = all tools. |
 | `headers` | object \| null | `null` |  | HTTP headers for http/sse transport (e.g. Authorization). Supports ${VAR} env var substitution. |
-| `env` | object \| null | `null` |  | Environment variables for the server process. |
+| `env` | object \| null | `null` |  | Environment variables for the server process. Supports ${VAR} env var substitution. |
 | `args` | array \| null | `null` |  | Additional args for stdio transport. |
 | `roots` | array \| null | `null` |  | Root URIs to advertise to the server (e.g. 'file:///home/user/project'). Supports ${VAR} env var substitution. |
 | `resources` | array \| null | `null` |  | Resources to auto-discover from this server. |
@@ -588,3 +581,4 @@ Order layers from most stable to least stable.
 | `persistent` | Survives across triggers. Compaction/summarization apply. | ✅ PostgreSQL | User conversations |
 | `ephemeral` | Fresh per trigger. Destroyed after processing. | ❌ In-memory | Heartbeats, A2A calls |
 | `rolling` | Persistent but capped at `max_turns`. Oldest dropped. | ✅ PostgreSQL | Monitoring, log watchers |
+
