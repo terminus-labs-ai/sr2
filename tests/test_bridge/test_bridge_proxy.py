@@ -204,19 +204,19 @@ class TestSessionTracker:
     """Test session identification and lifecycle."""
 
     def test_system_hash_same_prompt(self):
-        tracker = SessionTracker(BridgeSessionConfig())
+        tracker = SessionTracker(BridgeSessionConfig(strategy="system_hash"))
         sid1 = tracker.identify({}, {}, system_prompt="My system prompt")
         sid2 = tracker.identify({}, {}, system_prompt="My system prompt")
         assert sid1 == sid2
 
     def test_system_hash_different_prompt(self):
-        tracker = SessionTracker(BridgeSessionConfig())
+        tracker = SessionTracker(BridgeSessionConfig(strategy="system_hash"))
         sid1 = tracker.identify({}, {}, system_prompt="Prompt A")
         sid2 = tracker.identify({}, {}, system_prompt="Prompt B")
         assert sid1 != sid2
 
     def test_system_hash_no_prompt(self):
-        tracker = SessionTracker(BridgeSessionConfig())
+        tracker = SessionTracker(BridgeSessionConfig(strategy="system_hash"))
         sid = tracker.identify({}, {}, system_prompt=None)
         assert sid == "no-system"
 
@@ -230,6 +230,30 @@ class TestSessionTracker:
         sid1 = tracker.identify({}, {}, system_prompt="A")
         sid2 = tracker.identify({}, {}, system_prompt="B")
         assert sid1 == sid2 == "default"
+
+
+    def test_api_key_same_key(self):
+        tracker = SessionTracker(BridgeSessionConfig(strategy="api_key"))
+        sid1 = tracker.identify({}, {"x-api-key": "sk-ant-test123"}, system_prompt="Prompt A")
+        sid2 = tracker.identify({}, {"x-api-key": "sk-ant-test123"}, system_prompt="Prompt B")
+        assert sid1 == sid2  # same key = same session regardless of system prompt
+
+    def test_api_key_different_keys(self):
+        tracker = SessionTracker(BridgeSessionConfig(strategy="api_key"))
+        sid1 = tracker.identify({}, {"x-api-key": "key-1"})
+        sid2 = tracker.identify({}, {"x-api-key": "key-2"})
+        assert sid1 != sid2
+
+    def test_api_key_bearer_token(self):
+        tracker = SessionTracker(BridgeSessionConfig(strategy="api_key"))
+        sid1 = tracker.identify({}, {"authorization": "Bearer sk-test"})
+        sid2 = tracker.identify({}, {"authorization": "Bearer sk-test"})
+        assert sid1 == sid2
+
+    def test_api_key_no_key(self):
+        tracker = SessionTracker(BridgeSessionConfig(strategy="api_key"))
+        sid = tracker.identify({}, {})
+        assert sid == "no-key"
 
     def test_idle_cleanup_removes_expired(self):
         tracker = SessionTracker(BridgeSessionConfig(idle_timeout_minutes=1))

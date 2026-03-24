@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.config.models import CompactionConfig, PipelineConfig, SummarizationConfig
+from sr2.config.models import CompactionConfig, CompactionRuleConfig, PipelineConfig, SummarizationConfig
 from sr2.degradation.circuit_breaker import CircuitBreaker
 from sr2.degradation.ladder import DegradationLadder
 from sr2.memory.conflicts import ConflictDetector
@@ -27,6 +27,29 @@ from bridge.llm import (
 from bridge.session_tracker import BridgeSession
 
 logger = logging.getLogger(__name__)
+
+# Default compaction rules for bridge proxy conversations.
+# Claude Code traffic is heavy on tool outputs and file content — these
+# rules compress older tool results while keeping recent ones in full.
+BRIDGE_DEFAULT_COMPACTION_RULES = [
+    CompactionRuleConfig(
+        type="tool_output",
+        strategy="schema_and_sample",
+        max_compacted_tokens=80,
+        recovery_hint=True,
+    ),
+    CompactionRuleConfig(
+        type="file_content",
+        strategy="reference",
+        recovery_hint=True,
+    ),
+    CompactionRuleConfig(
+        type="code_execution",
+        strategy="result_summary",
+        max_output_lines=5,
+        recovery_hint=True,
+    ),
+]
 
 
 class BridgeEngine:
@@ -52,8 +75,12 @@ class BridgeEngine:
         self._key_cache = key_cache or APIKeyCache()
         self._memory_initialized = False
 
-        # Build compaction engine
+        # Build compaction engine — apply bridge defaults if no rules configured
         compaction_config = pipeline_config.compaction or CompactionConfig()
+        if not compaction_config.rules:
+            compaction_config = compaction_config.model_copy(
+                update={"rules": BRIDGE_DEFAULT_COMPACTION_RULES}
+            )
         self._compaction = CompactionEngine(compaction_config)
 
         # Build summarization callable from bridge LLM config
