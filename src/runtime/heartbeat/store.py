@@ -62,6 +62,7 @@ class InMemoryHeartbeatStore:
             existing.status = HeartbeatStatus.pending
             existing.updated_at = datetime.now(UTC)
             existing.source_session = heartbeat.source_session
+            existing.source_interface = heartbeat.source_interface
             return
 
         self._heartbeats[heartbeat.id] = heartbeat
@@ -135,8 +136,10 @@ class PostgresHeartbeatStore:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     recurring BOOLEAN DEFAULT FALSE,
-                    interval_seconds INTEGER
+                    interval_seconds INTEGER,
+                    source_interface TEXT NOT NULL DEFAULT ''
                 );
+                ALTER TABLE heartbeats ADD COLUMN IF NOT EXISTS source_interface TEXT NOT NULL DEFAULT '';
                 CREATE INDEX IF NOT EXISTS idx_heartbeats_fire_at
                     ON heartbeats(fire_at) WHERE status = 'pending';
                 CREATE INDEX IF NOT EXISTS idx_heartbeats_agent
@@ -150,16 +153,17 @@ class PostgresHeartbeatStore:
                 INSERT INTO heartbeats (
                     id, key, agent_name, source_session, prompt,
                     context_turns, status, fire_at, created_at, updated_at,
-                    recurring, interval_seconds
+                    recurring, interval_seconds, source_interface
                 )
-                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (key) WHERE key IS NOT NULL DO UPDATE SET
                     prompt = EXCLUDED.prompt,
                     fire_at = EXCLUDED.fire_at,
                     context_turns = EXCLUDED.context_turns,
                     status = 'pending',
                     updated_at = NOW(),
-                    source_session = EXCLUDED.source_session
+                    source_session = EXCLUDED.source_session,
+                    source_interface = EXCLUDED.source_interface
                 """,
                 heartbeat.id,
                 heartbeat.key,
@@ -173,6 +177,7 @@ class PostgresHeartbeatStore:
                 heartbeat.updated_at,
                 heartbeat.recurring,
                 heartbeat.interval_seconds,
+                heartbeat.source_interface,
             )
 
     async def get(self, heartbeat_id: str) -> Heartbeat | None:
@@ -242,6 +247,7 @@ class PostgresHeartbeatStore:
             key=row["key"],
             agent_name=row["agent_name"],
             source_session=row["source_session"],
+            source_interface=row.get("source_interface", ""),
             prompt=row["prompt"],
             fire_at=row["fire_at"],
             context_turns=context_turns,
