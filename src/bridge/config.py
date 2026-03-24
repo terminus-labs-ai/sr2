@@ -40,6 +40,81 @@ class BridgeSessionConfig(BaseModel):
     )
 
 
+class BridgeLLMModelConfig(BaseModel):
+    """Config for a single bridge-internal LLM purpose."""
+
+    model: str = Field(description="Model identifier (e.g. 'claude-haiku-4-5-20251001').")
+    max_tokens: int = Field(default=1024, ge=1, description="Max tokens per response.")
+    api_key: str | None = Field(
+        default=None,
+        description="Dedicated API key. When None, borrows from proxied request headers.",
+    )
+    api_base: str | None = Field(
+        default=None,
+        description="Override API base URL. When None, uses the bridge upstream_url.",
+    )
+
+
+class BridgeLLMConfig(BaseModel):
+    """LLM config for bridge-internal calls. Each purpose is independently configurable."""
+
+    extraction: BridgeLLMModelConfig | None = Field(
+        default=None,
+        description="Model for memory extraction (structured JSON output).",
+    )
+    summarization: BridgeLLMModelConfig | None = Field(
+        default=None,
+        description="Model for conversation summarization.",
+    )
+    intent: BridgeLLMModelConfig | None = Field(
+        default=None,
+        description="Model for intent/topic-shift detection.",
+    )
+    embedding: BridgeLLMModelConfig | None = Field(
+        default=None,
+        description="Embedding model for semantic memory search.",
+    )
+
+
+class BridgeDegradationConfig(BaseModel):
+    """Circuit breaker and degradation settings for bridge-internal stages."""
+
+    circuit_breaker_threshold: int = Field(
+        default=3,
+        ge=1,
+        description="Consecutive failures before circuit breaker opens for a stage.",
+    )
+    circuit_breaker_cooldown_seconds: float = Field(
+        default=300.0,
+        ge=1.0,
+        description="Seconds before retrying after circuit breaker opens.",
+    )
+
+
+class BridgeMemoryConfig(BaseModel):
+    """Memory system settings for the bridge."""
+
+    enabled: bool = Field(default=False, description="Enable memory extraction and retrieval.")
+    db_path: str = Field(
+        default="sr2_bridge_memory.db",
+        description="Path to SQLite database for memory persistence.",
+    )
+    max_memories_per_turn: int = Field(
+        default=5, ge=1, description="Max memories to extract per conversation turn.",
+    )
+    retrieval_top_k: int = Field(
+        default=10, ge=1, description="Max memories to retrieve per request.",
+    )
+    retrieval_max_tokens: int = Field(
+        default=2000, ge=0, description="Max tokens for retrieved memory content.",
+    )
+    retrieval_strategy: Literal["hybrid", "keyword"] = Field(
+        default="keyword",
+        description="Retrieval strategy. 'keyword' needs no embeddings. "
+        "'hybrid' combines keyword + semantic (requires embedding model config).",
+    )
+
+
 class BridgeConfig(BaseModel):
     """Top-level bridge server configuration."""
 
@@ -52,6 +127,18 @@ class BridgeConfig(BaseModel):
     session: BridgeSessionConfig = Field(
         default_factory=BridgeSessionConfig,
         description="Session identification settings.",
+    )
+    llm: BridgeLLMConfig = Field(
+        default_factory=BridgeLLMConfig,
+        description="LLM config for bridge-internal calls (extraction, summarization, etc.).",
+    )
+    degradation: BridgeDegradationConfig = Field(
+        default_factory=BridgeDegradationConfig,
+        description="Circuit breaker and degradation settings.",
+    )
+    memory: BridgeMemoryConfig = Field(
+        default_factory=BridgeMemoryConfig,
+        description="Memory extraction and retrieval settings.",
     )
     allowed_passthrough_paths: list[str] = Field(
         default=["/v1/messages/count_tokens", "/v1/messages/batches"],
