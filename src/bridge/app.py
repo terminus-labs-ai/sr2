@@ -7,12 +7,13 @@ import logging
 import time
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
 from bridge.adapters.anthropic import AnthropicAdapter
 from bridge.config import BridgeConfig
 from bridge.engine import BridgeEngine
 from bridge.forwarder import BridgeForwarder
+from bridge.bridge_metrics import BridgeMetricsExporter
 from bridge.session_tracker import BridgeSession, SessionTracker
 
 logger = logging.getLogger(__name__)
@@ -125,42 +126,15 @@ def create_bridge_app(
             "upstream": bridge_config.forwarding.upstream_url,
         }
 
+    metrics_exporter = BridgeMetricsExporter(engine, session_tracker)
+
     @app.get("/metrics")
     async def metrics():
-        sessions = session_tracker.all_sessions()
-
-        lines = [
-            "# HELP sr2_bridge_active_sessions Number of active bridge sessions",
-            "# TYPE sr2_bridge_active_sessions gauge",
-            f"sr2_bridge_active_sessions {len(sessions)}",
-            "",
-            "# HELP sr2_bridge_session_requests Total requests per session",
-            "# TYPE sr2_bridge_session_requests counter",
-        ]
-        for sid, session in sessions.items():
-            lines.append(f'sr2_bridge_session_requests{{session="{sid}"}} {session.request_count}')
-
-        lines.append("")
-        lines.append("# HELP sr2_bridge_session_tokens Estimated tokens per session zone")
-        lines.append("# TYPE sr2_bridge_session_tokens gauge")
-        for sid, session in sessions.items():
-            m = engine.get_session_metrics(session)
-            lines.append(
-                f'sr2_bridge_session_tokens{{session="{sid}",zone="summarized"}} '
-                f'{m["summarized_count"]}'
-            )
-            lines.append(
-                f'sr2_bridge_session_tokens{{session="{sid}",zone="compacted"}} '
-                f'{m["compacted_count"]}'
-            )
-            lines.append(
-                f'sr2_bridge_session_tokens{{session="{sid}",zone="raw"}} {m["raw_count"]}'
-            )
-
         return PlainTextResponse(
-            content="\n".join(lines) + "\n",
+            content=metrics_exporter.export(),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
+
 
     # --- Passthrough routes ---
 
