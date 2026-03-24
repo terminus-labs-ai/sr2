@@ -26,14 +26,12 @@ class HeartbeatScanner:
         store: HeartbeatStore,
         agent_callback: Callable[[TriggerContext], Coroutine[Any, Any, str]],
         poll_interval_seconds: int = 30,
-        session_lifecycle: str = "ephemeral",
-        pipeline: str | None = None,
+        respond_fn: Callable[[str, str, str], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
         self._store = store
         self._callback = agent_callback
         self._poll_interval = poll_interval_seconds
-        self._session_lifecycle = session_lifecycle
-        self._pipeline = pipeline
+        self._respond_fn = respond_fn
         self._running = False
         self._busy = False
         self._task: asyncio.Task | None = None
@@ -86,15 +84,11 @@ class HeartbeatScanner:
         await self._store.update_status(hb.id, HeartbeatStatus.firing)
 
         try:
-            interface_name = "heartbeat"
-            if self._pipeline:
-                interface_name = f"_heartbeat_{self._pipeline}"
-
             trigger = TriggerContext(
-                interface_name=interface_name,
+                interface_name="heartbeat",
                 plugin_name="heartbeat",
                 session_name=f"heartbeat_{hb.id}",
-                session_lifecycle=self._session_lifecycle,
+                session_lifecycle="ephemeral",
                 input_data=hb.prompt,
                 metadata={
                     "heartbeat_id": hb.id,
@@ -104,9 +98,16 @@ class HeartbeatScanner:
                 },
             )
 
-            await self._callback(trigger)
+            response = await self._callback(trigger)
             await self._store.update_status(hb.id, HeartbeatStatus.completed)
             logger.info(f"Heartbeat {hb.id} completed")
+
+            # Deliver response to source interface/session
+            if response and self._respond_fn and hb.source_interface:
+                try:
+                    await self._respond_fn(hb.source_interface, hb.source_session, response)
+                except Exception as e:
+                    logger.warning(f"Heartbeat {hb.id} delivery failed: {e}")
 
         except Exception as e:
             logger.error(f"Heartbeat {hb.id} failed: {e}")

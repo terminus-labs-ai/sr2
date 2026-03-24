@@ -18,6 +18,7 @@ def _make_schedule_tool(
     max_context_turns=10,
     session_id="sess-1",
     turns=None,
+    interface_name="telegram",
 ):
     store = store or InMemoryHeartbeatStore()
     return (
@@ -27,6 +28,7 @@ def _make_schedule_tool(
             max_context_turns=max_context_turns,
             session_resolver=lambda: session_id,
             session_turns_resolver=lambda: turns or [],
+            interface_resolver=lambda: interface_name,
         ),
         store,
     )
@@ -44,6 +46,22 @@ class TestScheduleHeartbeatTool:
         assert pending[0].prompt == "Check agent B"
         assert pending[0].source_session == "sess-1"
         assert pending[0].status == HeartbeatStatus.pending
+
+    @pytest.mark.asyncio
+    async def test_captures_source_interface(self):
+        tool, store = _make_schedule_tool(interface_name="telegram")
+        await tool.execute(delay_seconds=300, prompt="Check deploy")
+
+        pending = await store.list_pending("test-agent")
+        assert pending[0].source_interface == "telegram"
+
+    @pytest.mark.asyncio
+    async def test_captures_source_interface_none_becomes_empty(self):
+        tool, store = _make_schedule_tool(interface_name=None)
+        await tool.execute(delay_seconds=300, prompt="Check deploy")
+
+        pending = await store.list_pending("test-agent")
+        assert pending[0].source_interface == ""
 
     @pytest.mark.asyncio
     async def test_captures_last_n_turns(self):
