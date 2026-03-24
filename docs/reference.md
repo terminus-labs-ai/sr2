@@ -56,6 +56,43 @@ docker run -d -p 3000:8080 \
 
 Open [http://localhost:3000](http://localhost:3000) and select the `sr2-edi` model. Or use the `docker compose` setup — see the `open-webui` service in `docker-compose.yaml`.
 
+## Run the Bridge
+
+```bash
+# Zero-config (defaults: port 9200, upstream api.anthropic.com)
+uv run sr2-bridge
+
+# With config file
+uv run sr2-bridge bridge.yaml
+
+# CLI overrides
+uv run sr2-bridge bridge.yaml --port 9300 --host 0.0.0.0 --upstream https://custom-api.example.com
+
+# Options
+#   --port PORT              Override listen port
+#   --host HOST              Override bind host
+#   --upstream URL           Override upstream API URL
+#   --log-level DEBUG        Verbose logging
+```
+
+Then point your LLM caller at the bridge:
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:9200 claude
+```
+
+### Bridge Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/messages` | POST | Main proxy — optimize context, forward, stream back |
+| `/v1/messages/count_tokens` | POST | Passthrough (no optimization) |
+| `/{path}` | ANY | Catchall passthrough for other API endpoints |
+| `/health` | GET | Health check (uptime, active sessions, upstream URL) |
+| `/metrics` | GET | Prometheus-format metrics |
+
+See [Bridge Guide](guide-bridge.md) for full configuration and troubleshooting.
+
 ## Generate Config Schema / Docs
 
 ```bash
@@ -135,6 +172,7 @@ Deep merge, more specific wins. Use `extends:` to reference parent config.
 | `configs/agents/edi/interfaces/` | Per-interface pipeline configs |
 | `src/sr2/` | Core context engineering library |
 | `src/runtime/` | Agent runtime (CLI, LLM loop, plugins, sessions) |
+| `src/runtime/bridge/` | Bridge proxy (context optimization for external callers) |
 | `tests/` | Unit + integration tests |
 
 ## Creating a New Agent

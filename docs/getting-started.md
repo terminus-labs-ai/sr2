@@ -166,5 +166,6 @@ The loader merges your file with the defaults, so you only specify what you want
 - **[Compaction Guide](guide-compaction.md)** — how tool outputs get compressed
 - **[Memory Guide](guide-memory.md)** — extraction, conflict resolution, retrieval
 - **[Tool Masking Guide](guide-tool-masking.md)** — dynamic tool visibility with state machines
+- **[Bridge Guide](guide-bridge.md)** — context optimization proxy for Claude Code and external LLM callers
 - **[Observability](observability.md)** — Prometheus and OpenTelemetry setup
 - **[Troubleshooting](troubleshooting.md)** — common errors and how to fix them

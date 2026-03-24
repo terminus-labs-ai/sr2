@@ -6,6 +6,7 @@ SR2 is a **context engineering library for AI agents** that manages the full lif
 
 - **Library** (`src/sr2/`): ~5,900 LOC, pip-installable, minimal dependencies
 - **Runtime** (`src/runtime/`): ~5,000 LOC, optional agent runtime with HTTP, Telegram, MCP, A2A plugins
+- **Bridge** (`src/runtime/bridge/`): Context optimization proxy for external LLM callers (Claude Code, LangChain, etc.)
 
 ## Architecture
 
@@ -31,6 +32,7 @@ Layer 3: Conversation (append-only) — Session history, compacted/summarized
 - **ToolStateMachine** (`src/sr2/tools/state_machine.py`) — Named states with dynamic tool masking
 - **CircuitBreaker** (`src/sr2/degradation/circuit_breaker.py`) — Per-layer graceful degradation
 - **Heartbeat System** (`src/runtime/heartbeat/`) — Scheduled future agent callbacks with DB persistence, idempotent keys, context carry-over
+- **BridgeEngine** (`src/runtime/bridge/engine.py`) — Context optimization proxy using CompactionEngine + ConversationManager + SummarizationEngine for external LLM callers
 
 ### Config Inheritance
 ```
@@ -70,6 +72,10 @@ ruff format src/
 # Run example agent
 sr2-agent configs/agents/edi --http --port 8008
 
+# Run bridge proxy (for Claude Code, LangChain, etc.)
+sr2-bridge                           # zero-config
+sr2-bridge bridge.yaml --port 9200   # custom config
+
 # Single-shot mode (fire one message through an interface, print response, exit)
 sr2-agent configs/agents/edi --single-shot task_runner "implement auth"
 echo "long prompt" | sr2-agent configs/agents/edi --single-shot task_runner
@@ -108,6 +114,7 @@ docker compose -f docker-compose.nvidia.yaml up      # NVIDIA GPU / CPU
 5. **Graceful degradation** — Per-layer circuit breakers; core layer never skipped
 6. **Memory conflict resolution** — Detects conflicting memories with configurable resolution strategies (latest-wins-archive, keep-both-tagged)
 7. **Dynamic heartbeats** — Agents can schedule future callbacks to themselves via `schedule_heartbeat`/`cancel_heartbeat` tools, with context carry-over and idempotent keys
+8. **Bridge proxy** — Reverse proxy mode applies SR2 context optimization to external callers (Claude Code, LangChain) without requiring modifications to the caller
 
 ## Directory Structure
 
@@ -132,6 +139,7 @@ src/runtime/       # Optional agent runtime
   plugins/         # HTTP, Telegram, timer, A2A, single-shot plugins
   session/         # Session lifecycle management
   heartbeat/       # Scheduled future agent callbacks (model, store, tools, scanner)
+  bridge/          # Context optimization proxy (sr2-bridge CLI, adapters, engine)
 
 configs/           # Example YAML configurations
   defaults.yaml    # Library defaults
