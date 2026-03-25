@@ -135,6 +135,13 @@ def create_bridge_app(
                 (1 - optimized_tokens / max(original_tokens, 1)) * 100,
             )
 
+        # Log message structure for debugging 400s
+        opt_msg_roles = [m.get("role", "?") for m in optimized_body.get("messages", [])]
+        logger.debug(
+            "Session %s: forwarding %d messages, roles=%s, model=%s",
+            session_id, len(opt_msg_roles), opt_msg_roles, optimized_body.get("model"),
+        )
+
         if is_streaming:
             return StreamingResponse(
                 _stream_and_capture(
@@ -152,6 +159,12 @@ def create_bridge_app(
                 "/v1/messages", optimized_body, headers,
                 query_params=request.url.query or None,
             )
+            if response.status_code >= 400:
+                logger.warning(
+                    "Session %s: upstream returned %d: %s",
+                    session_id, response.status_code,
+                    response.content[:500].decode("utf-8", errors="replace"),
+                )
             return Response(
                 content=response.content,
                 status_code=response.status_code,

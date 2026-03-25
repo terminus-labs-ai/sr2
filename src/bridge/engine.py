@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
@@ -127,6 +128,11 @@ class BridgeEngine:
         if mem_cfg.enabled and self._bridge_config.llm.extraction:
             self._memory_store = SQLiteMemoryStore(db_path=mem_cfg.db_path)
 
+        # Per-session lock to serialize concurrent requests from Claude Code.
+        # Without this, parallel requests race on session state (turn counter,
+        # message count, zone content) causing corruption and 400s upstream.
+        self._session_locks: dict[str, asyncio.Lock] = {}
+
     async def _ensure_memory_initialized(self) -> None:
         """Lazily connect to SQLite on first use."""
         if self._memory_initialized or not self._memory_store:
@@ -179,15 +185,40 @@ class BridgeEngine:
         Returns (system_injection_or_None, optimized_messages).
         """
         session_id = session.session_id
+
+        # Serialize concurrent requests for the same session
+        if session_id not in self._session_locks:
+            self._session_locks[session_id] = asyncio.Lock()
+
+        async with self._session_locks[session_id]:
+            return await self._optimize_locked(system, messages, session, adapter)
+
+    async def _optimize_locked(
+        self,
+        system: str | None,
+        messages: list[dict],
+        session: BridgeSession,
+        adapter: BridgeAdapter,
+    ) -> tuple[str | None, list[dict]]:
+        """Actual optimization logic, called under per-session lock."""
+        session_id = session.session_id
         current_count = len(messages)
 
-        if current_count <= session.last_message_count:
-            if current_count < session.last_message_count:
-                logger.info(
-                    "Session %s: message count decreased (%d -> %d), resetting",
-                    session_id, session.last_message_count, current_count,
-                )
-                self._reset_session(session)
+        if current_count == session.last_message_count:
+            # Parallel request with same message count -- skip optimization,
+            # pass through original messages to avoid returning stale zone content.
+            logger.debug(
+                "Session %s: same message count (%d), passing through",
+                session_id, current_count,
+            )
+            return None, messages
+
+        if current_count < session.last_message_count:
+            logger.info(
+                "Session %s: message count decreased (%d -> %d), resetting",
+                session_id, session.last_message_count, current_count,
+            )
+            self._reset_session(session)
 
         # Convert new messages to turns via adapter (engine never sees wire format)
         new_messages = messages[session.last_message_count:]
