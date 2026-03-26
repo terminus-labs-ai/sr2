@@ -267,7 +267,7 @@ class TestPromptVariants:
     @pytest.mark.asyncio
     async def test_project_scope_prompt(self, store):
         """Project scope uses project extraction prompt with error rules."""
-        scope_config = MemoryScopeConfig(default_write="project", agent_name="liara")
+        scope_config = MemoryScopeConfig(allowed_write=["project"], agent_name="liara")
 
         async def mock_llm(prompt: str) -> str:
             return "[]"
@@ -287,7 +287,7 @@ class TestPromptVariants:
     async def test_private_interactive_prompt(self, store, monkeypatch):
         """Private scope without SR2_TASK_SOURCE uses personal facts prompt."""
         monkeypatch.delenv("SR2_TASK_SOURCE", raising=False)
-        scope_config = MemoryScopeConfig(default_write="private", agent_name="miranda")
+        scope_config = MemoryScopeConfig(allowed_write=["private"], agent_name="miranda")
 
         async def mock_llm(prompt: str) -> str:
             return "[]"
@@ -306,7 +306,7 @@ class TestPromptVariants:
     async def test_task_runner_prompt(self, store, monkeypatch):
         """Private scope + SR2_TASK_SOURCE uses task runner extraction prompt."""
         monkeypatch.setenv("SR2_TASK_SOURCE", "gm_task:GM-99")
-        scope_config = MemoryScopeConfig(default_write="private", agent_name="tali")
+        scope_config = MemoryScopeConfig(allowed_write=["private"], agent_name="tali")
 
         async def mock_llm(prompt: str) -> str:
             return "[]"
@@ -351,7 +351,7 @@ class TestPromptVariants:
         ext_project = MemoryExtractor(
             llm_callable=mock_llm,
             store=store,
-            scope_config=MemoryScopeConfig(default_write="project", agent_name="liara"),
+            scope_config=MemoryScopeConfig(allowed_write=["project"], agent_name="liara"),
         )
         assert error_marker in ext_project._build_prompt("test")
 
@@ -360,7 +360,7 @@ class TestPromptVariants:
         ext_private = MemoryExtractor(
             llm_callable=mock_llm,
             store=store,
-            scope_config=MemoryScopeConfig(default_write="private", agent_name="miranda"),
+            scope_config=MemoryScopeConfig(allowed_write=["private"], agent_name="miranda"),
         )
         assert error_marker in ext_private._build_prompt("test")
 
@@ -369,7 +369,7 @@ class TestPromptVariants:
         ext_task = MemoryExtractor(
             llm_callable=mock_llm,
             store=store,
-            scope_config=MemoryScopeConfig(default_write="private", agent_name="tali"),
+            scope_config=MemoryScopeConfig(allowed_write=["private"], agent_name="tali"),
         )
         assert error_marker in ext_task._build_prompt("test")
 

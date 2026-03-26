@@ -161,6 +161,9 @@ pipeline:
 
   # Memory extraction settings
   memory:
+    # Whether to automatically extract memories from conversation turns. When
+    # False, memories can still be saved explicitly via save_memory tool.
+    extract: true
     # Scope configuration for memory isolation and sharing. When absent, all
     # memories are accessible (backward compatible).
     # scope:

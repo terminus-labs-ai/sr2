@@ -31,8 +31,8 @@ def retriever(store):
 @pytest.fixture
 def scope_config():
     return MemoryScopeConfig(
-        default_read=["private"],
-        default_write="private",
+        allowed_read=["private"],
+        allowed_write=["private"],
         agent_name="edi",
     )
 
@@ -40,8 +40,8 @@ def scope_config():
 @pytest.fixture
 def scope_config_all():
     return MemoryScopeConfig(
-        default_read=["private", "project"],
-        default_write="private",
+        allowed_read=["private", "project"],
+        allowed_write=["private"],
         agent_name="edi",
     )
 
