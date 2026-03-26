@@ -132,8 +132,13 @@ class SaveMemoryTool:
                     },
                     "memory_type": {
                         "type": "string",
-                        "enum": ["identity", "semi_stable", "dynamic"],
-                        "description": "How stable this memory is. Default: semi_stable",
+                        "enum": ["semi_stable", "identity", "dynamic"],
+                        "description": (
+                            "How stable this memory is. "
+                            "Use 'semi_stable' for research findings, decisions, and analysis. "
+                            "Use 'identity' for permanent project facts that never change. "
+                            "Use 'dynamic' only for short-lived notes you expect to be overwritten soon."
+                        ),
                     },
                 },
                 "required": ["key", "value"],
