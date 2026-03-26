@@ -145,25 +145,22 @@ class MemoryExtractor:
             # No write scope configured (e.g. memory disabled for this agent)
             return False
 
+        memory.scope = target_scope
+
         if target_scope == "private":
-            memory.scope = "private"
             if self._scope_config.agent_name:
                 memory.scope_ref = f"agent:{self._scope_config.agent_name}"
         else:
-            # Non-private scopes use project_id as scope_ref
+            # Non-private scopes use project_id as scope_ref when available
             project_id = ctx.get("project_id")
             if project_id:
-                memory.scope = target_scope
                 memory.scope_ref = project_id
             else:
-                logger.warning(
-                    "Memory scope configured as '%s' but no project_id in context, "
-                    "falling back to 'private' scope for key=%s",
-                    target_scope, memory.key,
+                logger.debug(
+                    "No project_id in context for scope '%s', key=%s — "
+                    "memory will be unscoped (visible to all %s queries)",
+                    target_scope, memory.key, target_scope,
                 )
-                memory.scope = "private"
-                if self._scope_config.agent_name:
-                    memory.scope_ref = f"agent:{self._scope_config.agent_name}"
 
         # Enforce allowed_write boundary
         if memory.scope not in self._scope_config.allowed_write:
