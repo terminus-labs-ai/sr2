@@ -138,6 +138,13 @@ class SummarizationConfig(BaseModel):
         description="Categories of information to discard during summarization. Content matching "
         "these categories is dropped to save tokens.",
     )
+    compacted_max_tokens: int = Field(
+        default=6000,
+        ge=1000,
+        description="Maximum token budget for the compacted zone before summarization triggers. "
+        "Summarization fires when compacted_tokens > threshold * compacted_max_tokens. "
+        "For heavy-traffic proxies (e.g. Claude Code), raise to 50000-100000.",
+    )
 
 
 class RetrievalConfig(BaseModel):

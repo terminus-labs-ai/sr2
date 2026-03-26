@@ -248,15 +248,55 @@ class AnthropicAdapter:
 
         For compacted turns, emits plain text content. For raw turns that
         still have their original structure, preserves it.
+
+        Validates tool_use/tool_result pairing: if a compacted turn replaced
+        a tool_use block with plain text, any subsequent tool_result referencing
+        the missing tool_use_id is also flattened to plain text. Anthropic
+        rejects orphaned tool_result blocks.
         """
         messages = []
+
+        # Collect tool_use_ids that are present in the output as actual
+        # content blocks (not compacted to plain text).
+        live_tool_use_ids: set[str] = set()
+
         for turn in turns:
             if turn.compacted:
                 messages.append({"role": turn.role, "content": turn.content})
             else:
                 original = turn.metadata.get("_original_message") if turn.metadata else None
-                if original:
-                    messages.append(original)
-                else:
+                if not original:
                     messages.append({"role": turn.role, "content": turn.content})
+                    continue
+
+                msg_content = original.get("content", "")
+                if isinstance(msg_content, list):
+                    # Check if this message has tool_result blocks referencing
+                    # tool_use_ids that were compacted away.
+                    has_orphan = False
+                    for block in msg_content:
+                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                            ref_id = block.get("tool_use_id", "")
+                            if ref_id and ref_id not in live_tool_use_ids:
+                                has_orphan = True
+                                break
+
+                    if has_orphan:
+                        # Flatten to plain text to avoid Anthropic 400
+                        messages.append({"role": turn.role, "content": turn.content})
+                        logger.debug(
+                            "Flattened turn %d: orphaned tool_result (tool_use was compacted/summarized)",
+                            turn.turn_number,
+                        )
+                    else:
+                        # Register any tool_use_ids this message provides
+                        for block in msg_content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                tid = block.get("id", "")
+                                if tid:
+                                    live_tool_use_ids.add(tid)
+                        messages.append(original)
+                else:
+                    messages.append(original)
+
         return messages

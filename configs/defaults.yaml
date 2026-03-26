@@ -95,6 +95,11 @@ pipeline:
     # Categories of information to discard during summarization. Content
     # matching these categories is dropped to save tokens.
     discard: [successful_routine_actions, redundant_confirmations, exploration_dead_ends]
+    # Maximum token budget for the compacted zone before summarization triggers.
+    # Summarization fires when compacted_tokens > threshold *
+    # compacted_max_tokens. For heavy-traffic proxies (e.g. Claude Code), raise
+    # to 50000-100000.
+    compacted_max_tokens: 6000
 
   # Retrieval-augmented context settings
   retrieval:

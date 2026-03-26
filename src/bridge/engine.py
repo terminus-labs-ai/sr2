@@ -107,6 +107,7 @@ class BridgeEngine:
             compaction_engine=self._compaction,
             summarization_engine=self._summarization,
             raw_window=compaction_config.raw_window,
+            compacted_max_tokens=summarization_config.compacted_max_tokens,
         )
 
         # Degradation: circuit breaker + ladder
