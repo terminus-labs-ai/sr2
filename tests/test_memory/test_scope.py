@@ -27,7 +27,7 @@ class TestScopeStamping:
     async def test_project_write_stamps_scope(self, store):
         """Extract with default_write='project' + project context → project scope."""
         scope_config = MemoryScopeConfig(
-            default_write="project",
+            allowed_write=["project"],
             agent_name="liara",
         )
         response = json.dumps([{"key": "research.auth", "value": "OAuth2 chosen"}])
@@ -53,7 +53,7 @@ class TestScopeStamping:
     async def test_private_write_stamps_agent(self, store):
         """Extract with default_write='private' + agent_name → private with agent ref."""
         scope_config = MemoryScopeConfig(
-            default_write="private",
+            allowed_write=["private"],
             agent_name="tali",
         )
         response = json.dumps([{"key": "user.name", "value": "Shepard"}])
@@ -75,7 +75,7 @@ class TestScopeStamping:
     async def test_project_fallback_without_context(self, store):
         """Extract with default_write='project' but no project_id → falls back to private."""
         scope_config = MemoryScopeConfig(
-            default_write="project",
+            allowed_write=["project", "private"],
             agent_name="garrus",
         )
         response = json.dumps([{"key": "user.pref", "value": "dark mode"}])
@@ -86,13 +86,32 @@ class TestScopeStamping:
         extractor = MemoryExtractor(
             llm_callable=mock_llm, store=store, scope_config=scope_config,
         )
-        # No current_context at all
+        # No current_context at all — falls back to private
         result = await extractor.extract("I prefer dark mode")
 
         assert len(result.memories) == 1
         mem = result.memories[0]
         assert mem.scope == "private"
         assert mem.scope_ref == "agent:garrus"
+
+    @pytest.mark.asyncio
+    async def test_project_fallback_blocked_by_allowed_write(self, store):
+        """Extract with allowed_write=['project'] only, no project_id → memory dropped."""
+        scope_config = MemoryScopeConfig(
+            allowed_write=["project"],
+            agent_name="garrus",
+        )
+        response = json.dumps([{"key": "user.pref", "value": "dark mode"}])
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm, store=store, scope_config=scope_config,
+        )
+        result = await extractor.extract("I prefer dark mode")
+
+        assert len(result.memories) == 0
 
     @pytest.mark.asyncio
     async def test_no_scope_config_legacy_behavior(self, store):
@@ -114,7 +133,7 @@ class TestScopeStamping:
     @pytest.mark.asyncio
     async def test_source_field_stored(self, store):
         """Provenance source is stored and retrievable."""
-        scope_config = MemoryScopeConfig(default_write="private", agent_name="edi")
+        scope_config = MemoryScopeConfig(allowed_write=["private"], agent_name="edi")
         response = json.dumps([{"key": "task.status", "value": "complete"}])
 
         async def mock_llm(prompt: str) -> str:
@@ -149,7 +168,7 @@ class TestScopeRetrieval:
         await store.save(mem_a)
         await store.save(mem_b)
 
-        scope_b = MemoryScopeConfig(default_read=["private"], agent_name="b")
+        scope_b = MemoryScopeConfig(allowed_read=["private"], agent_name="b")
         retriever = HybridRetriever(
             store=store, strategy="keyword",
             scope_config=scope_b, current_context={},
@@ -169,7 +188,7 @@ class TestScopeRetrieval:
         await store.save(shared)
 
         scope_b = MemoryScopeConfig(
-            default_read=["private", "project"], agent_name="b",
+            allowed_read=["private", "project"], agent_name="b",
         )
         retriever = HybridRetriever(
             store=store, strategy="keyword",
@@ -189,7 +208,7 @@ class TestScopeRetrieval:
         await store.save(mem_y)
 
         scope = MemoryScopeConfig(
-            default_read=["private", "project"], agent_name="agent1",
+            allowed_read=["private", "project"], agent_name="agent1",
         )
         retriever = HybridRetriever(
             store=store, strategy="keyword",
@@ -208,7 +227,7 @@ class TestScopeRetrieval:
         assert legacy.scope_ref is None
         await store.save(legacy)
 
-        scope = MemoryScopeConfig(default_read=["private"], agent_name="newagent")
+        scope = MemoryScopeConfig(allowed_read=["private"], agent_name="newagent")
         retriever = HybridRetriever(
             store=store, strategy="keyword",
             scope_config=scope, current_context={},

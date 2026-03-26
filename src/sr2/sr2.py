@@ -187,7 +187,7 @@ class SR2:
         # Post-LLM processor
         self._post_processor = PostLLMProcessor(
             conversation_manager=self._conversation,
-            memory_extractor=self._extractor,
+            memory_extractor=self._extractor if agent_config.memory.extract else None,
             conflict_detector=self._conflict_detector,
             conflict_resolver=self._conflict_resolver,
             retriever=self._retriever,
@@ -406,7 +406,11 @@ class SR2:
 
         # Stamp scope if scope config is wired
         if self._scope_config_resolved:
-            self._extractor._stamp_scope(mem, current_context)
+            if not self._extractor._stamp_scope(mem, current_context):
+                raise ValueError(
+                    f"Scope '{mem.scope}' not in allowed_write "
+                    f"{self._scope_config_resolved.allowed_write}"
+                )
 
         embedding = None
         if self._config.embed:

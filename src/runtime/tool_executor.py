@@ -93,13 +93,16 @@ class SaveMemoryTool:
             return "Error: 'key' and 'value' are required."
         session_id = self._session_resolver() if self._session_resolver else None
         current_context = self._context_resolver() if self._context_resolver else None
-        await self._sr2.save_memory(
-            key=key,
-            value=value,
-            memory_type=memory_type,
-            source=f"session:{session_id}" if session_id else None,
-            current_context=current_context,
-        )
+        try:
+            await self._sr2.save_memory(
+                key=key,
+                value=value,
+                memory_type=memory_type,
+                source=f"session:{session_id}" if session_id else None,
+                current_context=current_context,
+            )
+        except ValueError as e:
+            return f"Error: {e}"
         return f"Remembered: [{key}] = {value}"
 
 
@@ -250,10 +253,10 @@ class RecallMemoryTool:
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["private", "project", "all"],
+                        "enum": self._allowed_scopes() + ["all"],
                         "description": (
                             "Optional. Which memory scope to search. "
-                            "Defaults to 'all' (both private and project)."
+                            f"Defaults to 'all' ({', '.join(self._allowed_scopes())})."
                         ),
                     },
                     "top_k": {
@@ -271,7 +274,7 @@ class RecallMemoryTool:
         """Return the scopes the agent is configured to read."""
         if not self._scope_config:
             return ["private", "project"]
-        return list(self._scope_config.default_read)
+        return list(self._scope_config.allowed_read)
 
     def _resolve_scope_filter(
         self, requested_scope: str | None
@@ -361,8 +364,8 @@ class RecallMemoryTool:
             if scope_filter is not None:
                 from sr2.config.models import MemoryScopeConfig
                 self._retriever._scope_config = MemoryScopeConfig(
-                    default_read=scope_filter,
-                    default_write=self._scope_config.default_write if self._scope_config else "private",
+                    allowed_read=scope_filter,
+                    allowed_write=self._scope_config.allowed_write if self._scope_config else ["private"],
                     agent_name=self._scope_config.agent_name if self._scope_config else None,
                 )
             try:
