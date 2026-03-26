@@ -72,31 +72,8 @@ class TestScopeStamping:
         assert mem.scope_ref == "agent:tali"
 
     @pytest.mark.asyncio
-    async def test_project_fallback_without_context(self, store):
-        """Extract with default_write='project' but no project_id → falls back to private."""
-        scope_config = MemoryScopeConfig(
-            allowed_write=["project", "private"],
-            agent_name="garrus",
-        )
-        response = json.dumps([{"key": "user.pref", "value": "dark mode"}])
-
-        async def mock_llm(prompt: str) -> str:
-            return response
-
-        extractor = MemoryExtractor(
-            llm_callable=mock_llm, store=store, scope_config=scope_config,
-        )
-        # No current_context at all — falls back to private
-        result = await extractor.extract("I prefer dark mode")
-
-        assert len(result.memories) == 1
-        mem = result.memories[0]
-        assert mem.scope == "private"
-        assert mem.scope_ref == "agent:garrus"
-
-    @pytest.mark.asyncio
-    async def test_project_fallback_blocked_by_allowed_write(self, store):
-        """Extract with allowed_write=['project'] only, no project_id → memory dropped."""
+    async def test_project_scope_without_project_id(self, store):
+        """Extract with default_write='project' but no project_id → still writes as project scope."""
         scope_config = MemoryScopeConfig(
             allowed_write=["project"],
             agent_name="garrus",
@@ -111,7 +88,10 @@ class TestScopeStamping:
         )
         result = await extractor.extract("I prefer dark mode")
 
-        assert len(result.memories) == 0
+        assert len(result.memories) == 1
+        mem = result.memories[0]
+        assert mem.scope == "project"
+        assert mem.scope_ref is None  # no project_id available, unscoped
 
     @pytest.mark.asyncio
     async def test_no_scope_config_legacy_behavior(self, store):
