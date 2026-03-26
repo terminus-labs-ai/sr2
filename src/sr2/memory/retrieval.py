@@ -56,7 +56,7 @@ class HybridRetriever:
         if not self._scope_config:
             return None, None
 
-        scope_filter = list(self._scope_config.default_read)
+        scope_filter = list(self._scope_config.allowed_read)
         scope_refs: list[str] = []
 
         if "private" in scope_filter and self._scope_config.agent_name:
