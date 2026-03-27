@@ -159,14 +159,18 @@ class InMemoryMemoryStore:
         scope_filter: list[str] | None = None,
         scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
-        query_lower = query.lower()
+        words = list({w.lower() for w in re.split(r"[\s,!?.;:'\"]+", query) if len(w) >= 3})
+        if not words:
+            words = [query.strip().lower()]
         results = []
         for m in self._memories.values():
             if m.archived and not include_archived:
                 continue
             if not self._scope_match(m, scope_filter, scope_refs):
                 continue
-            if query_lower in m.key.lower() or query_lower in m.value.lower():
+            key_lower = m.key.lower()
+            value_lower = m.value.lower()
+            if any(w in key_lower or w in value_lower for w in words):
                 results.append(
                     MemorySearchResult(memory=m, relevance_score=0.7, match_type="keyword")
                 )
@@ -725,6 +729,14 @@ class SQLiteMemoryStore:
         sql = f"SELECT * FROM memories WHERE ({conditions})"
         if not include_archived:
             sql += " AND archived = 0"
+        if scope_filter is not None:
+            placeholders = ",".join("?" for _ in scope_filter)
+            sql += f" AND scope IN ({placeholders})"
+            params.extend(scope_filter)
+        if scope_refs is not None:
+            placeholders = ",".join("?" for _ in scope_refs)
+            sql += f" AND (scope_ref IN ({placeholders}) OR scope_ref IS NULL)"
+            params.extend(scope_refs)
         sql += f" LIMIT {top_k}"
 
         cursor = await self._conn.execute(sql, params)

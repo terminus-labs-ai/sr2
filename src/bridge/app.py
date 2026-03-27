@@ -30,6 +30,92 @@ def _is_fast_model(model_name: str) -> bool:
     return any(marker in lower for marker in _FAST_MODEL_MARKERS)
 
 
+def _rewrite_model(body: dict, fwd_config) -> None:
+    """Rewrite model field in request body if configured."""
+    if not fwd_config.model:
+        return
+    original_model = body.get("model", "")
+    if fwd_config.fast_model and _is_fast_model(original_model):
+        body["model"] = fwd_config.fast_model
+    else:
+        body["model"] = fwd_config.model
+    if body["model"] != original_model:
+        logger.debug("Model rewrite: %s -> %s", original_model, body["model"])
+
+
+def _log_token_reduction(
+    session_id: str, messages: list[dict], optimized_messages: list[dict]
+) -> None:
+    """Log token reduction from optimization."""
+    original_tokens = sum(len(str(m.get("content", ""))) // 4 for m in messages)
+    optimized_tokens = sum(len(str(m.get("content", ""))) // 4 for m in optimized_messages)
+    if original_tokens != optimized_tokens:
+        logger.info(
+            "Session %s: optimized %d -> %d est. tokens (%.0f%% reduction)",
+            session_id,
+            original_tokens,
+            optimized_tokens,
+            (1 - optimized_tokens / max(original_tokens, 1)) * 100,
+        )
+
+
+def _build_streaming_response(
+    forwarder: BridgeForwarder,
+    engine: BridgeEngine,
+    adapter: AnthropicAdapter,
+    body: dict,
+    headers: dict[str, str],
+    session: BridgeSession,
+    query_params: str | None,
+) -> StreamingResponse:
+    """Build a streaming response that captures text for post-processing."""
+    return StreamingResponse(
+        _stream_and_capture(
+            forwarder,
+            engine,
+            adapter,
+            body,
+            headers,
+            session,
+            query_params=query_params,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _build_sync_response(
+    forwarder: BridgeForwarder,
+    session_id: str,
+    body: dict,
+    headers: dict[str, str],
+    query_params: str | None,
+) -> Response:
+    """Build a non-streaming response."""
+    response = await forwarder.forward(
+        "/v1/messages",
+        body,
+        headers,
+        query_params=query_params or None,
+    )
+    if response.status_code >= 400:
+        logger.warning(
+            "Session %s: upstream returned %d: %s",
+            session_id,
+            response.status_code,
+            response.content[:500].decode("utf-8", errors="replace"),
+        )
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=response.headers.get("content-type"),
+    )
+
+
 def create_bridge_app(
     bridge_config: BridgeConfig,
     engine: BridgeEngine,
@@ -38,6 +124,7 @@ def create_bridge_app(
     key_cache: APIKeyCache | None = None,
 ) -> FastAPI:
     """Create the FastAPI bridge proxy application."""
+
     async def _cleanup_loop():
         """Periodically clean up idle sessions."""
         while True:
@@ -51,6 +138,14 @@ def create_bridge_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await forwarder.start()
+
+        # Restore persisted sessions if enabled
+        if engine.session_store:
+            await engine.session_store.connect()
+            for session, zones in await engine.session_store.load_all_sessions():
+                session_tracker.restore_session(session)
+                engine.conversation_manager.restore_zones(session.session_id, zones)
+
         logger.info(
             "SR2 Bridge started on %s:%d -> %s",
             bridge_config.host,
@@ -67,13 +162,11 @@ def create_bridge_app(
             logger.info("SR2 Bridge stopped")
 
     app = FastAPI(title="SR2 Bridge", lifespan=lifespan)
-    adapter = AnthropicAdapter()
+    adapter = AnthropicAdapter(tool_type_overrides=bridge_config.tool_type_overrides or None)
     _key_cache = key_cache or APIKeyCache()
 
     # Track startup time for health endpoint
     start_time = time.time()
-
-    # Lifecycle handled via lifespan context manager (see below)
 
     # --- Main proxy route ---
 
@@ -94,19 +187,13 @@ def create_bridge_app(
 
         logger.debug(
             "Session %s: %d messages, stream=%s",
-            session_id, len(messages), is_streaming,
+            session_id,
+            len(messages),
+            is_streaming,
         )
 
         # Rewrite model if configured
-        fwd = bridge_config.forwarding
-        if fwd.model:
-            original_model = body.get("model", "")
-            if fwd.fast_model and _is_fast_model(original_model):
-                body["model"] = fwd.fast_model
-            else:
-                body["model"] = fwd.model
-            if body["model"] != original_model:
-                logger.debug("Model rewrite: %s -> %s", original_model, body["model"])
+        _rewrite_model(body, bridge_config.forwarding)
 
         # Optimize context
         try:
@@ -123,56 +210,38 @@ def create_bridge_app(
 
         # Rebuild body with optimized messages
         optimized_body = adapter.rebuild_body(body, optimized_messages, system_injection)
-
-        original_tokens = sum(len(str(m.get("content", ""))) // 4 for m in messages)
-        optimized_tokens = sum(len(str(m.get("content", ""))) // 4 for m in optimized_messages)
-        if original_tokens != optimized_tokens:
-            logger.info(
-                "Session %s: optimized %d -> %d est. tokens (%.0f%% reduction)",
-                session_id,
-                original_tokens,
-                optimized_tokens,
-                (1 - optimized_tokens / max(original_tokens, 1)) * 100,
-            )
+        _log_token_reduction(session_id, messages, optimized_messages)
 
         # Log message structure for debugging 400s
         opt_msg_roles = [m.get("role", "?") for m in optimized_body.get("messages", [])]
         logger.debug(
             "Session %s: forwarding %d messages, roles=%s, model=%s",
-            session_id, len(opt_msg_roles), opt_msg_roles, optimized_body.get("model"),
+            session_id,
+            len(opt_msg_roles),
+            opt_msg_roles,
+            optimized_body.get("model"),
         )
 
         if is_streaming:
-            return StreamingResponse(
-                _stream_and_capture(
-                    forwarder, engine, adapter, optimized_body, headers, session,
-                    query_params=request.url.query,
-                ),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                },
+            return _build_streaming_response(
+                forwarder,
+                engine,
+                adapter,
+                optimized_body,
+                headers,
+                session,
+                query_params=request.url.query,
             )
         else:
-            response = await forwarder.forward(
-                "/v1/messages", optimized_body, headers,
-                query_params=request.url.query or None,
-            )
-            if response.status_code >= 400:
-                logger.warning(
-                    "Session %s: upstream returned %d: %s",
-                    session_id, response.status_code,
-                    response.content[:500].decode("utf-8", errors="replace"),
-                )
-            return Response(
-                content=response.content,
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=response.headers.get("content-type"),
+            return await _build_sync_response(
+                forwarder,
+                session_id,
+                optimized_body,
+                headers,
+                query_params=request.url.query,
             )
 
-    # --- Infrastructure endpoints (must be before catchall) ---
+    # --- Infrastructure endpoints ---
 
     @app.get("/health")
     async def health():
@@ -192,21 +261,19 @@ def create_bridge_app(
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
-
     # --- Passthrough routes (config-driven allowlist) ---
 
     def _make_passthrough_handler(path: str):
         async def passthrough(request: Request):
             body = await request.body() if request.method in ("POST", "PUT", "PATCH") else None
             headers = dict(request.headers)
-            response = await forwarder.forward_passthrough(
-                request.method, path, body, headers
-            )
+            response = await forwarder.forward_passthrough(request.method, path, body, headers)
             return Response(
                 content=response.content,
                 status_code=response.status_code,
                 media_type=response.headers.get("content-type"),
             )
+
         return passthrough
 
     for passthrough_path in bridge_config.allowed_passthrough_paths:
@@ -241,7 +308,10 @@ async def _stream_and_capture(
     accumulated: list[str] = []
 
     async for chunk in forwarder.forward_streaming(
-        "/v1/messages", body, headers, query_params=query_params or None,
+        "/v1/messages",
+        body,
+        headers,
+        query_params=query_params or None,
     ):
         yield chunk
         text = adapter.parse_sse_text(chunk)

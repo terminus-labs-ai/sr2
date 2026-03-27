@@ -664,14 +664,6 @@ class TestLLMCallableFactory:
         callable_fn = make_extraction_callable(config, APIKeyCache(), "https://api.example.com")
         assert callable(callable_fn)
 
-    def test_intent_callable_created(self):
-        from bridge.config import BridgeLLMModelConfig
-        from bridge.llm import APIKeyCache, make_intent_callable
-
-        config = BridgeLLMModelConfig(model="test-model", api_key="key")
-        callable_fn = make_intent_callable(config, APIKeyCache(), "https://api.example.com")
-        assert callable(callable_fn)
-
     def test_embedding_callable_created(self):
         from bridge.config import BridgeLLMModelConfig
         from bridge.llm import APIKeyCache, make_embedding_callable

@@ -29,6 +29,12 @@ class BridgeForwardingConfig(BaseModel):
         description="Override model for 'fast/small' upstream requests (e.g. haiku). "
         "When set, requests for known small models are rewritten to this. None = use 'model'.",
     )
+    max_context_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description="Max context tokens for the upstream model. When set, the bridge "
+        "logs a warning if the optimized request exceeds this limit. Advisory only.",
+    )
 
 
 class BridgeSessionConfig(BaseModel):
@@ -48,6 +54,10 @@ class BridgeSessionConfig(BaseModel):
         default=120,
         ge=1,
         description="Minutes of inactivity before a session is cleaned up.",
+    )
+    persistence: bool = Field(
+        default=False,
+        description="Persist session state to SQLite. Survives bridge restarts.",
     )
 
 
@@ -76,10 +86,6 @@ class BridgeLLMConfig(BaseModel):
     summarization: BridgeLLMModelConfig | None = Field(
         default=None,
         description="Model for conversation summarization.",
-    )
-    intent: BridgeLLMModelConfig | None = Field(
-        default=None,
-        description="Model for intent/topic-shift detection.",
     )
     embedding: BridgeLLMModelConfig | None = Field(
         default=None,
@@ -111,13 +117,19 @@ class BridgeMemoryConfig(BaseModel):
         description="Path to SQLite database for memory persistence.",
     )
     max_memories_per_turn: int = Field(
-        default=5, ge=1, description="Max memories to extract per conversation turn.",
+        default=5,
+        ge=1,
+        description="Max memories to extract per conversation turn.",
     )
     retrieval_top_k: int = Field(
-        default=10, ge=1, description="Max memories to retrieve per request.",
+        default=10,
+        ge=1,
+        description="Max memories to retrieve per request.",
     )
     retrieval_max_tokens: int = Field(
-        default=2000, ge=0, description="Max tokens for retrieved memory content.",
+        default=2000,
+        ge=0,
+        description="Max tokens for retrieved memory content.",
     )
     retrieval_strategy: Literal["hybrid", "keyword"] = Field(
         default="keyword",
@@ -150,6 +162,14 @@ class BridgeConfig(BaseModel):
     memory: BridgeMemoryConfig = Field(
         default_factory=BridgeMemoryConfig,
         description="Memory extraction and retrieval settings.",
+    )
+    tool_type_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Custom tool name to content type mappings for compaction. "
+            "Keys are substrings matched against tool names (case-insensitive), "
+            "values are content types: file_content, code_execution, tool_output."
+        ),
     )
     allowed_passthrough_paths: list[str] = Field(
         default=["/v1/messages/count_tokens", "/v1/messages/batches"],

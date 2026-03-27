@@ -26,6 +26,7 @@ class BridgeSession:
     last_seen: float = field(default_factory=time.time)
     request_count: int = 0
     last_message_count: int = 0
+    last_message_hash: str = ""
 
     # Conversation state (previously in engine.SessionState)
     turn_counter: int = 0
@@ -107,3 +108,13 @@ class SessionTracker:
 
     def all_sessions(self) -> dict[str, BridgeSession]:
         return dict(self._sessions)
+
+    def restore_session(self, session: BridgeSession) -> None:
+        """Restore a previously persisted session into the tracker."""
+        self._sessions[session.session_id] = session
+        logger.info(
+            "Restored session: %s (turns=%d, requests=%d)",
+            session.session_id,
+            session.turn_counter,
+            session.request_count,
+        )

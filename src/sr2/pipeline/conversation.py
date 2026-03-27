@@ -116,7 +116,8 @@ class ConversationManager:
         if preserve_n >= len(zones.compacted):
             logger.warning(
                 "Summarization triggered but skipped: preserve_recent_turns (%d) >= compacted turns (%d)",
-                preserve_n, len(zones.compacted),
+                preserve_n,
+                len(zones.compacted),
             )
             return None
         to_summarize = zones.compacted[:-preserve_n] if preserve_n > 0 else zones.compacted
@@ -175,6 +176,10 @@ class ConversationManager:
     def get_zone_transitions(self, session_id: str = "default") -> dict[str, int]:
         """Get cumulative zone transition counts for a session."""
         return dict(self._zone_transitions.get(session_id, {}))
+
+    def restore_zones(self, session_id: str, zones: ConversationZones) -> None:
+        """Restore previously persisted zones into the manager."""
+        self._zones_by_session[session_id] = zones
 
     def destroy_session(self, session_id: str) -> None:
         """Clean up zones for a destroyed session."""

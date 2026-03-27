@@ -47,6 +47,7 @@ def make_summarization_callable(
 
     Signature: async (system: str, prompt: str) -> str
     """
+
     async def summarization_call(system: str, prompt: str) -> str:
         import litellm
 
@@ -82,6 +83,7 @@ def make_extraction_callable(
 
     Signature: async (prompt: str) -> str
     """
+
     async def extraction_call(prompt: str) -> str:
         import litellm
 
@@ -103,36 +105,6 @@ def make_extraction_callable(
     return extraction_call
 
 
-def make_intent_callable(
-    config: BridgeLLMModelConfig,
-    key_cache: APIKeyCache,
-    upstream_url: str,
-):
-    """Create an async callable for intent detection.
-
-    Signature: async (prompt: str) -> str
-    """
-    async def intent_call(prompt: str) -> str:
-        import litellm
-
-        api_key = config.api_key or key_cache.key
-        if not api_key:
-            raise RuntimeError("No API key available for intent detection")
-
-        api_base = config.api_base or upstream_url
-
-        response = await litellm.acompletion(
-            model=config.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=config.max_tokens,
-            api_key=api_key,
-            api_base=api_base,
-        )
-        return response.choices[0].message.content or ""
-
-    return intent_call
-
-
 def make_embedding_callable(
     config: BridgeLLMModelConfig,
     key_cache: APIKeyCache,
@@ -142,6 +114,7 @@ def make_embedding_callable(
 
     Signature: async (text: str) -> list[float]
     """
+
     async def embedding_call(text: str) -> list[float]:
         import litellm
 

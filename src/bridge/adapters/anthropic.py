@@ -32,9 +32,17 @@ _TOOL_CONTENT_TYPE_MAP = {
 }
 
 
-def _classify_tool_name(tool_name: str) -> str:
+def _classify_tool_name(
+    tool_name: str,
+    overrides: dict[str, str] | None = None,
+) -> str:
     """Classify a tool name into a content_type for compaction rules."""
     lower = tool_name.lower()
+    # User overrides take priority
+    if overrides:
+        for marker, content_type in overrides.items():
+            if marker.lower() in lower:
+                return content_type
     for marker, content_type in _TOOL_CONTENT_TYPE_MAP.items():
         if marker in lower:
             return content_type
@@ -45,6 +53,7 @@ def _classify_tool_name(tool_name: str) -> str:
 def _detect_content_type(
     content_blocks: list,
     tool_name_map: dict[str, str] | None = None,
+    tool_type_overrides: dict[str, str] | None = None,
 ) -> str | None:
     """Detect the dominant content type from Anthropic content blocks.
 
@@ -60,12 +69,12 @@ def _detect_content_type(
         block_type = block.get("type")
 
         if block_type == "tool_use":
-            return _classify_tool_name(block.get("name", ""))
+            return _classify_tool_name(block.get("name", ""), tool_type_overrides)
 
         if block_type == "tool_result":
             tool_use_id = block.get("tool_use_id", "")
             if tool_use_id and tool_use_id in tool_name_map:
-                return _classify_tool_name(tool_name_map[tool_use_id])
+                return _classify_tool_name(tool_name_map[tool_use_id], tool_type_overrides)
             # Fallback: can't determine specific type
             return "tool_output"
 
@@ -80,6 +89,9 @@ class AnthropicAdapter:
     - Messages with role/content (text, tool_use, tool_result content blocks)
     - SSE event parsing for content_block_delta with text_delta
     """
+
+    def __init__(self, tool_type_overrides: dict[str, str] | None = None) -> None:
+        self._tool_type_overrides = tool_type_overrides or {}
 
     def extract_messages(self, body: dict) -> tuple[str | None, list[dict]]:
         """Extract system prompt and messages from Anthropic request body."""
@@ -179,7 +191,9 @@ class AnthropicAdapter:
 
             # Handle Anthropic content blocks
             if isinstance(content, list):
-                content_type = _detect_content_type(content, tool_name_map)
+                content_type = _detect_content_type(
+                    content, tool_name_map, self._tool_type_overrides
+                )
                 text_parts = []
                 for block in content:
                     if isinstance(block, dict):
@@ -194,9 +208,7 @@ class AnthropicAdapter:
                             result_content = block.get("content", "")
                             if isinstance(result_content, list):
                                 result_content = " ".join(
-                                    b.get("text", "")
-                                    for b in result_content
-                                    if isinstance(b, dict)
+                                    b.get("text", "") for b in result_content if isinstance(b, dict)
                                 )
                             # Resolve tool name from the tool_use_id
                             tool_use_id = block.get("tool_use_id", "")
