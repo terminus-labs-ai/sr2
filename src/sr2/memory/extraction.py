@@ -104,9 +104,11 @@ class MemoryExtractor:
         candidates = self._parse_response(raw_response)
         logger.debug("Memory extraction: %d candidates after parsing", len(candidates))
 
-        # Stamp scope on each candidate
-        for mem in candidates:
-            self._stamp_scope(mem, current_context)
+        # Stamp scope on each candidate, filtering out any blocked by allowed_write
+        candidates = [
+            mem for mem in candidates
+            if self._stamp_scope(mem, current_context)
+        ]
 
         saved: list[Memory] = []
         for mem in candidates:
@@ -128,33 +130,48 @@ class MemoryExtractor:
             source=source,
         )
 
-    def _stamp_scope(self, memory: Memory, current_context: dict | None) -> None:
-        """Stamp scope fields on a memory based on scope_config."""
+    def _stamp_scope(self, memory: Memory, current_context: dict | None) -> bool:
+        """Stamp scope fields on a memory based on scope_config.
+
+        Returns True if the memory is allowed, False if blocked by allowed_write.
+        """
         if not self._scope_config:
-            return
+            return True
 
         ctx = current_context or {}
-        if self._scope_config.default_write == "project":
-            project_id = ctx.get("project_id")
-            if project_id:
-                memory.scope = "project"
-                memory.scope_ref = project_id
-            else:
-                # Can't create unscoped shared memory — fall back to private
-                logger.warning(
-                    "Memory scope configured as 'project' but no project_id in context, "
-                    "falling back to 'private' scope for key=%s",
-                    memory.key,
-                )
-                memory.scope = "private"
-                if self._scope_config.agent_name:
-                    memory.scope_ref = f"agent:{self._scope_config.agent_name}"
-        elif self._scope_config.default_write == "private":
-            memory.scope = "private"
+        target_scope = self._scope_config.default_write
+
+        if target_scope is None:
+            # No write scope configured (e.g. memory disabled for this agent)
+            return False
+
+        memory.scope = target_scope
+
+        if target_scope == "private":
             if self._scope_config.agent_name:
                 memory.scope_ref = f"agent:{self._scope_config.agent_name}"
+        else:
+            # Non-private scopes use project_id as scope_ref when available
+            project_id = ctx.get("project_id")
+            if project_id:
+                memory.scope_ref = project_id
+            else:
+                logger.debug(
+                    "No project_id in context for scope '%s', key=%s — "
+                    "memory will be unscoped (visible to all %s queries)",
+                    target_scope, memory.key, target_scope,
+                )
+
+        # Enforce allowed_write boundary
+        if memory.scope not in self._scope_config.allowed_write:
+            logger.warning(
+                "Scope '%s' not in allowed_write %s, dropping memory key=%s",
+                memory.scope, self._scope_config.allowed_write, memory.key,
+            )
+            return False
 
         memory.source = ctx.get("source")
+        return True
 
     async def _is_duplicate(self, mem: Memory) -> bool:
         """Return True if the store already has this exact key+value."""

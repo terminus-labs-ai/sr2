@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sr2.tools.models import ToolStateConfig, ToolTransitionConfig
 
@@ -242,21 +242,52 @@ class KeySchemaEntry(BaseModel):
 class MemoryScopeConfig(BaseModel):
     """Scope configuration for memory isolation and sharing."""
 
-    default_read: list[Literal["private", "project"]] = Field(
+    allowed_read: list[str] = Field(
         default_factory=lambda: ["private"],
-        description="Which scopes to read from during retrieval.",
+        description="Hard boundary — scopes this agent is permitted to read from.",
     )
-    default_write: Literal["private", "project"] = Field(
-        default="private",
-        description="Default scope for newly extracted memories.",
+    allowed_write: list[str] = Field(
+        default_factory=lambda: ["private"],
+        description="Hard boundary — scopes this agent is permitted to write to.",
+    )
+    default_read: str | None = Field(
+        default=None,
+        description="Single-scope fallback for reads. Inferred from first of allowed_read if omitted.",
+    )
+    default_write: str | None = Field(
+        default=None,
+        description="Default scope for newly saved/extracted memories. Inferred from first of allowed_write if omitted.",
     )
     agent_name: str | None = Field(
         default=None,
         description="Agent name for private memory isolation. Required for multi-agent setups.",
     )
 
+    @model_validator(mode="after")
+    def _resolve_and_validate(self):
+        # Infer defaults from allowed lists when not explicitly set
+        if self.default_read is None and self.allowed_read:
+            self.default_read = self.allowed_read[0]
+        if self.default_write is None and self.allowed_write:
+            self.default_write = self.allowed_write[0]
+        # Validate defaults are within allowed boundaries
+        if self.default_read is not None and self.default_read not in self.allowed_read:
+            raise ValueError(
+                f"default_read '{self.default_read}' not in allowed_read {self.allowed_read}"
+            )
+        if self.default_write is not None and self.default_write not in self.allowed_write:
+            raise ValueError(
+                f"default_write '{self.default_write}' not in allowed_write {self.allowed_write}"
+            )
+        return self
+
 
 class MemoryConfig(BaseModel):
+    extract: bool = Field(
+        default=True,
+        description="Whether to automatically extract memories from conversation turns. "
+        "When False, memories can still be saved explicitly via save_memory tool.",
+    )
     scope: MemoryScopeConfig | None = Field(
         default=None,
         description="Scope configuration for memory isolation and sharing. "

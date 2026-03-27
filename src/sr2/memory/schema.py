@@ -20,7 +20,7 @@ class Memory(BaseModel):
         "explicit_statement", "direct_answer", "contextual_mention", "inferred", "offhand"
     ] = "contextual_mention"
     dimensions: dict[str, str] = Field(default_factory=dict)
-    scope: Literal["private", "project"] = "private"
+    scope: str = "private"
     scope_ref: str | None = None
     source: str | None = None
     extracted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
