@@ -49,8 +49,11 @@ class SR2Config:
     """Configuration for the SR2 facade."""
 
     config_dir: str
-    defaults_path: str
     agent_yaml: dict
+    defaults_path: str | None = None
+    config_filename: str = "agent.yaml"
+    memory_store: Any = None  # Pre-configured MemoryStore (default: InMemoryMemoryStore)
+    extra_resolvers: dict[str, Any] | None = None  # {source_name: resolver_instance}
     fast_complete: Callable | None = None  # async (system, prompt) -> str
     embed: Callable | None = None  # async (text) -> list[float]
     mcp_resource_reader: Callable | None = None  # async (uri, server_name) -> str
@@ -82,7 +85,7 @@ class SR2:
         self._config = config
 
         # Memory stack
-        self._memory_store = InMemoryMemoryStore()
+        self._memory_store = config.memory_store if config.memory_store is not None else InMemoryMemoryStore()
         self._retriever = HybridRetriever(
             store=self._memory_store,
             embedding_callable=config.embed,
@@ -138,10 +141,13 @@ class SR2:
             from sr2.resolvers.mcp_prompt_resolver import MCPPromptResolver
 
             self._resolver_reg.register("mcp_prompt", MCPPromptResolver(config.mcp_prompt_reader))
+        if config.extra_resolvers:
+            for source_name, resolver in config.extra_resolvers.items():
+                self._resolver_reg.register(source_name, resolver)
         self._cache_reg = create_default_cache_registry()
 
         # Compaction + Summarization
-        agent_yaml_path = os.path.join(config.config_dir, "agent.yaml")
+        agent_yaml_path = os.path.join(config.config_dir, config.config_filename)
         agent_config = self._loader.load(agent_yaml_path)
 
         # Pipeline — wire CircuitBreaker from config
@@ -302,14 +308,22 @@ class SR2:
         )
 
         # Build tool state machine from pipeline config
-        tool_defs = [
-            ToolDefinition(
-                name=t["name"],
-                description=t.get("description", ""),
-                raw_parameters=t.get("parameters"),
-            )
-            for t in tool_schemas
-        ]
+        # Support both flat {"name": ...} and OpenAI {"type": "function", "function": {"name": ...}} formats
+        tool_defs = []
+        for t in tool_schemas:
+            if "function" in t and isinstance(t["function"], dict):
+                fn = t["function"]
+                tool_defs.append(ToolDefinition(
+                    name=fn["name"],
+                    description=fn.get("description", ""),
+                    raw_parameters=fn.get("parameters"),
+                ))
+            else:
+                tool_defs.append(ToolDefinition(
+                    name=t["name"],
+                    description=t.get("description", ""),
+                    raw_parameters=t.get("parameters"),
+                ))
         tool_mgmt = ToolManagementConfig(
             tools=tool_defs,
             states=config.tool_states,
