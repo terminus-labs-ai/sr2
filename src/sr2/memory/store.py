@@ -3,6 +3,7 @@
 import aiosqlite
 import json
 import logging
+import math
 import re
 from typing import Protocol
 
@@ -665,6 +666,16 @@ class SQLiteMemoryStore:
         await self._conn.commit()
         return result
 
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors using pure Python."""
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
     async def search_vector(
         self,
         embedding: list[float],
@@ -675,9 +686,8 @@ class SQLiteMemoryStore:
     ) -> list[MemorySearchResult]:
         """Semantic search by vector embedding.
 
-        SQLite has no native vector distance support. Returns up to top_k memories
-        with embeddings in order of storage (oldest first). Use PostgreSQL backend
-        for real semantic search.
+        Brute-force cosine similarity in Python. Fine for hundreds to low
+        thousands of memories; use PostgreSQL + pgvector for larger scales.
         """
         if not self._conn:
             raise RuntimeError("Not connected. Call connect() first.")
@@ -694,18 +704,25 @@ class SQLiteMemoryStore:
             placeholders = ",".join("?" for _ in scope_refs)
             query += f" AND (scope_ref IN ({placeholders}) OR scope_ref IS NULL)"
             params.extend(scope_refs)
-        query += f" LIMIT {top_k}"
 
         cursor = await self._conn.execute(query, params)
         rows = await cursor.fetchall()
-        return [
-            MemorySearchResult(
-                memory=self._row_to_memory(r),
-                relevance_score=0.5,
-                match_type="semantic",
-            )
-            for r in rows
-        ]
+
+        scored: list[tuple[float, MemorySearchResult]] = []
+        for r in rows:
+            stored_embedding = json.loads(r["embedding"])
+            similarity = self._cosine_similarity(embedding, stored_embedding)
+            scored.append((
+                similarity,
+                MemorySearchResult(
+                    memory=self._row_to_memory(r),
+                    relevance_score=max(0.0, similarity),
+                    match_type="semantic",
+                ),
+            ))
+
+        scored.sort(key=lambda t: -t[0])
+        return [result for _, result in scored[:top_k]]
 
     async def search_keyword(
         self,
