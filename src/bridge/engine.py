@@ -127,6 +127,12 @@ class BridgeEngine:
         )
         self._ladder = DegradationLadder()
 
+        # Scope config from pipeline (used for memory scoping)
+        self._scope_config = pipeline_config.memory.scope if pipeline_config.memory else None
+
+        # Last detected context per session (set in optimize, read in post_process)
+        self._last_detected_context: dict[str, dict] = {}
+
         # Memory system (deferred init — SQLite connect is async)
         mem_cfg = self._bridge_config.memory
         self._memory_store: SQLiteMemoryStore | None = None
@@ -134,6 +140,7 @@ class BridgeEngine:
         self._conflict_detector: ConflictDetector | None = None
         self._conflict_resolver: ConflictResolver | None = None
         self._retriever: HybridRetriever | None = None
+        self._scope_detector = None  # ScopeDetector | None, created in _ensure_memory_initialized
 
         if mem_cfg.enabled and self._bridge_config.llm.extraction:
             self._memory_store = SQLiteMemoryStore(db_path=mem_cfg.db_path)
@@ -171,6 +178,7 @@ class BridgeEngine:
             llm_callable=extraction_callable,
             store=self._memory_store,
             max_memories_per_turn=mem_cfg.max_memories_per_turn,
+            scope_config=self._scope_config,
         )
         self._conflict_detector = ConflictDetector(store=self._memory_store)
         self._conflict_resolver = ConflictResolver(store=self._memory_store)
@@ -188,7 +196,18 @@ class BridgeEngine:
             embedding_callable=embed_callable,
             strategy=mem_cfg.retrieval_strategy,
             top_k=mem_cfg.retrieval_top_k,
+            scope_config=self._scope_config,
         )
+
+        # Scope detector (optional — requires extraction LLM)
+        if self._scope_config and extraction_callable:
+            from sr2.memory.scope import ScopeDetector
+
+            self._scope_detector = ScopeDetector(
+                store=self._memory_store,
+                llm_callable=extraction_callable,
+                scope_config=self._scope_config,
+            )
 
         self._memory_initialized = True
         logger.info("Memory system initialized (db=%s)", mem_cfg.db_path)
@@ -305,6 +324,32 @@ class BridgeEngine:
                 logger.warning("Session %s: summarization failed", session_id, exc_info=True)
                 self._breaker.record_failure("summarization")
                 self._ladder.degrade()
+
+        # Scope detection: determine scope_ref for this session
+        current_context: dict[str, str] | None = None
+        if self._scope_detector and not self._breaker.is_open("scope_detection"):
+            try:
+                detected = await self._scope_detector.detect(
+                    system_prompt=system,
+                    user_message=self._extract_retrieval_query(messages),
+                    session_id=session_id,
+                )
+                if detected:
+                    current_context = {}
+                    for scope_name, scope_ref in detected.items():
+                        if scope_name != "private" and scope_ref is not None:
+                            current_context["project_id"] = scope_ref
+                            break
+                    if not current_context:
+                        current_context = None
+                if current_context and self._retriever:
+                    self._retriever.update_context(current_context)
+                if current_context:
+                    self._last_detected_context[session_id] = current_context
+                self._breaker.record_success("scope_detection")
+            except Exception:
+                logger.warning("Scope detection failed", exc_info=True)
+                self._breaker.record_failure("scope_detection")
 
         # Memory retrieval (guarded by circuit breaker + degradation)
         memory_injection: str | None = None
@@ -428,10 +473,12 @@ class BridgeEngine:
             await self._ensure_memory_initialized()
             if self._memory_extractor:
                 try:
+                    ctx = self._last_detected_context.get(session.session_id)
                     result = await self._memory_extractor.extract(
                         conversation_turn=assistant_text,
                         conversation_id=session.session_id,
                         turn_number=turn.turn_number,
+                        current_context=ctx,
                     )
                     if result.memories:
                         logger.info(

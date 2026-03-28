@@ -73,6 +73,14 @@ class MemoryStore(Protocol):
         """Count total memories."""
         ...
 
+    async def list_scope_refs(
+        self,
+        scope_filter: list[str] | None = None,
+        include_archived: bool = False,
+    ) -> list[tuple[str, str | None]]:
+        """Return distinct (scope, scope_ref) pairs. Sorted by scope, scope_ref."""
+        ...
+
 
 class InMemoryMemoryStore:
     """In-memory implementation for testing. No vector search — uses simple string matching."""
@@ -182,6 +190,20 @@ class InMemoryMemoryStore:
         if include_archived:
             return len(self._memories)
         return sum(1 for m in self._memories.values() if not m.archived)
+
+    async def list_scope_refs(
+        self,
+        scope_filter: list[str] | None = None,
+        include_archived: bool = False,
+    ) -> list[tuple[str, str | None]]:
+        pairs: set[tuple[str, str | None]] = set()
+        for m in self._memories.values():
+            if not include_archived and m.archived:
+                continue
+            if scope_filter is not None and m.scope not in scope_filter:
+                continue
+            pairs.add((m.scope, m.scope_ref))
+        return sorted(pairs)
 
 
 class PostgresMemoryStore:
@@ -451,6 +473,26 @@ class PostgresMemoryStore:
             query += " WHERE archived = false"
         async with self._pool.acquire() as conn:
             return await conn.fetchval(query)
+
+    async def list_scope_refs(
+        self,
+        scope_filter: list[str] | None = None,
+        include_archived: bool = False,
+    ) -> list[tuple[str, str | None]]:
+        query = "SELECT DISTINCT scope, scope_ref FROM memories"
+        conditions: list[str] = []
+        params: list = []
+        if not include_archived:
+            conditions.append("archived = false")
+        if scope_filter is not None:
+            params.append(scope_filter)
+            conditions.append(f"scope = ANY(${len(params)})")
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY scope, scope_ref"
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+            return [(r["scope"], r["scope_ref"]) for r in rows]
 
     @staticmethod
     def _row_to_memory(row) -> Memory:
@@ -779,6 +821,29 @@ class SQLiteMemoryStore:
         cursor = await self._conn.execute(query)
         result = await cursor.fetchone()
         return result[0] if result else 0
+
+    async def list_scope_refs(
+        self,
+        scope_filter: list[str] | None = None,
+        include_archived: bool = False,
+    ) -> list[tuple[str, str | None]]:
+        if not self._conn:
+            raise RuntimeError("Not connected. Call connect() first.")
+        query = "SELECT DISTINCT scope, scope_ref FROM memories"
+        params: list = []
+        conditions: list[str] = []
+        if not include_archived:
+            conditions.append("archived = 0")
+        if scope_filter is not None:
+            placeholders = ",".join("?" for _ in scope_filter)
+            conditions.append(f"scope IN ({placeholders})")
+            params.extend(scope_filter)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY scope, scope_ref"
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [(r["scope"], r["scope_ref"]) for r in rows]
 
     @staticmethod
     def _row_to_memory(row) -> Memory:

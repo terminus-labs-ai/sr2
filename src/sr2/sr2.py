@@ -18,6 +18,7 @@ from sr2.memory.dimensions import DimensionalMatcher
 from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
 from sr2.memory.retrieval import HybridRetriever
+from sr2.memory.scope import ScopeDetector
 from sr2.memory.store import InMemoryMemoryStore
 from sr2.metrics.alerts import AlertRuleEngine
 from sr2.metrics.collector import MetricCollector
@@ -173,6 +174,17 @@ class SR2:
             self._retriever._scope_config = scope_config
             self._extractor._scope_config = scope_config
 
+        # Scope detector (auto-detect scope_ref when not provided via env var)
+        self._scope_detector: ScopeDetector | None = None
+        if scope_config and config.fast_complete:
+            self._scope_detector = ScopeDetector(
+                store=self._memory_store,
+                llm_callable=lambda prompt: config.fast_complete(
+                    "You classify conversations into project scopes.", prompt
+                ),
+                scope_config=scope_config,
+            )
+
         self._compaction_engine = CompactionEngine(agent_config.compaction)
         self._summarization_engine = SummarizationEngine(
             config=agent_config.summarization,
@@ -286,9 +298,28 @@ class SR2:
         if task_source:
             current_context["source"] = task_source
 
+        # Auto-detect scope_ref if not provided via env var
+        if (
+            "project_id" not in current_context
+            and self._scope_detector is not None
+        ):
+            try:
+                user_msg = str(trigger_input) if trigger_input else None
+                detected = await self._scope_detector.detect(
+                    system_prompt=system_prompt,
+                    user_message=user_msg,
+                    session_id=session_id,
+                )
+                for scope_name, scope_ref in detected.items():
+                    if scope_name != "private" and scope_ref is not None:
+                        current_context["project_id"] = scope_ref
+                        break
+            except Exception:
+                logger.error("Scope detection failed", exc_info=True)
+
         # Inject current_context into retriever for this request
         if current_context:
-            self._retriever._current_context = current_context
+            self._retriever.update_context(current_context)
 
         # Compile context
         ctx = ResolverContext(
@@ -387,6 +418,14 @@ class SR2:
                 _src = os.environ.get("SR2_TASK_SOURCE")
                 if _src:
                     ctx["source"] = _src
+                # Use cached scope detection result if no project_id set
+                if ctx and "project_id" not in ctx and self._scope_detector:
+                    cached = self._scope_detector._cache.get(session_id)
+                    if cached:
+                        for scope_name, scope_ref in cached.items():
+                            if scope_name != "private" and scope_ref is not None:
+                                ctx["project_id"] = scope_ref
+                                break
                 ctx = ctx or None
             await self._post_processor.process(
                 turn, session_id, current_context=ctx, extract_only=extract_only,
@@ -449,6 +488,8 @@ class SR2:
         self._conflict_detector._store = store
         self._conflict_resolver._store = store
         self._extractor._store = store
+        if self._scope_detector is not None:
+            self._scope_detector._store = store
 
     async def set_postgres_store(self, pool) -> None:
         """Late-bind a PostgreSQL memory store.
