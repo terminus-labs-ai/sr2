@@ -39,6 +39,8 @@ Initial public release.
 - Conflict resolution strategies: `latest_wins_archive`, `latest_wins_discard`, `keep_both`
 - Hybrid retrieval engine (keyword + semantic + recency/frequency boosts)
 - Dimensional matching (`best_fit`, `exact`, `fallback_to_generic`)
+- Automatic scope detection — LLM-based `scope_ref` inference from session context, with per-session caching and graceful degradation
+- `list_scope_refs()` on all store backends for querying existing scope/scope_ref pairs
 - Multiple storage backends: In-memory (testing), PostgreSQL (production), SQLite (lightweight)
 
 **Tool Masking**
