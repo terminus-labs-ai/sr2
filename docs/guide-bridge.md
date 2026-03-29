@@ -304,7 +304,7 @@ class BridgeAdapter(Protocol):
         ...
 ```
 
-An OpenAI adapter stub exists at `src/runtime/bridge/adapters/openai.py` for future implementation.
+An OpenAI adapter stub exists at `src/bridge/adapters/openai.py` for future implementation.
 
 ## Troubleshooting
 

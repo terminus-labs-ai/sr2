@@ -286,13 +286,14 @@ src/
 │   ├── plugins/       #   Interface plugins (http, telegram, timer, a2a, single-shot)
 │   ├── session/       #   Session lifecycle management
 │   ├── heartbeat/     #   Scheduled agent callbacks
-│   └── bridge/        #   Context optimization proxy for external LLM callers
+│
+src/bridge/              # Context optimization proxy for external LLM callers
 │
 configs/               # Example configs
 │   ├── defaults.yaml  #   Library defaults
 │   └── agents/edi/    #   Example agent
 │
-tests/                 # 844 tests
+tests/                 # 1,136 tests
 │   ├── test_config/
 │   ├── test_pipeline/
 │   ├── test_memory/
