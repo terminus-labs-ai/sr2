@@ -594,6 +594,19 @@ class Agent:
 
         # Post-process async (ephemeral agents only extract memories, skip compaction)
         is_ephemeral = trigger.session_lifecycle == "ephemeral"
+        # Build tool_results for compaction: each tool call result becomes
+        # a ConversationTurn with content_type="tool_output"
+        _tool_results = [
+            {
+                "turn_number": session.turn_count,
+                "content": tc.result,
+                "content_type": "tool_output",
+                "metadata": {"tool_name": tc.tool_name},
+            }
+            for tc in loop_result.tool_calls
+            if tc.result
+        ]
+
         self._pending_post_process = asyncio.create_task(
             self._sr2.post_process(
                 turn_number=session.turn_count,
@@ -602,6 +615,7 @@ class Agent:
                 session_id=session.id,
                 user_message=str(trigger.input_data) if trigger.input_data else None,
                 extract_only=is_ephemeral,
+                tool_results=_tool_results or None,
             )
         )
 
