@@ -116,6 +116,7 @@ class LLMLoop:
         resolved_config = model_config_override or self._default_model_config
         consecutive_failures = 0
         last_failed_tool = ""
+        hallucination_retries = 0
 
         # Apply initial masking if state machine is present
         active_tool_schemas = tool_schemas
@@ -157,8 +158,19 @@ class LLMLoop:
             # No tool calls -> we're done (or hallucinated tool call was suppressed)
             if not llm_response.has_tool_calls:
                 if llm_response.raw_tool_call_text:
+                    hallucination_retries += 1
+                    if hallucination_retries >= 3:
+                        # Model keeps hallucinating tool calls despite tool_choice=none.
+                        # Use whatever content we have (even if empty).
+                        logger.warning(
+                            "Model hallucinated tool calls %d times, giving up — using available content",
+                            hallucination_retries,
+                        )
+                        result.response_text = llm_response.content or ""
+                        result.stopped_reason = "complete"
+                        return result
                     # Model hallucinated a tool call — retry without tools
-                    logger.warning("Model emitted hallucinated tool call, retrying without tools")
+                    logger.warning("Model emitted hallucinated tool call, retrying without tools (attempt %d/3)", hallucination_retries)
                     active_tool_schemas = None
                     active_tool_choice = "none"
                     continue
@@ -283,6 +295,7 @@ class LLMLoop:
         full_text = ""
         consecutive_failures = 0
         last_failed_tool = ""
+        hallucination_retries = 0
 
         # Apply initial masking if state machine is present
         active_tool_schemas = tool_schemas
@@ -362,9 +375,17 @@ class LLMLoop:
             # No tool calls -> we're done (or hallucinated tool call was suppressed)
             if not llm_response.has_tool_calls:
                 if llm_response.raw_tool_call_text:
-                    # Model hallucinated a tool call — retry without tools so
-                    # it produces a real text response instead.
-                    logger.warning("Model emitted hallucinated tool call, retrying without tools")
+                    hallucination_retries += 1
+                    if hallucination_retries >= 3:
+                        logger.warning(
+                            "Model hallucinated tool calls %d times, giving up — using available content",
+                            hallucination_retries,
+                        )
+                        result.response_text = llm_response.content or ""
+                        result.stopped_reason = "complete"
+                        await stream_callback(StreamEndEvent(full_text=full_text))
+                        return result
+                    logger.warning("Model emitted hallucinated tool call, retrying without tools (attempt %d/3)", hallucination_retries)
                     active_tool_schemas = None
                     active_tool_choice = "none"
                     continue

@@ -12,9 +12,11 @@ class RetrievalResolver:
         self,
         retriever: HybridRetriever,
         matcher: DimensionalMatcher | None = None,
+        enabled: bool = True,
     ):
         self._retriever = retriever
         self._matcher = matcher
+        self.enabled = enabled
 
     async def resolve(
         self,
@@ -24,12 +26,21 @@ class RetrievalResolver:
     ) -> ResolvedContent:
         """Resolve by retrieving relevant memories.
 
-        1. Extract query from context (trigger_input or a specific field)
-        2. Call retriever.retrieve()
-        3. Apply dimensional matching if matcher is set
-        4. Format results as a string for context injection
-        5. Return ResolvedContent
+        1. Check if retrieval is enabled; return empty if disabled
+        2. Extract query from context (trigger_input or a specific field)
+        3. Call retriever.retrieve()
+        4. Apply dimensional matching if matcher is set
+        5. Format results as a string for context injection
+        6. Return ResolvedContent
         """
+        if not self.enabled:
+            return ResolvedContent(
+                key=key,
+                content="",
+                tokens=0,
+                metadata={"memory_count": 0, "skipped": "retrieval_disabled"},
+            )
+
         query = self._extract_query(context)
 
         top_k = config.get("top_k", 10)

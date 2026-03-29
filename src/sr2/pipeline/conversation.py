@@ -73,6 +73,10 @@ class ConversationManager:
         2. Move compacted turns to compacted zone
         3. Keep only last raw_window turns in raw zone
         """
+        if not self._compaction._config.enabled:
+            logger.debug("run_compaction: skipped (compaction disabled)")
+            return None
+
         zones = self._get_zones(session_id)
         raw_count_before = len(zones.raw)
         all_turns = zones.compacted + zones.raw

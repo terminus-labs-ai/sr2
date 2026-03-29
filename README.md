@@ -293,7 +293,7 @@ configs/               # Example configs
 │   ├── defaults.yaml  #   Library defaults
 │   └── agents/edi/    #   Example agent
 │
-tests/                 # 1,136 tests
+tests/                 # 1,157 tests
 │   ├── test_config/
 │   ├── test_pipeline/
 │   ├── test_memory/

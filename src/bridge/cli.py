@@ -112,6 +112,13 @@ def build_components(raw_config: dict):
 def main():
     args = parse_args()
 
+    # Suppress LiteLLM's "Give Feedback / Get Help" banner and info messages.
+    # These are raw print() calls that bypass Python logging.
+    import litellm
+
+    litellm.suppress_debug_info = True
+    litellm.set_verbose = False
+
     # Blocking mode for piped stderr
     if not os.isatty(sys.stderr.fileno()):
         os.set_blocking(sys.stderr.fileno(), True)

@@ -6,7 +6,7 @@ SR2 is a **context engineering library for AI agents** that manages the full lif
 
 - **Library** (`src/sr2/`): ~5,900 LOC, pip-installable, minimal dependencies
 - **Runtime** (`src/runtime/`): ~5,000 LOC, optional agent runtime with HTTP, Telegram, MCP, A2A plugins
-- **Bridge** (`src/runtime/bridge/`): Context optimization proxy for external LLM callers (Claude Code, LangChain, etc.)
+- **Bridge** (`src/bridge/`): Context optimization proxy for external LLM callers (Claude Code, LangChain, etc.)
 
 ## Architecture
 
@@ -32,7 +32,7 @@ Layer 3: Conversation (append-only) — Session history, compacted/summarized
 - **ToolStateMachine** (`src/sr2/tools/state_machine.py`) — Named states with dynamic tool masking
 - **CircuitBreaker** (`src/sr2/degradation/circuit_breaker.py`) — Per-layer graceful degradation
 - **Heartbeat System** (`src/runtime/heartbeat/`) — Scheduled future agent callbacks with DB persistence, idempotent keys, context carry-over
-- **BridgeEngine** (`src/runtime/bridge/engine.py`) — Context optimization proxy using CompactionEngine + ConversationManager + SummarizationEngine for external LLM callers
+- **BridgeEngine** (`src/bridge/engine.py`) — Context optimization proxy using CompactionEngine + ConversationManager + SummarizationEngine for external LLM callers
 
 ### Config Inheritance
 ```

@@ -250,20 +250,20 @@ interfaces:
       lifecycle: persistent
     pipeline: interfaces/user_message.yaml
 
-  email_check:
+  planned_check:
     plugin: timer
     interval_seconds: 300
     session:
-      name: heartbeat_email
+      name: heartbeat_plan
       lifecycle: ephemeral
-    pipeline: interfaces/heartbeat_email.yaml
+    pipeline: interfaces/heartbeat_plan.yaml
 
   agent_calls:
     plugin: a2a
     session:
       name: "a2a_{task_id}"
       lifecycle: ephemeral
-    pipeline: interfaces/a2a_inbound.yaml
+    pipeline: interfaces/heartbeat_plan.yaml
 ```
 
 Plugin-specific fields (`port`, `interval_seconds`, `enabled`, etc.) are passed through — the interface model allows extra fields.
@@ -410,7 +410,7 @@ mcp_servers:
 **In the pipeline** — auto-load resources into the context window:
 
 ```yaml
-# In interfaces/user_message.yaml
+# In an interface pipeline config (e.g. interfaces/heartbeat_plan.yaml)
 layers:
   - name: core
     cache_policy: immutable

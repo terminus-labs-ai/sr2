@@ -162,6 +162,13 @@ class SR2:
             ),
         )
 
+        # Wire retrieval enabled flag now that agent_config is loaded
+        try:
+            retrieval_resolver = self._resolver_reg.get("retrieval")
+            retrieval_resolver.enabled = agent_config.retrieval.enabled
+        except KeyError:
+            pass  # No retrieval resolver registered
+
         # Wire key_schema and scope_config now that agent_config is loaded
         key_schema = [s.model_dump() for s in agent_config.memory.key_schema]
         if key_schema:
