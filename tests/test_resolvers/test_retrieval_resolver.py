@@ -114,3 +114,27 @@ class TestRetrievalResolver:
         # interface_type "user_message" maps to channel "chat"
         # Neither "slack" nor "email" matches "chat" exactly
         assert result.metadata["memory_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_resolve_skipped_when_disabled(self, store, retriever, context_str):
+        """Resolver returns empty content when enabled=False."""
+        await store.save(Memory(key="user.name", value="Alice"))
+
+        resolver = RetrievalResolver(retriever=retriever, enabled=False)
+        result = await resolver.resolve("memories", {}, context_str)
+
+        assert result.content == ""
+        assert result.tokens == 0
+        assert result.metadata["memory_count"] == 0
+        assert result.metadata["skipped"] == "retrieval_disabled"
+
+    @pytest.mark.asyncio
+    async def test_resolve_runs_when_enabled(self, store, retriever, context_str):
+        """Resolver retrieves memories when enabled=True (default)."""
+        await store.save(Memory(key="user.name", value="Alice"))
+
+        resolver = RetrievalResolver(retriever=retriever, enabled=True)
+        result = await resolver.resolve("memories", {}, context_str)
+
+        assert "Alice" in result.content
+        assert result.metadata["memory_count"] > 0

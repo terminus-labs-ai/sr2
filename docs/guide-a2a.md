@@ -46,9 +46,9 @@ Key settings:
 Each agent publishes a card describing its capabilities:
 
 ```python
-from sr2.a2a.card import AgentCard
+from sr2.a2a.card import AgentCardGenerator
 
-card = AgentCard(
+card = AgentCardGenerator(
     service_name="research_agent",
     description="Conducts research and provides sourced answers",
     version="1.0.0",
@@ -77,9 +77,9 @@ card = AgentCard(
 Find available agents:
 
 ```python
-from sr2.a2a.client import A2AClient
+from sr2.a2a.client import A2AClientTool
 
-client = A2AClient(discovery_url="http://discovery.example.com")
+client = A2AClientTool(discovery_url="http://discovery.example.com")
 
 # List all agents
 agents = await client.discover_agents()
@@ -123,8 +123,8 @@ class ExternalAgentResolver(ContentResolver):
     """Calls another agent to enrich context."""
 
     def __init__(self, discovery_url: str) -> None:
-        from sr2.a2a.client import A2AClient
-        self.client = A2AClient(discovery_url)
+        from sr2.a2a.client import A2AClientTool
+        self.client = A2AClientTool(discovery_url)
 
     async def resolve(self, config, context):
         target = config.get("target_agent")
@@ -168,7 +168,7 @@ Chain multiple agents:
 ```python
 async def research_and_analyze():
     """Multi-agent workflow."""
-    client = A2AClient(discovery_url="http://discovery.example.com")
+    client = A2AClientTool(discovery_url="http://discovery.example.com")
 
     # Step 1: Research
     research_response = await client.send_message(
@@ -280,7 +280,7 @@ Here's a complete A2A-enabled research agent:
 ```python
 from fastapi import FastAPI
 from sr2.a2a.app import A2AApp
-from sr2.a2a.card import AgentCard
+from sr2.a2a.card import AgentCardGenerator
 from runtime.agent import Agent
 
 # Load agent
@@ -289,7 +289,7 @@ agent = Agent(config_path="configs/agents/research")
 # Create A2A app
 a2a_app = A2AApp(
     agent=agent,
-    card=AgentCard(
+    card=AgentCardGenerator(
         service_name="research_agent",
         description="Conducts research with web search and summarization",
         version="1.0.0",

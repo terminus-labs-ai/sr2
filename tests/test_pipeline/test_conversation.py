@@ -39,6 +39,29 @@ class TestConversationManager:
         assert len(mgr.zones().raw) == 1
         assert mgr.zones().raw[0] is turn
 
+    def test_compaction_disabled_returns_none(self):
+        """run_compaction() returns None immediately when compaction is disabled."""
+        config = CompactionConfig(
+            enabled=False,
+            raw_window=2,
+            min_content_size=10,
+            rules=[
+                CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
+            ],
+        )
+        engine = CompactionEngine(config)
+        mgr = ConversationManager(compaction_engine=engine, raw_window=2)
+        # Add enough turns to normally trigger compaction
+        for i in range(10):
+            mgr.add_turn(_make_turn(i))
+
+        result = mgr.run_compaction()
+
+        assert result is None
+        # Verify turns were NOT moved — all still in raw zone
+        assert len(mgr.zones().raw) == 10
+        assert len(mgr.zones().compacted) == 0
+
     def test_compaction_within_raw_window_returns_none(self):
         """run_compaction() with turns <= raw_window returns None."""
         engine = _make_compaction_engine(raw_window=5)

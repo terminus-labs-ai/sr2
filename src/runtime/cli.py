@@ -161,6 +161,13 @@ async def run_agent(args):
 def main():
     args = parse_args()
 
+    # Suppress LiteLLM's "Give Feedback / Get Help" banner and info messages.
+    # These are raw print() calls that bypass Python logging.
+    import litellm
+
+    litellm.suppress_debug_info = True
+    litellm.set_verbose = False
+
     # When running as a subprocess with piped stderr, the default StreamHandler
     # crashes with BlockingIOError on large log bursts. Force blocking mode.
     if not os.isatty(sys.stderr.fileno()):

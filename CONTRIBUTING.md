@@ -86,7 +86,7 @@ src/
 │   └── session.py     Session management
 │
 configs/           # Example configs
-tests/             # 688 tests
+tests/             # 1,157 tests
 examples/          # Runnable examples
 ```
 
