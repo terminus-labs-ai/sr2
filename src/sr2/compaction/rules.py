@@ -40,6 +40,10 @@ class SchemaAndSampleRule:
         max_tokens = config.get("max_compacted_tokens", 80)
         lines = inp.content.strip().split("\n")
         if len(lines) <= 3:
+            logger.debug(
+                "SchemaAndSampleRule: skipped (%d lines <= 3, %d tokens)",
+                len(lines), inp.tokens,
+            )
             return CompactionOutput(
                 content=inp.content,
                 tokens=inp.tokens,
@@ -59,6 +63,11 @@ class SchemaAndSampleRule:
             max_chars = max_tokens * 4
             summary = summary[:max_chars] + "..."
             est_tokens = max_tokens
+
+        logger.debug(
+            "SchemaAndSampleRule: compacted %d lines -> sample (%d -> %d tokens)",
+            len(lines), inp.tokens, est_tokens,
+        )
 
         hint = None
         if config.get("recovery_hint"):
@@ -90,6 +99,10 @@ class ReferenceRule:
             "size": lambda: meta.get("size") or None,
         }
 
+        logger.debug(
+            "ReferenceRule: replacing file content with reference (path=%s, %d tokens)",
+            path, inp.tokens,
+        )
         parts = [f"\u2192 Saved to {path}"]
         detail_parts = []
         fields_to_check = include_metadata if include_metadata else list(metadata_fields.keys())
@@ -121,6 +134,10 @@ class ResultSummaryRule:
         lines = inp.content.strip().split("\n")
         truncated = lines[:max_lines]
 
+        logger.debug(
+            "ResultSummaryRule: compacting execution output (exit_code=%s, %d lines, %d tokens)",
+            exit_code, len(lines), inp.tokens,
+        )
         status = "\u2713" if str(exit_code) == "0" else "\u2717"
         summary_parts = [f"\u2192 {status} Exit {exit_code}."]
         if truncated:

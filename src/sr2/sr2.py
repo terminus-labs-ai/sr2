@@ -388,6 +388,7 @@ class SR2:
         user_message: str | None = None,
         current_context: dict | None = None,
         extract_only: bool = False,
+        tool_results: list[dict] | None = None,
     ) -> None:
         """Fire-and-forget post-LLM processing (memory extraction, compaction).
 
@@ -427,6 +428,19 @@ class SR2:
                                 ctx["project_id"] = scope_ref
                                 break
                 ctx = ctx or None
+            # Add tool result turns before the assistant turn so compaction
+            # can apply content_type-based rules to tool outputs
+            if tool_results:
+                for tr in tool_results:
+                    tool_turn = ConversationTurn(
+                        turn_number=tr.get("turn_number", turn_number),
+                        role="tool_result",
+                        content=tr.get("content", ""),
+                        content_type=tr.get("content_type", "tool_output"),
+                        metadata=tr.get("metadata"),
+                    )
+                    self._conversation.add_turn(tool_turn, session_id=session_id)
+
             await self._post_processor.process(
                 turn, session_id, current_context=ctx, extract_only=extract_only,
             )
@@ -751,10 +765,17 @@ class SR2:
         history = ctx.agent_config.get("session_history", [])
         if not zones.raw and not zones.compacted and history:
             for turn_num, msg in enumerate(history):
+                msg_role = msg.get("role", "unknown")
+                # Infer content_type from role so compaction rules can match
+                content_type = None
+                if msg_role == "tool":
+                    content_type = "tool_output"
                 turn = ConversationTurn(
                     turn_number=turn_num,
-                    role=msg.get("role", "unknown"),
+                    role=msg_role,
                     content=msg.get("content", ""),
+                    content_type=content_type,
+                    metadata=msg.get("metadata"),
                 )
                 self._conversation.add_turn(turn, session_id)
 

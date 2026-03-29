@@ -66,6 +66,10 @@ class CompactionEngine:
 
         if len(turns) <= raw_window:
             total = sum(len(t.content) // 4 for t in turns)
+            logger.debug(
+                "Compaction skipped: %d turns <= raw_window %d (%d tokens)",
+                len(turns), raw_window, total,
+            )
             return CompactionResult(
                 turns=turns,
                 original_tokens=total,
@@ -85,12 +89,22 @@ class CompactionEngine:
             original_tokens += est_tokens
 
             if turn.role == "user":
+                logger.debug(
+                    "Turn %d: skipped (user message, %d tokens)", turn.turn_number, est_tokens,
+                )
                 compacted_tokens += est_tokens
                 continue
             if turn.compacted:
+                logger.debug(
+                    "Turn %d: skipped (already compacted, %d tokens)", turn.turn_number, est_tokens,
+                )
                 compacted_tokens += est_tokens
                 continue
             if est_tokens < min_size:
+                logger.debug(
+                    "Turn %d: skipped (below min_content_size: %d < %d tokens)",
+                    turn.turn_number, est_tokens, min_size,
+                )
                 compacted_tokens += est_tokens
                 continue
             if turn.content_type not in self._rule_map:
@@ -102,6 +116,10 @@ class CompactionEngine:
                 continue
 
             rule_config, rule = self._rule_map[turn.content_type]
+            logger.debug(
+                "Turn %d: matched content_type=%r -> strategy=%r (%d tokens before)",
+                turn.turn_number, turn.content_type, rule_config.strategy, est_tokens,
+            )
             inp = CompactionInput(
                 content=turn.content,
                 content_type=turn.content_type,
@@ -111,6 +129,11 @@ class CompactionEngine:
             output = rule.compact(inp, rule_config.model_dump())
 
             if output.was_compacted:
+                logger.debug(
+                    "Turn %d: compacted %d -> %d tokens (strategy=%r, recovery_hint=%r)",
+                    turn.turn_number, est_tokens, output.tokens,
+                    rule_config.strategy, output.recovery_hint,
+                )
                 compacted_content = output.content
                 if output.recovery_hint:
                     compacted_content += f"\n  Recovery: {output.recovery_hint}"
@@ -126,12 +149,19 @@ class CompactionEngine:
                 compacted_tokens += output.tokens
                 turns_compacted += 1
             else:
+                logger.debug(
+                    "Turn %d: strategy=%r ran but content unchanged (%d tokens)",
+                    turn.turn_number, rule_config.strategy, est_tokens,
+                )
                 compacted_tokens += est_tokens
 
         for turn in protected:
             est = len(turn.content) // 4
             original_tokens += est
             compacted_tokens += est
+            logger.debug(
+                "Turn %d: protected (in raw_window, %d tokens)", turn.turn_number, est,
+            )
 
         all_turns = compactable + protected
         logger.info(
