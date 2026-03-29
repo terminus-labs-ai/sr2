@@ -6,11 +6,10 @@ from typing import Any, TypedDict
 
 
 class SR2GraphState(TypedDict, total=False):
-    """
-    Base state for SR2-powered LangGraph graphs.
+    """Base state for SR2-powered LangGraph graphs.
 
-    LangGraph owns this (inter-agent data).
-    SR2Runtime owns intra-agent data (context, memory).
+    LangGraph owns inter-agent data flow.
+    The SR2 runtime owns intra-agent data (context, memory, sessions).
     """
 
     current_task: str

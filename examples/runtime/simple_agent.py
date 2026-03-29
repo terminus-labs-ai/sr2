@@ -1,18 +1,24 @@
-"""Example: Single SR2Runtime agent execution."""
+"""Example: Single agent execution using the SR2 runtime."""
 
 import asyncio
 
-from sr2.runtime import SR2Runtime
+from runtime.agent import Agent, AgentConfig
 
 
 async def main():
-    runtime = SR2Runtime.from_config("examples/runtime/researcher.yaml")
-    result = await runtime.execute("What are the key principles of SOLID design?")
+    config = AgentConfig(
+        name="researcher",
+        config_dir="configs/agents/researcher",
+    )
+    agent = Agent(config)
+    await agent.start()
 
-    print(f"Output: {result.output[:200]}...")
-    print(f"Tokens: {result.metrics.total_tokens}")
-    print(f"LLM calls: {result.metrics.llm_calls}")
-    print(f"Success: {result.success}")
+    response = await agent.handle_user_message(
+        "What are the key principles of SOLID design?"
+    )
+    print(f"Response: {response[:200]}...")
+
+    await agent.shutdown()
 
 
 if __name__ == "__main__":
