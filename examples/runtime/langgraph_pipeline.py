@@ -2,14 +2,14 @@
 
 import asyncio
 
-from sr2.runtime.integrations.langgraph import SR2Node, SR2GraphState
+from runtime.integrations.langgraph import SR2Node, SR2GraphState
 
 # Requires: pip install langgraph
 from langgraph.graph import StateGraph, END
 
-# Agents
-researcher = SR2Node("examples/runtime/researcher.yaml")
-coder = SR2Node("examples/runtime/coder.yaml")
+# Agents — each points to a config directory containing agent.yaml
+researcher = SR2Node("researcher", "configs/agents/researcher")
+coder = SR2Node("coder", "configs/agents/coder")
 
 # Graph
 graph = StateGraph(SR2GraphState)
@@ -27,6 +27,10 @@ async def main():
     })
     print("Research output:", result["outputs"].get("researcher", "")[:200])
     print("Code output:", result["outputs"].get("coder", "")[:200])
+
+    # Clean up
+    await researcher.shutdown()
+    await coder.shutdown()
 
 
 if __name__ == "__main__":
