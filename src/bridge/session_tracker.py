@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -27,6 +26,7 @@ class BridgeSession:
     last_seen: float = field(default_factory=time.time)
     request_count: int = 0
     last_message_count: int = 0
+    last_message_hash: str = ""
 
     # Conversation state (previously in engine.SessionState)
     turn_counter: int = 0
@@ -38,18 +38,19 @@ class BridgeSession:
 
 
 class SessionTracker:
-    """Maps incoming requests to SR2 sessions.
+    """Maps incoming requests to bridge sessions.
 
-    Strategies:
-    - system_hash: Hash the system prompt text. Claude Code's system prompt is
-      session-specific (contains CLAUDE.md, project context), so this naturally
-      groups requests from the same session.
-    - header: Use the X-SR2-Session-ID request header.
-    - single: All requests map to a single session.
+    Session name is defined in config (like runtime SessionConfig). All requests
+    use the configured session unless the client sends an X-SR2-Session-ID header
+    to override — enabling session sharing across different clients (Claude Code,
+    OpenCode, etc.).
+
+    Session resets are detected by message count decrease (e.g. /clear in Claude
+    Code sends shorter history).
     """
 
     def __init__(self, config: BridgeSessionConfig):
-        self._strategy = config.strategy
+        self._default_name = config.name
         self._idle_timeout = config.idle_timeout_minutes * 60
         self._sessions: dict[str, BridgeSession] = {}
 
@@ -59,23 +60,16 @@ class SessionTracker:
         headers: dict[str, str],
         system_prompt: str | None = None,
     ) -> str:
-        """Determine the session ID for a request."""
-        if self._strategy == "header":
-            session_id = headers.get("x-sr2-session-id", "default")
-        elif self._strategy == "single":
-            session_id = "default"
-        else:
-            # system_hash (default)
-            text = system_prompt or ""
-            if text:
-                session_id = hashlib.sha256(text.encode()).hexdigest()[:16]
-            else:
-                session_id = "no-system"
+        """Determine the session ID for a request.
+
+        Priority: X-SR2-Session-ID header > config name.
+        """
+        session_id = headers.get("x-sr2-session-id", "") or self._default_name
 
         # Get or create session
         if session_id not in self._sessions:
             self._sessions[session_id] = BridgeSession(session_id=session_id)
-            logger.info("New session: %s (strategy=%s)", session_id, self._strategy)
+            logger.info("New session: %s", session_id)
 
         self._sessions[session_id].touch()
         return session_id
@@ -114,3 +108,13 @@ class SessionTracker:
 
     def all_sessions(self) -> dict[str, BridgeSession]:
         return dict(self._sessions)
+
+    def restore_session(self, session: BridgeSession) -> None:
+        """Restore a previously persisted session into the tracker."""
+        self._sessions[session.session_id] = session
+        logger.info(
+            "Restored session: %s (turns=%d, requests=%d)",
+            session.session_id,
+            session.turn_counter,
+            session.request_count,
+        )

@@ -22,6 +22,7 @@ from sr2.compaction.engine import ConversationTurn
 from sr2.config.models import CompactionConfig, PipelineConfig
 
 from bridge.adapters.anthropic import AnthropicAdapter
+from bridge.app import create_bridge_app, _is_fast_model
 from bridge.bridge_metrics import BridgeMetricsExporter
 from bridge.config import BridgeConfig, BridgeSessionConfig
 from bridge.engine import BridgeEngine
@@ -201,40 +202,43 @@ class TestAnthropicAdapter:
 # ---------------------------------------------------------------------------
 
 class TestSessionTracker:
-    """Test session identification and lifecycle."""
+    """Test config-driven session identification."""
 
-    def test_system_hash_same_prompt(self):
-        tracker = SessionTracker(BridgeSessionConfig())
-        sid1 = tracker.identify({}, {}, system_prompt="My system prompt")
-        sid2 = tracker.identify({}, {}, system_prompt="My system prompt")
-        assert sid1 == sid2
+    def test_uses_config_name(self):
+        """Session ID comes from config name."""
+        tracker = SessionTracker(BridgeSessionConfig(name="my-project"))
+        sid = tracker.identify({}, {})
+        assert sid == "my-project"
 
-    def test_system_hash_different_prompt(self):
+    def test_default_name(self):
+        """Default config name is 'default'."""
         tracker = SessionTracker(BridgeSessionConfig())
+        sid = tracker.identify({}, {})
+        assert sid == "default"
+
+    def test_header_overrides_config(self):
+        """X-SR2-Session-ID header overrides config name."""
+        tracker = SessionTracker(BridgeSessionConfig(name="my-project"))
+        sid = tracker.identify({}, {"x-sr2-session-id": "custom-session"})
+        assert sid == "custom-session"
+
+    def test_cross_client_sharing(self):
+        """Different clients with same header share session."""
+        tracker = SessionTracker(BridgeSessionConfig(name="my-project"))
+        sid1 = tracker.identify({}, {"x-sr2-session-id": "shared", "x-api-key": "key-1"})
+        sid2 = tracker.identify({}, {"x-sr2-session-id": "shared", "x-api-key": "key-2"})
+        assert sid1 == sid2 == "shared"
+
+    def test_no_header_ignores_system_prompt(self):
+        """Without header, different system prompts still get same session."""
+        tracker = SessionTracker(BridgeSessionConfig(name="stable"))
         sid1 = tracker.identify({}, {}, system_prompt="Prompt A")
         sid2 = tracker.identify({}, {}, system_prompt="Prompt B")
-        assert sid1 != sid2
-
-    def test_system_hash_no_prompt(self):
-        tracker = SessionTracker(BridgeSessionConfig())
-        sid = tracker.identify({}, {}, system_prompt=None)
-        assert sid == "no-system"
-
-    def test_header_strategy(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="header"))
-        sid = tracker.identify({}, {"x-sr2-session-id": "my-session"})
-        assert sid == "my-session"
-
-    def test_single_strategy(self):
-        tracker = SessionTracker(BridgeSessionConfig(strategy="single"))
-        sid1 = tracker.identify({}, {}, system_prompt="A")
-        sid2 = tracker.identify({}, {}, system_prompt="B")
-        assert sid1 == sid2 == "default"
+        assert sid1 == sid2 == "stable"
 
     def test_idle_cleanup_removes_expired(self):
         tracker = SessionTracker(BridgeSessionConfig(idle_timeout_minutes=1))
-        tracker.identify({}, {}, system_prompt="old session")
-        # Manually expire
+        tracker.identify({}, {})
         for session in tracker.all_sessions().values():
             session.last_seen = time.time() - 120
         expired = tracker.cleanup_idle()
@@ -243,21 +247,22 @@ class TestSessionTracker:
 
     def test_idle_cleanup_keeps_active(self):
         tracker = SessionTracker(BridgeSessionConfig(idle_timeout_minutes=60))
-        tracker.identify({}, {}, system_prompt="active session")
+        tracker.identify({}, {})
         expired = tracker.cleanup_idle()
         assert len(expired) == 0
         assert tracker.active_sessions == 1
 
     def test_destroy_returns_id(self):
         tracker = SessionTracker(BridgeSessionConfig())
-        sid = tracker.identify({}, {}, system_prompt="test")
+        sid = tracker.identify({}, {})
         result = tracker.destroy(sid)
         assert result == sid
-        assert tracker.get(sid) is None
+        assert tracker.active_sessions == 0
 
     def test_destroy_nonexistent_returns_none(self):
         tracker = SessionTracker(BridgeSessionConfig())
-        assert tracker.destroy("nonexistent") is None
+        result = tracker.destroy("nonexistent")
+        assert result is None
 
 
 class TestBridgeSession:
@@ -432,13 +437,22 @@ def _make_mock_forwarder() -> BridgeForwarder:
     forwarder = MagicMock(spec=BridgeForwarder)
     forwarder.start = AsyncMock()
     forwarder.stop = AsyncMock()
+    forwarder.last_body = None  # Track last forwarded body
+    forwarder.response_json = None  # Override response content
 
-    # Non-streaming response
-    mock_response = MagicMock()
-    mock_response.content = json.dumps({"type": "message", "content": [{"type": "text", "text": "Hello"}]}).encode()
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "application/json"}
-    forwarder.forward = AsyncMock(return_value=mock_response)
+    # Non-streaming response — captures body
+    async def _capture_forward(path, body, headers, **kwargs):
+        forwarder.last_body = body
+        resp = MagicMock()
+        if forwarder.response_json:
+            resp.content = json.dumps(forwarder.response_json).encode()
+        else:
+            resp.content = json.dumps({"type": "message", "content": [{"type": "text", "text": "Hello"}]}).encode()
+        resp.status_code = 200
+        resp.headers = {"content-type": "application/json"}
+        return resp
+
+    forwarder.forward = AsyncMock(side_effect=_capture_forward)
 
     # Passthrough response
     passthrough_response = MagicMock()
@@ -462,12 +476,13 @@ def _make_mock_forwarder() -> BridgeForwarder:
     return forwarder
 
 
-def _make_test_app():
+def _make_test_app(forwarding: dict | None = None):
     """Create a test app with mock forwarder."""
-    from bridge.app import create_bridge_app
+    from bridge.config import BridgeForwardingConfig
     from bridge.llm import APIKeyCache
 
-    bridge_config = BridgeConfig()
+    fwd_config = BridgeForwardingConfig(**(forwarding or {}))
+    bridge_config = BridgeConfig(forwarding=fwd_config)
     key_cache = APIKeyCache()
     engine = BridgeEngine(PipelineConfig(), bridge_config=bridge_config, key_cache=key_cache)
     forwarder = _make_mock_forwarder()
@@ -647,14 +662,6 @@ class TestLLMCallableFactory:
 
         config = BridgeLLMModelConfig(model="test-model", api_key="key")
         callable_fn = make_extraction_callable(config, APIKeyCache(), "https://api.example.com")
-        assert callable(callable_fn)
-
-    def test_intent_callable_created(self):
-        from bridge.config import BridgeLLMModelConfig
-        from bridge.llm import APIKeyCache, make_intent_callable
-
-        config = BridgeLLMModelConfig(model="test-model", api_key="key")
-        callable_fn = make_intent_callable(config, APIKeyCache(), "https://api.example.com")
         assert callable(callable_fn)
 
     def test_embedding_callable_created(self):
@@ -888,6 +895,187 @@ class TestEngineRetrievalQuery:
         # Last user message has no text blocks, so falls through to the earlier one
         query = BridgeEngine._extract_retrieval_query(messages)
         assert query == "A question"
+
+
+class TestContentTypeDetection:
+    """Test that the adapter correctly assigns content_type to turns."""
+
+    def test_tool_use_classified_as_tool_output(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Glob", "input": {"pattern": "*.py"}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "tool_output"
+
+    def test_bash_tool_use_classified_as_code_execution(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "code_execution"
+
+    def test_read_tool_result_classified_as_file_content(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "/foo.py"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "file contents here"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "file_content"  # assistant tool_use
+        assert turns[1].content_type == "file_content"  # user tool_result
+
+    def test_bash_tool_result_classified_as_code_execution(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "pytest"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "PASSED"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[1].content_type == "code_execution"
+
+    def test_unknown_tool_result_falls_back_to_tool_output(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "unknown_id", "content": "data"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "tool_output"
+
+    def test_plain_text_message_has_no_content_type(self):
+        adapter = AnthropicAdapter()
+        messages = [{"role": "user", "content": "hello"}]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type is None
+
+    def test_tool_name_in_metadata(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "data"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].metadata["tool_name"] == "Read"
+        assert turns[1].metadata["tool_name"] == "Read"
+
+    def test_view_file_classified_as_file_content(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "view_file", "input": {}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "file_content"
+
+    def test_execute_tool_classified_as_code_execution(self):
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "execute_command", "input": {}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[0].content_type == "code_execution"
+
+
+class TestModelRewriting:
+    """Test model rewriting in the bridge proxy."""
+
+    def test_is_fast_model_haiku(self):
+        assert _is_fast_model("claude-haiku-4-5-20251001")
+
+    def test_is_fast_model_flash(self):
+        assert _is_fast_model("openai/glm-4.7-flash-cpu")
+
+    def test_is_fast_model_mini(self):
+        assert _is_fast_model("gpt-4o-mini")
+
+    def test_is_not_fast_model(self):
+        assert not _is_fast_model("claude-sonnet-4-20250514")
+        assert not _is_fast_model("openai/qwen-32b")
+
+    @pytest.mark.asyncio
+    async def test_model_rewritten_in_proxy(self):
+        """When forwarding.model is set, body model gets rewritten."""
+        app, forwarder = _make_test_app(
+            forwarding={"model": "openai/my-model", "fast_model": "openai/my-fast"},
+        )
+        forwarder.response_json = {"id": "1", "content": [{"type": "text", "text": "hi"}]}
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/messages", json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "hello"}],
+            }, headers={"x-api-key": "test"})
+            assert resp.status_code == 200
+            # Check that forwarder received the rewritten model
+            assert forwarder.last_body["model"] == "openai/my-model"
+
+    @pytest.mark.asyncio
+    async def test_fast_model_rewritten_in_proxy(self):
+        """Fast models get rewritten to fast_model config."""
+        app, forwarder = _make_test_app(
+            forwarding={"model": "openai/my-model", "fast_model": "openai/my-fast"},
+        )
+        forwarder.response_json = {"id": "1", "content": [{"type": "text", "text": "hi"}]}
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/messages", json={
+                "model": "claude-haiku-4-5-20251001",
+                "messages": [{"role": "user", "content": "hello"}],
+            }, headers={"x-api-key": "test"})
+            assert resp.status_code == 200
+            assert forwarder.last_body["model"] == "openai/my-fast"
+
+    @pytest.mark.asyncio
+    async def test_no_model_config_passthrough(self):
+        """Without model config, the original model passes through."""
+        app, forwarder = _make_test_app()
+        forwarder.response_json = {"id": "1", "content": [{"type": "text", "text": "hi"}]}
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/messages", json={
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "hello"}],
+            }, headers={"x-api-key": "test"})
+            assert resp.status_code == 200
+            assert forwarder.last_body["model"] == "claude-sonnet-4-20250514"
+
+    @pytest.mark.asyncio
+    async def test_fast_model_falls_back_to_model(self):
+        """When fast_model is None, fast models use the base model."""
+        app, forwarder = _make_test_app(
+            forwarding={"model": "openai/my-model"},
+        )
+        forwarder.response_json = {"id": "1", "content": [{"type": "text", "text": "hi"}]}
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/messages", json={
+                "model": "claude-haiku-4-5-20251001",
+                "messages": [{"role": "user", "content": "hello"}],
+            }, headers={"x-api-key": "test"})
+            assert resp.status_code == 200
+            assert forwarder.last_body["model"] == "openai/my-model"
 
 
 class TestEngineShutdown:

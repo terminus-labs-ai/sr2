@@ -163,6 +163,14 @@ class HybridRetriever:
             return 0.0
         return self._empty_retrievals / self._total_retrievals
 
+    def update_context(self, current_context: dict | None) -> None:
+        """Update current_context for the next retrieve() call.
+
+        Prefer this over direct attribute assignment for clarity and
+        future hook points (e.g., scope detection invalidation).
+        """
+        self._current_context = current_context
+
     def _apply_boosts(self, results: list[MemorySearchResult]) -> list[MemorySearchResult]:
         """Apply recency and frequency boosts to relevance scores."""
         now = datetime.now(UTC)

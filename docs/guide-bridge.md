@@ -47,7 +47,7 @@ On each request:
 
 1. The **adapter** extracts the system prompt and messages from the wire format
 2. The **session tracker** identifies which session this request belongs to (by hashing the system prompt — Claude Code's system prompt is unique per session)
-3. The **engine** compares the incoming message count to the last known count, ingests only new messages, runs compaction on older turns, and optionally triggers summarization
+3. The **engine** compares the incoming message count and content hash to the last known state, detects new messages or edits, ingests changes, runs compaction on older turns, and optionally triggers summarization
 4. The **adapter** rebuilds the request body with optimized messages
 5. The **forwarder** sends the optimized request upstream with the original auth headers
 6. The response streams back through the bridge unmodified
@@ -126,10 +126,48 @@ sr2-bridge bridge.yaml --port 9300 --host 0.0.0.0 --upstream https://custom-api.
 | `bridge.host` | `127.0.0.1` | Host to bind to |
 | `bridge.forwarding.upstream_url` | `https://api.anthropic.com` | Upstream API base URL |
 | `bridge.forwarding.timeout_seconds` | `300` | Timeout for upstream requests |
-| `bridge.session.strategy` | `system_hash` | Session identification strategy |
+| `bridge.forwarding.model` | `None` | Override model for upstream requests. Rewrites the model field before forwarding |
+| `bridge.forwarding.fast_model` | `None` | Override model for fast/small requests (e.g. haiku). Falls back to `model` |
+| `bridge.forwarding.max_context_tokens` | `None` | Max context tokens for upstream model. Logs a warning when exceeded (advisory) |
+| `bridge.session.name` | `default` | Session name. All requests use this unless `X-SR2-Session-ID` header overrides |
 | `bridge.session.idle_timeout_minutes` | `120` | Idle session cleanup timeout |
+| `bridge.session.persistence` | `false` | Persist session state to SQLite. Survives bridge restarts |
+| `bridge.tool_type_overrides` | `{}` | Custom tool name → content type mappings for compaction (see below) |
+| `bridge.degradation.circuit_breaker_threshold` | `3` | Consecutive failures before circuit breaker opens |
+| `bridge.degradation.circuit_breaker_cooldown_seconds` | `300` | Seconds before retrying after breaker opens |
 
 The `pipeline:` section uses the same config as the SR2 core library — see [Configuration Reference](configuration.md) for all pipeline fields.
+
+### Custom Tool Type Mappings
+
+By default, the bridge classifies tool outputs for compaction using built-in substring matching (e.g. `read` → `file_content`, `bash` → `code_execution`). If you use custom tools with non-standard names, add explicit mappings:
+
+```yaml
+bridge:
+  tool_type_overrides:
+    my_file_reader: file_content
+    run_script: code_execution
+    api_call: tool_output
+```
+
+Keys are substrings matched case-insensitively against tool names. User overrides take priority over built-in defaults.
+
+### Session Persistence
+
+By default, session state (turns, summaries, zone boundaries) is lost when the bridge restarts. Enable persistence to survive restarts:
+
+```yaml
+bridge:
+  session:
+    persistence: true
+  memory:
+    db_path: sr2_bridge.db  # sessions stored in the same SQLite file as memories
+```
+
+When enabled:
+- Session state is saved to SQLite after each optimization pass
+- On startup, all sessions are restored from the database
+- Sessions cleaned up by idle timeout are also removed from the database
 
 ## Auth Handling
 
@@ -206,6 +244,32 @@ sr2_bridge_session_requests{session="a1b2c3d4"} 47
 sr2_bridge_session_tokens{session="a1b2c3d4",zone="summarized"} 1
 sr2_bridge_session_tokens{session="a1b2c3d4",zone="compacted"} 12
 sr2_bridge_session_tokens{session="a1b2c3d4",zone="raw"} 5
+
+# HELP sr2_bridge_postprocess_errors_total Total post-processing errors
+# TYPE sr2_bridge_postprocess_errors_total counter
+sr2_bridge_postprocess_errors_total 0
+
+# HELP sr2_bridge_circuit_breaker_state Circuit breaker state (0=closed, 1=open)
+# TYPE sr2_bridge_circuit_breaker_state gauge
+sr2_bridge_circuit_breaker_state{feature="summarization"} 0
+sr2_bridge_circuit_breaker_state{feature="memory_extraction"} 0
+sr2_bridge_circuit_breaker_state{feature="memory_retrieval"} 0
+
+# HELP sr2_bridge_request_tokens_before Estimated tokens before optimization (last request)
+# TYPE sr2_bridge_request_tokens_before gauge
+sr2_bridge_request_tokens_before{session="a1b2c3d4"} 8450
+
+# HELP sr2_bridge_request_tokens_after Estimated tokens after optimization (last request)
+# TYPE sr2_bridge_request_tokens_after gauge
+sr2_bridge_request_tokens_after{session="a1b2c3d4"} 5200
+
+# HELP sr2_bridge_compaction_ratio Ratio of tokens after/before optimization (last request)
+# TYPE sr2_bridge_compaction_ratio gauge
+sr2_bridge_compaction_ratio{session="a1b2c3d4"} 0.6154
+
+# HELP sr2_bridge_summarization_duration_seconds Duration of last summarization call
+# TYPE sr2_bridge_summarization_duration_seconds gauge
+sr2_bridge_summarization_duration_seconds 1.2345
 ```
 
 ## Logs
@@ -240,7 +304,7 @@ class BridgeAdapter(Protocol):
         ...
 ```
 
-An OpenAI adapter stub exists at `src/runtime/bridge/adapters/openai.py` for future implementation.
+An OpenAI adapter stub exists at `src/bridge/adapters/openai.py` for future implementation.
 
 ## Troubleshooting
 

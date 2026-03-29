@@ -198,6 +198,37 @@ Example: if the current context has `{"channel": "slack"}`:
 - A memory with `{"channel": "email"}` gets heavily penalized (best_fit) or excluded (exact)
 - An unscoped memory (no dimensions) gets a small penalty (best_fit) or excluded (exact) / included (fallback_to_generic)
 
+## Automatic Scope Detection
+
+When `MemoryScopeConfig` is configured with non-private scopes (e.g., `project`, `team`), the `ScopeDetector` automatically determines which `scope_ref` applies to the current session. This eliminates the need to manually set `SR2_PROJECT_ID`.
+
+### How it works
+
+1. **Private scopes** are resolved deterministically from `agent_name` — no LLM call needed
+2. **Non-private scopes** query the store for existing `(scope, scope_ref)` pairs via `list_scope_refs()`
+3. If existing scope_refs are found, the LLM is called with session context (system prompt excerpt, user message) to pick the best match or return `null`
+4. Results are **cached per session** — the LLM is called at most once per session
+5. If detection fails for any reason, the system degrades gracefully to private-only scoping
+
+### Configuration
+
+```yaml
+memory:
+  extract: true
+  scope:
+    allowed_read: ["private", "project"]
+    allowed_write: ["private", "project"]
+    agent_name: "edi"
+```
+
+### Priority chain
+
+The `SR2_PROJECT_ID` environment variable takes priority over automatic detection. The detection only runs when no env var is set. This allows explicit overrides when needed (e.g., CI pipelines, task runners).
+
+### Cache invalidation
+
+Detection results are cached for the session lifetime. Call `scope_detector.invalidate(session_id)` to clear the cache (e.g., on topic shift). Sessions without an ID are not cached.
+
 ## Storage Backends
 
 ### InMemoryMemoryStore

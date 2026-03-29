@@ -203,7 +203,7 @@ Config inheritance: `defaults.yaml` → `agent.yaml` → `interfaces/user_messag
 
 **Dynamic heartbeats.** Agents can schedule future callbacks to themselves via `schedule_heartbeat` / `cancel_heartbeat` tools. Supports idempotent keys, context carry-over from the original session, and DB persistence. Use it for async monitoring, retries, or timed reminders. See [Heartbeat Guide](docs/guide-heartbeats.md).
 
-**Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search. Supports PostgreSQL and SQLite backends.
+**Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search. Automatic scope detection assigns memories to the correct project/team context without manual configuration. Supports PostgreSQL and SQLite backends.
 
 **Intent detection.** Classify user messages to detect topic shifts, enabling context-aware memory refresh and selective summarization. Foundation for LLM-based topic understanding.
 
@@ -286,13 +286,14 @@ src/
 │   ├── plugins/       #   Interface plugins (http, telegram, timer, a2a, single-shot)
 │   ├── session/       #   Session lifecycle management
 │   ├── heartbeat/     #   Scheduled agent callbacks
-│   └── bridge/        #   Context optimization proxy for external LLM callers
+│
+src/bridge/              # Context optimization proxy for external LLM callers
 │
 configs/               # Example configs
 │   ├── defaults.yaml  #   Library defaults
 │   └── agents/edi/    #   Example agent
 │
-tests/                 # 844 tests
+tests/                 # 1,136 tests
 │   ├── test_config/
 │   ├── test_pipeline/
 │   ├── test_memory/

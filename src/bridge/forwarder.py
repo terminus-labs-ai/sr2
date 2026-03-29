@@ -12,18 +12,20 @@ from bridge.config import BridgeForwardingConfig
 logger = logging.getLogger(__name__)
 
 # Hop-by-hop headers that must not be forwarded.
-_HOP_BY_HOP = frozenset({
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-    "host",
-    "content-length",
-})
+_HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+        "content-length",
+    }
+)
 
 
 def _filter_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -96,9 +98,7 @@ class BridgeForwarder:
         fwd_headers = _filter_headers(headers)
 
         logger.debug("Forwarding POST %s (streaming)", url)
-        async with self._client.stream(
-            "POST", url, json=body, headers=fwd_headers
-        ) as response:
+        async with self._client.stream("POST", url, json=body, headers=fwd_headers) as response:
             if response.status_code >= 400:
                 error_body = await response.aread()
                 logger.warning(
@@ -106,10 +106,7 @@ class BridgeForwarder:
                     response.status_code,
                     error_body[:500].decode("utf-8", errors="replace"),
                 )
-                yield (
-                    b"event: error\n"
-                    b"data: " + error_body + b"\n\n"
-                )
+                yield (b"event: error\ndata: " + error_body + b"\n\n")
                 return
             async for line in response.aiter_lines():
                 chunk = (line + "\n").encode("utf-8")
@@ -131,7 +128,5 @@ class BridgeForwarder:
         fwd_headers = _filter_headers(headers)
 
         logger.debug("Passthrough %s %s", method, url)
-        response = await self._client.request(
-            method, url, content=body, headers=fwd_headers
-        )
+        response = await self._client.request(method, url, content=body, headers=fwd_headers)
         return response

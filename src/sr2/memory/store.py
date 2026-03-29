@@ -3,6 +3,7 @@
 import aiosqlite
 import json
 import logging
+import math
 import re
 from typing import Protocol
 
@@ -70,6 +71,14 @@ class MemoryStore(Protocol):
 
     async def count(self, include_archived: bool = False) -> int:
         """Count total memories."""
+        ...
+
+    async def list_scope_refs(
+        self,
+        scope_filter: list[str] | None = None,
+        include_archived: bool = False,
+    ) -> list[tuple[str, str | None]]:
+        """Return distinct (scope, scope_ref) pairs. Sorted by scope, scope_ref."""
         ...
 
 
@@ -159,14 +168,18 @@ class InMemoryMemoryStore:
         scope_filter: list[str] | None = None,
         scope_refs: list[str] | None = None,
     ) -> list[MemorySearchResult]:
-        query_lower = query.lower()
+        words = list({w.lower() for w in re.split(r"[\s,!?.;:'\"]+", query) if len(w) >= 3})
+        if not words:
+            words = [query.strip().lower()]
         results = []
         for m in self._memories.values():
             if m.archived and not include_archived:
                 continue
             if not self._scope_match(m, scope_filter, scope_refs):
                 continue
-            if query_lower in m.key.lower() or query_lower in m.value.lower():
+            key_lower = m.key.lower()
+            value_lower = m.value.lower()
+            if any(w in key_lower or w in value_lower for w in words):
                 results.append(
                     MemorySearchResult(memory=m, relevance_score=0.7, match_type="keyword")
                 )
@@ -177,6 +190,20 @@ class InMemoryMemoryStore:
         if include_archived:
             return len(self._memories)
         return sum(1 for m in self._memories.values() if not m.archived)
+
+    async def list_scope_refs(
+        self,
+        scope_filter: list[str] | None = None,
+        include_archived: bool = False,
+    ) -> list[tuple[str, str | None]]:
+        pairs: set[tuple[str, str | None]] = set()
+        for m in self._memories.values():
+            if not include_archived and m.archived:
+                continue
+            if scope_filter is not None and m.scope not in scope_filter:
+                continue
+            pairs.add((m.scope, m.scope_ref))
+        return sorted(pairs)
 
 
 class PostgresMemoryStore:
@@ -447,6 +474,26 @@ class PostgresMemoryStore:
         async with self._pool.acquire() as conn:
             return await conn.fetchval(query)
 
+    async def list_scope_refs(
+        self,
+        scope_filter: list[str] | None = None,
+        include_archived: bool = False,
+    ) -> list[tuple[str, str | None]]:
+        query = "SELECT DISTINCT scope, scope_ref FROM memories"
+        conditions: list[str] = []
+        params: list = []
+        if not include_archived:
+            conditions.append("archived = false")
+        if scope_filter is not None:
+            params.append(scope_filter)
+            conditions.append(f"scope = ANY(${len(params)})")
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY scope, scope_ref"
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+            return [(r["scope"], r["scope_ref"]) for r in rows]
+
     @staticmethod
     def _row_to_memory(row) -> Memory:
         """Convert a database row to a Memory object."""
@@ -661,6 +708,16 @@ class SQLiteMemoryStore:
         await self._conn.commit()
         return result
 
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors using pure Python."""
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
     async def search_vector(
         self,
         embedding: list[float],
@@ -671,9 +728,8 @@ class SQLiteMemoryStore:
     ) -> list[MemorySearchResult]:
         """Semantic search by vector embedding.
 
-        SQLite has no native vector distance support. Returns up to top_k memories
-        with embeddings in order of storage (oldest first). Use PostgreSQL backend
-        for real semantic search.
+        Brute-force cosine similarity in Python. Fine for hundreds to low
+        thousands of memories; use PostgreSQL + pgvector for larger scales.
         """
         if not self._conn:
             raise RuntimeError("Not connected. Call connect() first.")
@@ -690,18 +746,25 @@ class SQLiteMemoryStore:
             placeholders = ",".join("?" for _ in scope_refs)
             query += f" AND (scope_ref IN ({placeholders}) OR scope_ref IS NULL)"
             params.extend(scope_refs)
-        query += f" LIMIT {top_k}"
 
         cursor = await self._conn.execute(query, params)
         rows = await cursor.fetchall()
-        return [
-            MemorySearchResult(
-                memory=self._row_to_memory(r),
-                relevance_score=0.5,
-                match_type="semantic",
-            )
-            for r in rows
-        ]
+
+        scored: list[tuple[float, MemorySearchResult]] = []
+        for r in rows:
+            stored_embedding = json.loads(r["embedding"])
+            similarity = self._cosine_similarity(embedding, stored_embedding)
+            scored.append((
+                similarity,
+                MemorySearchResult(
+                    memory=self._row_to_memory(r),
+                    relevance_score=max(0.0, similarity),
+                    match_type="semantic",
+                ),
+            ))
+
+        scored.sort(key=lambda t: -t[0])
+        return [result for _, result in scored[:top_k]]
 
     async def search_keyword(
         self,
@@ -725,6 +788,14 @@ class SQLiteMemoryStore:
         sql = f"SELECT * FROM memories WHERE ({conditions})"
         if not include_archived:
             sql += " AND archived = 0"
+        if scope_filter is not None:
+            placeholders = ",".join("?" for _ in scope_filter)
+            sql += f" AND scope IN ({placeholders})"
+            params.extend(scope_filter)
+        if scope_refs is not None:
+            placeholders = ",".join("?" for _ in scope_refs)
+            sql += f" AND (scope_ref IN ({placeholders}) OR scope_ref IS NULL)"
+            params.extend(scope_refs)
         sql += f" LIMIT {top_k}"
 
         cursor = await self._conn.execute(sql, params)
@@ -750,6 +821,29 @@ class SQLiteMemoryStore:
         cursor = await self._conn.execute(query)
         result = await cursor.fetchone()
         return result[0] if result else 0
+
+    async def list_scope_refs(
+        self,
+        scope_filter: list[str] | None = None,
+        include_archived: bool = False,
+    ) -> list[tuple[str, str | None]]:
+        if not self._conn:
+            raise RuntimeError("Not connected. Call connect() first.")
+        query = "SELECT DISTINCT scope, scope_ref FROM memories"
+        params: list = []
+        conditions: list[str] = []
+        if not include_archived:
+            conditions.append("archived = 0")
+        if scope_filter is not None:
+            placeholders = ",".join("?" for _ in scope_filter)
+            conditions.append(f"scope IN ({placeholders})")
+            params.extend(scope_filter)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY scope, scope_ref"
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [(r["scope"], r["scope_ref"]) for r in rows]
 
     @staticmethod
     def _row_to_memory(row) -> Memory:

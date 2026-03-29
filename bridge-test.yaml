@@ -1,0 +1,33 @@
+bridge:
+  port: 9200
+  host: 0.0.0.0
+
+  forwarding:
+    upstream_url: http://192.168.50.58:9300
+    timeout_seconds: 1800
+    model: claude-opus-4-6
+    fast_model: claude-haiku-4-5
+  session:
+    name: quality-test-v2
+    idle_timeout_minutes: 120
+    persistence: true
+
+  llm:
+    summarization:
+      model: claude-haiku-4-5
+      max_tokens: 2048
+
+  memory:
+    db_path: /tmp/sr2_bridge_quality_v2.db
+
+pipeline:
+  compaction:
+    enabled: true
+    raw_window: 5
+  summarization:
+    enabled: true
+    trigger: token_threshold
+    threshold: 0.85
+    preserve_recent_turns: 8
+    output_format: prose
+    compacted_max_tokens: 20000

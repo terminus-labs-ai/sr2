@@ -172,7 +172,7 @@ Deep merge, more specific wins. Use `extends:` to reference parent config.
 | `configs/agents/edi/interfaces/` | Per-interface pipeline configs |
 | `src/sr2/` | Core context engineering library |
 | `src/runtime/` | Agent runtime (CLI, LLM loop, plugins, sessions) |
-| `src/runtime/bridge/` | Bridge proxy (context optimization for external callers) |
+| `src/bridge/` | Bridge proxy (context optimization for external callers) |
 | `tests/` | Unit + integration tests |
 
 ## Creating a New Agent

@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
+import time
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.config.models import CompactionConfig, PipelineConfig, SummarizationConfig
+from sr2.config.models import (
+    CompactionConfig,
+    CompactionRuleConfig,
+    PipelineConfig,
+    SummarizationConfig,
+)
 from sr2.degradation.circuit_breaker import CircuitBreaker
 from sr2.degradation.ladder import DegradationLadder
 from sr2.memory.conflicts import ConflictDetector
@@ -24,9 +33,33 @@ from bridge.llm import (
     make_extraction_callable,
     make_summarization_callable,
 )
+from bridge.persistence import BridgeSessionStore
 from bridge.session_tracker import BridgeSession
 
 logger = logging.getLogger(__name__)
+
+# Default compaction rules for bridge proxy conversations.
+# Claude Code traffic is heavy on tool outputs and file content — these
+# rules compress older tool results while keeping recent ones in full.
+BRIDGE_DEFAULT_COMPACTION_RULES = [
+    CompactionRuleConfig(
+        type="tool_output",
+        strategy="schema_and_sample",
+        max_compacted_tokens=80,
+        recovery_hint=True,
+    ),
+    CompactionRuleConfig(
+        type="file_content",
+        strategy="reference",
+        recovery_hint=True,
+    ),
+    CompactionRuleConfig(
+        type="code_execution",
+        strategy="result_summary",
+        max_output_lines=5,
+        recovery_hint=True,
+    ),
+]
 
 
 class BridgeEngine:
@@ -52,8 +85,12 @@ class BridgeEngine:
         self._key_cache = key_cache or APIKeyCache()
         self._memory_initialized = False
 
-        # Build compaction engine
+        # Build compaction engine — apply bridge defaults if no rules configured
         compaction_config = pipeline_config.compaction or CompactionConfig()
+        if not compaction_config.rules:
+            compaction_config = compaction_config.model_copy(
+                update={"rules": BRIDGE_DEFAULT_COMPACTION_RULES}
+            )
         self._compaction = CompactionEngine(compaction_config)
 
         # Build summarization callable from bridge LLM config
@@ -79,6 +116,7 @@ class BridgeEngine:
             compaction_engine=self._compaction,
             summarization_engine=self._summarization,
             raw_window=compaction_config.raw_window,
+            compacted_max_tokens=summarization_config.compacted_max_tokens,
         )
 
         # Degradation: circuit breaker + ladder
@@ -89,6 +127,12 @@ class BridgeEngine:
         )
         self._ladder = DegradationLadder()
 
+        # Scope config from pipeline (used for memory scoping)
+        self._scope_config = pipeline_config.memory.scope if pipeline_config.memory else None
+
+        # Last detected context per session (set in optimize, read in post_process)
+        self._last_detected_context: dict[str, dict] = {}
+
         # Memory system (deferred init — SQLite connect is async)
         mem_cfg = self._bridge_config.memory
         self._memory_store: SQLiteMemoryStore | None = None
@@ -96,9 +140,25 @@ class BridgeEngine:
         self._conflict_detector: ConflictDetector | None = None
         self._conflict_resolver: ConflictResolver | None = None
         self._retriever: HybridRetriever | None = None
+        self._scope_detector = None  # ScopeDetector | None, created in _ensure_memory_initialized
 
         if mem_cfg.enabled and self._bridge_config.llm.extraction:
             self._memory_store = SQLiteMemoryStore(db_path=mem_cfg.db_path)
+
+        # Per-session lock to serialize concurrent requests from Claude Code.
+        # Without this, parallel requests race on session state (turn counter,
+        # message count, zone content) causing corruption and 400s upstream.
+        self._session_locks: dict[str, asyncio.Lock] = {}
+
+        # Session persistence (optional)
+        self._session_store: BridgeSessionStore | None = None
+        if self._bridge_config.session.persistence:
+            self._session_store = BridgeSessionStore(db_path=self._bridge_config.memory.db_path)
+
+        # Metrics tracking
+        self._postprocess_error_count: int = 0
+        self._last_summarization_duration: float | None = None
+        self._last_request_tokens: dict[str, tuple[int, int]] = {}
 
     async def _ensure_memory_initialized(self) -> None:
         """Lazily connect to SQLite on first use."""
@@ -118,6 +178,7 @@ class BridgeEngine:
             llm_callable=extraction_callable,
             store=self._memory_store,
             max_memories_per_turn=mem_cfg.max_memories_per_turn,
+            scope_config=self._scope_config,
         )
         self._conflict_detector = ConflictDetector(store=self._memory_store)
         self._conflict_resolver = ConflictResolver(store=self._memory_store)
@@ -135,7 +196,18 @@ class BridgeEngine:
             embedding_callable=embed_callable,
             strategy=mem_cfg.retrieval_strategy,
             top_k=mem_cfg.retrieval_top_k,
+            scope_config=self._scope_config,
         )
+
+        # Scope detector (optional — requires extraction LLM)
+        if self._scope_config and extraction_callable:
+            from sr2.memory.scope import ScopeDetector
+
+            self._scope_detector = ScopeDetector(
+                store=self._memory_store,
+                llm_callable=extraction_callable,
+                scope_config=self._scope_config,
+            )
 
         self._memory_initialized = True
         logger.info("Memory system initialized (db=%s)", mem_cfg.db_path)
@@ -152,23 +224,72 @@ class BridgeEngine:
         Returns (system_injection_or_None, optimized_messages).
         """
         session_id = session.session_id
-        current_count = len(messages)
 
-        if current_count <= session.last_message_count:
-            if current_count < session.last_message_count:
-                logger.info(
-                    "Session %s: message count decreased (%d -> %d), resetting",
-                    session_id, session.last_message_count, current_count,
-                )
-                self._reset_session(session)
+        # Serialize concurrent requests for the same session
+        if session_id not in self._session_locks:
+            self._session_locks[session_id] = asyncio.Lock()
+
+        async with self._session_locks[session_id]:
+            return await self._optimize_locked(system, messages, session, adapter)
+
+    async def _optimize_locked(
+        self,
+        system: str | None,
+        messages: list[dict],
+        session: BridgeSession,
+        adapter: BridgeAdapter,
+    ) -> tuple[str | None, list[dict]]:
+        """Actual optimization logic, called under per-session lock."""
+        session_id = session.session_id
+        current_count = len(messages)
+        current_hash = hashlib.md5(
+            json.dumps(messages, sort_keys=True, default=str).encode()
+        ).hexdigest()
+
+        if (
+            current_count == session.last_message_count
+            and current_hash == session.last_message_hash
+        ):
+            # Parallel request with identical content -- skip optimization,
+            # pass through original messages to avoid returning stale zone content.
+            logger.debug(
+                "Session %s: same message count (%d) and hash, passing through",
+                session_id,
+                current_count,
+            )
+            return None, messages
+
+        if (
+            current_count == session.last_message_count
+            and current_hash != session.last_message_hash
+        ):
+            # Same count but different content — messages were edited.
+            logger.info(
+                "Session %s: message content changed (count %d, hash %s -> %s), resetting",
+                session_id,
+                current_count,
+                session.last_message_hash,
+                current_hash,
+            )
+            self._reset_session(session)
+
+        if current_count < session.last_message_count:
+            logger.info(
+                "Session %s: message count decreased (%d -> %d), resetting",
+                session_id,
+                session.last_message_count,
+                current_count,
+            )
+            self._reset_session(session)
 
         # Convert new messages to turns via adapter (engine never sees wire format)
-        new_messages = messages[session.last_message_count:]
+        new_messages = messages[session.last_message_count :]
         new_turns = adapter.messages_to_turns(new_messages, session.turn_counter)
         for turn in new_turns:
             self._conversation.add_turn(turn, session_id)
         session.turn_counter += len(new_turns)
         session.last_message_count = current_count
+        session.last_message_hash = current_hash
 
         # Run compaction (not gated — compaction is local, no external calls)
         if not self._ladder.should_skip("compaction"):
@@ -187,7 +308,9 @@ class BridgeEngine:
             "summarization"
         ):
             try:
+                t0 = time.monotonic()
                 summarization_result = await self._conversation.run_summarization(session_id)
+                self._last_summarization_duration = time.monotonic() - t0
                 if summarization_result:
                     logger.info(
                         "Session %s: summarized turns %s (%d -> %d tokens)",
@@ -198,11 +321,35 @@ class BridgeEngine:
                     )
                     self._breaker.record_success("summarization")
             except Exception:
-                logger.warning(
-                    "Session %s: summarization failed", session_id, exc_info=True
-                )
+                logger.warning("Session %s: summarization failed", session_id, exc_info=True)
                 self._breaker.record_failure("summarization")
                 self._ladder.degrade()
+
+        # Scope detection: determine scope_ref for this session
+        current_context: dict[str, str] | None = None
+        if self._scope_detector and not self._breaker.is_open("scope_detection"):
+            try:
+                detected = await self._scope_detector.detect(
+                    system_prompt=system,
+                    user_message=self._extract_retrieval_query(messages),
+                    session_id=session_id,
+                )
+                if detected:
+                    current_context = {}
+                    for scope_name, scope_ref in detected.items():
+                        if scope_name != "private" and scope_ref is not None:
+                            current_context["project_id"] = scope_ref
+                            break
+                    if not current_context:
+                        current_context = None
+                if current_context and self._retriever:
+                    self._retriever.update_context(current_context)
+                if current_context:
+                    self._last_detected_context[session_id] = current_context
+                self._breaker.record_success("scope_detection")
+            except Exception:
+                logger.warning("Scope detection failed", exc_info=True)
+                self._breaker.record_failure("scope_detection")
 
         # Memory retrieval (guarded by circuit breaker + degradation)
         memory_injection: str | None = None
@@ -223,10 +370,7 @@ class BridgeEngine:
                             max_tokens=mem_cfg.retrieval_max_tokens,
                         )
                         if results:
-                            memory_lines = [
-                                f"- {r.memory.key}: {r.memory.value}"
-                                for r in results
-                            ]
+                            memory_lines = [f"- {r.memory.key}: {r.memory.value}" for r in results]
                             memory_injection = (
                                 "[Relevant memories from previous sessions]\n"
                                 + "\n".join(memory_lines)
@@ -234,13 +378,15 @@ class BridgeEngine:
                             )
                             logger.info(
                                 "Session %s: retrieved %d memories",
-                                session_id, len(results),
+                                session_id,
+                                len(results),
                             )
                         self._breaker.record_success("memory_retrieval")
                 except Exception:
                     logger.warning(
                         "Session %s: memory retrieval failed",
-                        session_id, exc_info=True,
+                        session_id,
+                        exc_info=True,
                     )
                     self._breaker.record_failure("memory_retrieval")
 
@@ -269,7 +415,43 @@ class BridgeEngine:
         if not optimized:
             return None, messages
 
+        # Track before/after token counts for metrics
+        tokens_before = sum(len(str(m.get("content", ""))) // 4 for m in messages)
+        tokens_after = sum(len(str(m.get("content", ""))) // 4 for m in optimized)
+        if system_injection:
+            tokens_after += len(system_injection) // 4
+        self._last_request_tokens[session_id] = (tokens_before, tokens_after)
+
+        # Token budget warning (advisory only)
+        max_ctx = self._bridge_config.forwarding.max_context_tokens
+        if max_ctx and tokens_after > max_ctx:
+            logger.warning(
+                "Session %s: optimized request (%d est. tokens) exceeds "
+                "max_context_tokens (%d) by %d tokens",
+                session_id,
+                tokens_after,
+                max_ctx,
+                tokens_after - max_ctx,
+            )
+
+        # Persist session state after optimization
+        await self._persist_session(session)
+
         return system_injection, optimized
+
+    async def _persist_session(self, session: BridgeSession) -> None:
+        """Persist session state to SQLite if persistence is enabled."""
+        if not self._session_store:
+            return
+        try:
+            zones = self._conversation.zones(session.session_id)
+            await self._session_store.save_session(session, zones)
+        except Exception:
+            logger.warning(
+                "Session %s: persistence failed",
+                session.session_id,
+                exc_info=True,
+            )
 
     async def post_process(self, session: BridgeSession, assistant_text: str) -> None:
         """Post-process after a response stream completes.
@@ -285,22 +467,24 @@ class BridgeEngine:
         session.turn_counter += 1
 
         # Memory extraction (guarded)
-        if (
-            not self._ladder.should_skip("memory")
-            and not self._breaker.is_open("memory_extraction")
+        if not self._ladder.should_skip("memory") and not self._breaker.is_open(
+            "memory_extraction"
         ):
             await self._ensure_memory_initialized()
             if self._memory_extractor:
                 try:
+                    ctx = self._last_detected_context.get(session.session_id)
                     result = await self._memory_extractor.extract(
                         conversation_turn=assistant_text,
                         conversation_id=session.session_id,
                         turn_number=turn.turn_number,
+                        current_context=ctx,
                     )
                     if result.memories:
                         logger.info(
                             "Session %s: extracted %d memories",
-                            session.session_id, len(result.memories),
+                            session.session_id,
+                            len(result.memories),
                         )
                         # Conflict detection + resolution
                         if self._conflict_detector and self._conflict_resolver:
@@ -312,9 +496,11 @@ class BridgeEngine:
                 except Exception:
                     logger.warning(
                         "Session %s: memory extraction failed",
-                        session.session_id, exc_info=True,
+                        session.session_id,
+                        exc_info=True,
                     )
                     self._breaker.record_failure("memory_extraction")
+                    self._postprocess_error_count += 1
 
     @staticmethod
     def _extract_retrieval_query(messages: list[dict]) -> str | None:
@@ -327,7 +513,8 @@ class BridgeEngine:
                 if isinstance(content, list):
                     # Extract text blocks from content array
                     texts = [
-                        b.get("text", "") for b in content
+                        b.get("text", "")
+                        for b in content
                         if isinstance(b, dict) and b.get("type") == "text"
                     ]
                     if texts:
@@ -338,17 +525,28 @@ class BridgeEngine:
         """Reset conversation state for a session."""
         self._conversation.destroy_session(session.session_id)
         session.last_message_count = 0
+        session.last_message_hash = ""
         session.turn_counter = 0
         session.turns = []
 
     def destroy_session(self, session_id: str) -> None:
-        """Clean up ConversationManager state for a session."""
+        """Clean up ConversationManager state and session lock for a session."""
         self._conversation.destroy_session(session_id)
+        self._session_locks.pop(session_id, None)
+        if self._session_store:
+            # Fire-and-forget delete — best effort
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._session_store.delete_session(session_id))
+            except RuntimeError:
+                pass  # No event loop — skip persistence cleanup
 
     async def shutdown(self) -> None:
         """Clean up resources (close DB connections)."""
         if self._memory_store:
             await self._memory_store.disconnect()
+        if self._session_store:
+            await self._session_store.disconnect()
 
     def get_session_metrics(self, session: BridgeSession) -> dict:
         """Return metrics for a specific session."""
@@ -362,6 +560,30 @@ class BridgeEngine:
             "total_tokens": zones.total_tokens,
             "zone_transitions": self._conversation.get_zone_transitions(session.session_id),
         }
+
+    @property
+    def postprocess_error_count(self) -> int:
+        return self._postprocess_error_count
+
+    @property
+    def last_summarization_duration(self) -> float | None:
+        return self._last_summarization_duration
+
+    @property
+    def last_request_tokens(self) -> dict[str, tuple[int, int]]:
+        return self._last_request_tokens
+
+    def is_breaker_open(self, feature: str) -> bool:
+        """Check if circuit breaker is open for a feature."""
+        return self._breaker.is_open(feature)
+
+    @property
+    def session_store(self) -> BridgeSessionStore | None:
+        return self._session_store
+
+    @property
+    def conversation_manager(self) -> ConversationManager:
+        return self._conversation
 
     @property
     def degradation_level(self) -> str:

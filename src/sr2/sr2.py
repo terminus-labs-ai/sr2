@@ -18,6 +18,7 @@ from sr2.memory.dimensions import DimensionalMatcher
 from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
 from sr2.memory.retrieval import HybridRetriever
+from sr2.memory.scope import ScopeDetector
 from sr2.memory.store import InMemoryMemoryStore
 from sr2.metrics.alerts import AlertRuleEngine
 from sr2.metrics.collector import MetricCollector
@@ -49,8 +50,11 @@ class SR2Config:
     """Configuration for the SR2 facade."""
 
     config_dir: str
-    defaults_path: str
     agent_yaml: dict
+    defaults_path: str | None = None
+    config_filename: str = "agent.yaml"
+    memory_store: Any = None  # Pre-configured MemoryStore (default: InMemoryMemoryStore)
+    extra_resolvers: dict[str, Any] | None = None  # {source_name: resolver_instance}
     fast_complete: Callable | None = None  # async (system, prompt) -> str
     embed: Callable | None = None  # async (text) -> list[float]
     mcp_resource_reader: Callable | None = None  # async (uri, server_name) -> str
@@ -82,7 +86,7 @@ class SR2:
         self._config = config
 
         # Memory stack
-        self._memory_store = InMemoryMemoryStore()
+        self._memory_store = config.memory_store if config.memory_store is not None else InMemoryMemoryStore()
         self._retriever = HybridRetriever(
             store=self._memory_store,
             embedding_callable=config.embed,
@@ -138,10 +142,13 @@ class SR2:
             from sr2.resolvers.mcp_prompt_resolver import MCPPromptResolver
 
             self._resolver_reg.register("mcp_prompt", MCPPromptResolver(config.mcp_prompt_reader))
+        if config.extra_resolvers:
+            for source_name, resolver in config.extra_resolvers.items():
+                self._resolver_reg.register(source_name, resolver)
         self._cache_reg = create_default_cache_registry()
 
         # Compaction + Summarization
-        agent_yaml_path = os.path.join(config.config_dir, "agent.yaml")
+        agent_yaml_path = os.path.join(config.config_dir, config.config_filename)
         agent_config = self._loader.load(agent_yaml_path)
 
         # Pipeline — wire CircuitBreaker from config
@@ -166,6 +173,17 @@ class SR2:
         if scope_config:
             self._retriever._scope_config = scope_config
             self._extractor._scope_config = scope_config
+
+        # Scope detector (auto-detect scope_ref when not provided via env var)
+        self._scope_detector: ScopeDetector | None = None
+        if scope_config and config.fast_complete:
+            self._scope_detector = ScopeDetector(
+                store=self._memory_store,
+                llm_callable=lambda prompt: config.fast_complete(
+                    "You classify conversations into project scopes.", prompt
+                ),
+                scope_config=scope_config,
+            )
 
         self._compaction_engine = CompactionEngine(agent_config.compaction)
         self._summarization_engine = SummarizationEngine(
@@ -280,9 +298,28 @@ class SR2:
         if task_source:
             current_context["source"] = task_source
 
+        # Auto-detect scope_ref if not provided via env var
+        if (
+            "project_id" not in current_context
+            and self._scope_detector is not None
+        ):
+            try:
+                user_msg = str(trigger_input) if trigger_input else None
+                detected = await self._scope_detector.detect(
+                    system_prompt=system_prompt,
+                    user_message=user_msg,
+                    session_id=session_id,
+                )
+                for scope_name, scope_ref in detected.items():
+                    if scope_name != "private" and scope_ref is not None:
+                        current_context["project_id"] = scope_ref
+                        break
+            except Exception:
+                logger.error("Scope detection failed", exc_info=True)
+
         # Inject current_context into retriever for this request
         if current_context:
-            self._retriever._current_context = current_context
+            self._retriever.update_context(current_context)
 
         # Compile context
         ctx = ResolverContext(
@@ -302,14 +339,22 @@ class SR2:
         )
 
         # Build tool state machine from pipeline config
-        tool_defs = [
-            ToolDefinition(
-                name=t["name"],
-                description=t.get("description", ""),
-                raw_parameters=t.get("parameters"),
-            )
-            for t in tool_schemas
-        ]
+        # Support both flat {"name": ...} and OpenAI {"type": "function", "function": {"name": ...}} formats
+        tool_defs = []
+        for t in tool_schemas:
+            if "function" in t and isinstance(t["function"], dict):
+                fn = t["function"]
+                tool_defs.append(ToolDefinition(
+                    name=fn["name"],
+                    description=fn.get("description", ""),
+                    raw_parameters=fn.get("parameters"),
+                ))
+            else:
+                tool_defs.append(ToolDefinition(
+                    name=t["name"],
+                    description=t.get("description", ""),
+                    raw_parameters=t.get("parameters"),
+                ))
         tool_mgmt = ToolManagementConfig(
             tools=tool_defs,
             states=config.tool_states,
@@ -374,6 +419,14 @@ class SR2:
                 _src = os.environ.get("SR2_TASK_SOURCE")
                 if _src:
                     ctx["source"] = _src
+                # Use cached scope detection result if no project_id set
+                if ctx and "project_id" not in ctx and self._scope_detector:
+                    cached = self._scope_detector._cache.get(session_id)
+                    if cached:
+                        for scope_name, scope_ref in cached.items():
+                            if scope_name != "private" and scope_ref is not None:
+                                ctx["project_id"] = scope_ref
+                                break
                 ctx = ctx or None
             # Add tool result turns before the assistant turn so compaction
             # can apply content_type-based rules to tool outputs
@@ -449,6 +502,8 @@ class SR2:
         self._conflict_detector._store = store
         self._conflict_resolver._store = store
         self._extractor._store = store
+        if self._scope_detector is not None:
+            self._scope_detector._store = store
 
     async def set_postgres_store(self, pool) -> None:
         """Late-bind a PostgreSQL memory store.
