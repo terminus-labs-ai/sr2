@@ -71,6 +71,15 @@ class TestDetectLoop:
         assert result.tool_name == "bash"
         assert result.pattern == "same_tool_dominant"
 
+    def test_same_tool_dominant_all_unique_args_no_trigger(self):
+        """Same tool, same results, but every call has unique args — not a loop."""
+        calls = [
+            _record("bash", {"cmd": "grep foo a.py"}, result="not found"),
+            _record("bash", {"cmd": "grep bar b.py"}, result="not found"),
+            _record("bash", {"cmd": "grep baz c.py"}, result="not found"),
+        ]
+        assert not detect_loop(calls, window=6, threshold=3).detected
+
     def test_same_tool_dominant_different_results_no_trigger(self):
         """Same tool dominating but with meaningfully different results is OK."""
         calls = [
