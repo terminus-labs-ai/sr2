@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -130,7 +130,7 @@ class TestCustomKeys:
             mock_cls.return_value = mock_agent
             n = SR2Node("x", "/tmp", task_key="objective")
 
-        await n._execute({"objective": "custom task"})
+        result = await n._execute({"objective": "custom task"})
         call_msg = mock_agent.handle_user_message.call_args[0][0]
         assert call_msg == "custom task"
 
