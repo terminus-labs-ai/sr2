@@ -74,8 +74,14 @@ def detect_loop(
 
     for tool_name, count in name_counts.items():
         if count >= threshold:
+            tool_entries = [tc for tc in recent if tc.tool_name == tool_name]
+            # Check if args show repetition (not all unique)
+            unique_args = {_hash_args(tc.arguments) for tc in tool_entries}
+            if len(unique_args) == count:
+                # Every call has distinct args — agent is exploring, not looping
+                continue
             # Check if results are all similar (same first 200 chars)
-            tool_results = [tc.result[:200] for tc in recent if tc.tool_name == tool_name]
+            tool_results = [tc.result[:200] for tc in tool_entries]
             unique_results = set(tool_results)
             if len(unique_results) <= 1:
                 return LoopDetection(
