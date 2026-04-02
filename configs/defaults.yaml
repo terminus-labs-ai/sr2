@@ -55,6 +55,23 @@ pipeline:
     raw_window: 5
     # Don't compact below this token count
     min_content_size: 100
+    # Cache-cost-aware compaction gating. When enabled, each turn is evaluated
+    # against prompt caching economics before compaction is applied.
+    cost_gate:
+      # Enable cost-aware compaction gating. When True, each compaction
+      # candidate is evaluated against cache invalidation costs before being
+      # compacted.
+      enabled: false
+      # Fallback model name for LiteLLM pricing lookup when the request model is
+      # unknown (e.g., 'claude-sonnet-4-6').
+      fallback_model: null
+      # Custom per-token pricing in $/MTok. Expected keys: 'input',
+      # 'cache_write', 'cache_read'. Takes priority over LiteLLM lookup.
+      custom_pricing: null
+      # Minimum net dollar savings required for compaction to be allowed. Set to
+      # 0 to allow any cost-positive compaction.
+      min_net_savings_usd: 0.001
+
     # Compaction rules. Each rule matches a content_type and applies a strategy.
     # Available strategies: schema_and_sample, reference, result_summary,
     # supersede, collapse.

@@ -172,6 +172,62 @@ Recovery: read_file("/src/sr2/sr2.py")
 
 The agent sees this and can call the tool to re-fetch the full content if needed. This is the key insight: compaction doesn't lose information, it just moves it from "always in context" to "available on demand."
 
+## Cost Gate
+
+When using a provider with prompt caching (Anthropic, OpenAI, etc.), compacting a turn invalidates the KV-cache for every turn that follows it. The cache must be re-written at the `cache_write` rate instead of being read at the cheaper `cache_read` rate. For short conversations this is negligible, but for long ones the invalidation cost can exceed the token savings from compaction.
+
+The **cost gate** evaluates each compaction candidate against cache economics and blocks compaction when it would cost more than it saves.
+
+### How it works
+
+```
+savings     = tokens_saved × input_cost_per_token
+invalidation = tokens_after_turn × (cache_write - cache_read) per token
+net         = savings - invalidation
+
+allowed     = net > min_net_savings_usd
+```
+
+If the net savings are below the threshold, the turn is left uncompacted.
+
+### Configuration
+
+```yaml
+compaction:
+  cost_gate:
+    enabled: true
+    fallback_model: claude-sonnet-4-6
+    min_net_savings_usd: 0.001
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `false` | Enable cost-aware gating. Off by default — no behavioral change unless you opt in. |
+| `fallback_model` | `null` | Model name for LiteLLM pricing lookup when the request model is unknown. |
+| `custom_pricing` | `null` | Override per-token pricing in $/MTok. Keys: `input`, `cache_write`, `cache_read`. |
+| `min_net_savings_usd` | `0.001` | Minimum net dollar savings for compaction to proceed. Set to `0` to allow any cost-positive compaction. |
+
+### Pricing resolution
+
+The gate resolves per-token costs using a four-level fallback chain:
+
+1. **`custom_pricing`** — if provided, used directly (highest priority)
+2. **LiteLLM with `model_hint`** — the model from the current request
+3. **LiteLLM with `fallback_model`** — the configured fallback
+4. **Fail-open** — if no pricing is available, compaction is always allowed
+
+If LiteLLM returns pricing but is missing `cache_write` or `cache_read` fields, the gate logs a warning and falls through to the next level.
+
+### Batch evaluation
+
+When multiple turns are candidates for compaction in a single pass, the gate evaluates them together via `evaluate_batch()`. Each turn's invalidation cost accounts for downstream turns that have already been marked for compaction (and will therefore be shorter), producing more accurate cost estimates than evaluating each turn independently.
+
+### When to enable
+
+- **Long-running agent sessions** with prompt caching enabled — the gate prevents compaction from thrashing the cache.
+- **High-cost models** where cache invalidation is expensive relative to input token costs.
+- **Leave disabled** for short conversations, models without prompt caching, or when you want compaction to always apply.
+
 ## How Compaction Runs
 
 ### Decision Rules (in order)
@@ -181,7 +237,8 @@ The agent sees this and can call the tool to re-fetch the full content if needed
 3. **Never re-compact** — already-compacted turns are skipped (idempotent)
 4. **Skip small content** — below `min_content_size` tokens, not worth compacting
 5. **Skip unmatched types** — if a turn's `content_type` has no matching rule, leave it alone
-6. **Apply the matching rule** — find the first rule where `type` matches and apply its strategy
+6. **Cost gate check** — if the cost gate is enabled and blocks the candidate, leave it alone
+7. **Apply the matching rule** — find the first rule where `type` matches and apply its strategy
 
 ### Timing
 

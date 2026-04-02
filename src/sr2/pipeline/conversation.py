@@ -66,7 +66,7 @@ class ConversationManager:
             len(turn.content) // 4, session_id,
         )
 
-    def run_compaction(self, session_id: str = "default") -> CompactionResult | None:
+    def run_compaction(self, session_id: str = "default", model_hint: str | None = None) -> CompactionResult | None:
         """Run compaction on raw zone, moving compacted turns to compacted zone.
 
         1. If raw zone > raw_window, compact the overflow
@@ -88,7 +88,7 @@ class ConversationManager:
             logger.debug("run_compaction: skipped (total turns %d <= raw_window %d)", len(all_turns), self._raw_window)
             return None
 
-        result = self._compaction.compact(all_turns)
+        result = self._compaction.compact(all_turns, model_hint=model_hint)
 
         if len(result.turns) > self._raw_window:
             zones.compacted = result.turns[: -self._raw_window]
