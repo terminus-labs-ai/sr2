@@ -2,7 +2,7 @@
 
 import asyncio
 
-from runtime.agent import Agent, AgentConfig
+from sr2_runtime.agent import Agent, AgentConfig
 
 
 async def main():
