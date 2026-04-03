@@ -2,7 +2,7 @@
 
 import asyncio
 
-from runtime.integrations.langgraph import SR2Node, SR2GraphState
+from sr2_runtime.integrations.langgraph import SR2Node, SR2GraphState
 
 # Requires: pip install langgraph
 from langgraph.graph import StateGraph, END

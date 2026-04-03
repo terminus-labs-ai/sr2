@@ -56,7 +56,7 @@ For running EDI outside Docker (e.g., for development or debugging).
 
 ```bash
 git clone <repo-url> sr2 && cd sr2
-pip install -e ".[dev]"    # or: uv sync --all-extras
+uv sync --all-extras
 ```
 
 **2. Start PostgreSQL with pgvector**
