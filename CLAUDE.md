@@ -28,7 +28,8 @@ Layer 3: Conversation (append-only) — Session history, compacted/summarized
 - **ContentResolverRegistry** (`packages/sr2/src/sr2/resolvers/registry.py`) — Pluggable content fetchers (13 built-in)
 - **CompactionEngine** (`packages/sr2/src/sr2/compaction/engine.py`) — 5 strategies: schema_and_sample, reference, result_summary, supersede, collapse; optional cost gate (`cost_gate.py`, `pricing.py`) blocks compaction when cache invalidation cost exceeds token savings
 - **SummarizationEngine** (`packages/sr2/src/sr2/summarization/engine.py`) — LLM-powered structured digests
-- **Memory System** (`packages/sr2/src/sr2/memory/`) — Extraction, hybrid retrieval (semantic+keyword), conflict resolution
+- **Memory System** (`packages/sr2/src/sr2/memory/`) — Extraction, hybrid retrieval (semantic+keyword), conflict resolution, pluggable store backends via registry
+- **Extension Registries** (`memory/registry.py`, `metrics/registry.py`, `degradation/registry.py`) — Entry-point-based plugin discovery for stores, exporters, and degradation policies
 - **ToolStateMachine** (`packages/sr2/src/sr2/tools/state_machine.py`) — Named states with dynamic tool masking
 - **CircuitBreaker** (`packages/sr2/src/sr2/degradation/circuit_breaker.py`) — Per-layer graceful degradation
 - **Heartbeat System** (`packages/sr2-runtime/src/sr2_runtime/heartbeat/`) — Scheduled future agent callbacks with DB persistence, idempotent keys, context carry-over
