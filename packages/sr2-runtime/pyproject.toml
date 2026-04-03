@@ -14,7 +14,6 @@ telegram = ["python-telegram-bot>=21.0"]
 mcp = ["mcp>=1.0"]
 a2a = ["a2a-sdk>=0.3"]
 langgraph = ["langgraph>=0.2.0"]
-postgres = ["asyncpg>=0.29"]
 
 [project.scripts]
 sr2-agent = "sr2_runtime.cli:main"

@@ -21,7 +21,6 @@ from sr2.memory.retrieval import HybridRetriever
 from sr2.memory.scope import ScopeDetector
 from sr2.memory.registry import get_store
 from sr2.memory.store import InMemoryMemoryStore
-from sr2.metrics.alerts import AlertRuleEngine
 from sr2.metrics.collector import MetricCollector
 from sr2.metrics.definitions import MetricNames
 from sr2.pipeline.conversation import ConversationManager
@@ -40,8 +39,7 @@ from sr2.summarization.engine import SummarizationEngine
 from sr2.tools.models import ToolDefinition, ToolManagementConfig
 from sr2.tools.state_machine import ToolStateMachine
 
-# Lazy import to avoid hard asyncpg dependency
-# from sr2.memory.store import PostgresMemoryStore
+from sr2.metrics.registry import get_exporter
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +219,7 @@ class SR2:
 
         # Metrics
         self._collector = MetricCollector(config.agent_yaml.get("name", "agent"))
-        self._alerts = AlertRuleEngine()
+        self._alerts = None  # Available via sr2-pro (AlertRuleEngine)
 
         # Session tracking for new metrics
         self._session_start_times: dict[str, float] = {}
@@ -229,10 +227,12 @@ class SR2:
         self._token_savings_cumulative: dict[str, float] = {}
         self._token_budget = agent_config.token_budget
 
-        # OpenTelemetry (optional — only if otel extras installed)
+        # Premium observability (sr2-pro): OTel + Alerts
         try:
-            from sr2.metrics.otel_exporter import OTelExporter
+            from sr2_pro.metrics.alerts import AlertRuleEngine
+            from sr2_pro.metrics.otel import OTelExporter
 
+            self._alerts = AlertRuleEngine()
             self._otel = OTelExporter(self._collector)
         except ImportError:
             self._otel = None
@@ -516,16 +516,9 @@ class SR2:
     async def set_postgres_store(self, pool) -> None:
         """Late-bind a PostgreSQL memory store.
 
-        Uses the store registry for resolution, falling back to direct import
-        for backward compatibility.
+        Requires sr2-pro to be installed. Resolves via the store registry.
         """
-        try:
-            store_cls = get_store("postgres")
-        except ImportError:
-            # Fall back to direct import if registry doesn't have postgres
-            # (e.g. sr2-pro not installed but PostgresMemoryStore still in core)
-            from sr2.memory.store import PostgresMemoryStore as store_cls
-
+        store_cls = get_store("postgres")
         store = store_cls(pool)
         await store.create_tables()
         self.set_memory_store(store)
@@ -708,8 +701,9 @@ class SR2:
                 zone_transition=transition_type,
             )
 
-        # Fire alert checks
-        await self._alerts.check(snapshot)
+        # Fire alert checks (sr2-pro)
+        if self._alerts is not None:
+            await self._alerts.check(snapshot)
 
     def compare_prefix(
         self,
@@ -725,11 +719,13 @@ class SR2:
         return self._engine._prefix_tracker.compare(compiled_snapshot, cached_tokens)
 
     def export_metrics(self) -> str:
-        """Export collected metrics in Prometheus text exposition format."""
-        from sr2.metrics.exporter import PrometheusExporter
+        """Export collected metrics in Prometheus text exposition format.
 
+        Requires sr2-pro to be installed for the PrometheusExporter.
+        """
         if not hasattr(self, "_exporter"):
-            self._exporter = PrometheusExporter(self._collector)
+            exporter_cls = get_exporter("prometheus")
+            self._exporter = exporter_cls(self._collector)
         return self._exporter.export()
 
 

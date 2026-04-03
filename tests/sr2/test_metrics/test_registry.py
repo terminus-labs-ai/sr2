@@ -10,21 +10,26 @@ from sr2.metrics.registry import (
     list_exporters,
     register_exporter,
 )
-from sr2.metrics.exporter import PrometheusExporter
+
+
+class _StubExporter:
+    """Stub exporter for testing registry mechanics."""
+
+    pass
 
 
 @pytest.fixture(autouse=True)
 def clean_registry():
     """Reset registry before and after each test."""
     _reset_registry()
-    register_exporter("prometheus", PrometheusExporter)
+    register_exporter("stub", _StubExporter)
     yield
     _reset_registry()
 
 
 class TestRegisterAndGetExporter:
-    def test_get_builtin_prometheus(self):
-        assert get_exporter("prometheus") is PrometheusExporter
+    def test_get_registered_exporter(self):
+        assert get_exporter("stub") is _StubExporter
 
     def test_register_custom_exporter(self):
         class CustomExporter:
@@ -43,7 +48,7 @@ class TestRegisterAndGetExporter:
 
     def test_list_exporters(self):
         exporters = list_exporters()
-        assert "prometheus" in exporters
+        assert "stub" in exporters
 
 
 class TestEntryPointDiscovery:

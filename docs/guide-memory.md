@@ -25,7 +25,7 @@ SR2's memory system extracts structured facts from conversations, detects confli
          │
          ▼
   ┌──────────────┐
-  │  Store        │  Saves to InMemoryMemoryStore or PostgresMemoryStore
+  │  Store        │  Saves to InMemoryMemoryStore, SQLiteMemoryStore, or PostgresMemoryStore (sr2-pro)
   └──────────────┘
 
   Later, on a new turn:
@@ -236,6 +236,8 @@ Detection results are cached for the session lifetime. Call `scope_detector.inva
 Default. All memories live in a Python dict. Fast, no dependencies, but lost on restart.
 
 ### PostgresMemoryStore
+
+> **Requires sr2-pro.** Install with `pip install sr2-pro`. See [sr2.dev/pricing](https://sr2.dev/pricing).
 
 Persistent storage using PostgreSQL with vector search support (pgvector). Requires `asyncpg`:
 

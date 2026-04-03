@@ -14,11 +14,6 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
 a2a = ["a2a-sdk>=0.3"]
-postgres = ["asyncpg>=0.29"]
-otel = [
-    "opentelemetry-api>=1.20",
-    "opentelemetry-sdk>=1.20",
-]
 
 [project.scripts]
 sr2-config-docs = "schema_gen:main"

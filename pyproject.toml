@@ -18,9 +18,9 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-    "sr2[mcp,a2a,postgres,otel]",
+    "sr2[mcp,a2a]",
     "sr2-bridge",
-    "sr2-runtime[telegram,mcp,a2a,langgraph,postgres]",
+    "sr2-runtime[telegram,mcp,a2a,langgraph]",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.0",

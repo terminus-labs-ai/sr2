@@ -36,9 +36,13 @@ async def pg_pool():
 
 @pytest.fixture
 async def pg_store(pg_pool):
-    """Create a PostgresMemoryStore with tables initialized."""
-    from sr2.memory.store import PostgresMemoryStore
+    """Create a PostgresMemoryStore with tables initialized.
 
-    store = PostgresMemoryStore(pg_pool)
+    Requires sr2-pro to be installed.
+    """
+    from sr2.memory.registry import get_store
+
+    store_cls = get_store("postgres")
+    store = store_cls(pg_pool)
     await store.create_tables()
     return store

@@ -90,12 +90,14 @@ for stage in result.stages:
 Or export metrics to Prometheus:
 
 ```python
-from sr2.metrics.exporter import PrometheusExporter
+from sr2_pro.metrics.prometheus import PrometheusExporter  # requires sr2-pro
 
 exporter = PrometheusExporter()
 exporter.export(result)
 # Metrics include: sr2_circuit_breaker_status, sr2_degradation_events
 ```
+
+> **PrometheusExporter requires sr2-pro.** Install with `pip install sr2-pro`. See [sr2.dev/pricing](https://sr2.dev/pricing).
 
 ## Best Practices
 

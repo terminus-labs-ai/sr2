@@ -7,6 +7,8 @@ SR2 exposes 43 metrics covering cache performance, compaction, retrieval, token 
 
 Both can run simultaneously.
 
+> **Prometheus, OTel, and Alert features require sr2-pro.** Install with `pip install sr2-pro`.
+
 ## Architecture
 
 ```
