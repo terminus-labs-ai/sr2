@@ -98,10 +98,11 @@ docker compose -f docker-compose.nvidia.yaml up      # NVIDIA GPU / CPU
 
 ## Testing
 
-- **844 tests** across 77 test files in `tests/`
+- **1204 tests** across test files in `tests/`
 - `pytest-asyncio` in auto mode (fixtures auto-marked)
 - Unit tests cover: pipeline, compaction, summarization, memory, config, resolvers, tools
-- Integration tests in `tests/integration/` require PostgreSQL
+- Integration tests in `tests/integration/` require PostgreSQL + sr2-pro
+- Premium code (PostgresMemoryStore, OTel/Prometheus exporters, AlertRuleEngine) lives in sr2-pro repo (`~/git/sr2-pro`)
 - Pre-commit hooks: `ruff check` + `ruff format --check`
 
 ## Key Design Decisions
