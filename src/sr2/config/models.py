@@ -72,6 +72,30 @@ class CompactionRuleConfig(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class CostGateConfig(BaseModel):
+    enabled: bool = Field(
+        default=False,
+        description="Enable cost-aware compaction gating. When True, each compaction candidate "
+        "is evaluated against cache invalidation costs before being compacted.",
+    )
+    fallback_model: str | None = Field(
+        default=None,
+        description="Fallback model name for LiteLLM pricing lookup when the request model "
+        "is unknown (e.g., 'claude-sonnet-4-6').",
+    )
+    custom_pricing: dict[str, float] | None = Field(
+        default=None,
+        description="Custom per-token pricing in $/MTok. Expected keys: 'input', 'cache_write', "
+        "'cache_read'. Takes priority over LiteLLM lookup.",
+    )
+    min_net_savings_usd: float = Field(
+        default=0.001,
+        ge=0.0,
+        description="Minimum net dollar savings required for compaction to be allowed. "
+        "Set to 0 to allow any cost-positive compaction.",
+    )
+
+
 class CompactionConfig(BaseModel):
     enabled: bool = Field(
         default=True,
@@ -81,6 +105,11 @@ class CompactionConfig(BaseModel):
     )
     raw_window: int = Field(default=5, description="Keep last N turns in full detail")
     min_content_size: int = Field(default=100, description="Don't compact below this token count")
+    cost_gate: CostGateConfig = Field(
+        default_factory=CostGateConfig,
+        description="Cache-cost-aware compaction gating. When enabled, each turn is evaluated "
+        "against prompt caching economics before compaction is applied.",
+    )
     rules: list[CompactionRuleConfig] = Field(
         default_factory=list,
         description="Compaction rules. Each rule matches a content_type and applies a strategy. "

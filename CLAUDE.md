@@ -26,7 +26,7 @@ Layer 3: Conversation (append-only) — Session history, compacted/summarized
 - **PipelineEngine** (`src/sr2/pipeline/engine.py`) — Core compilation, token budgets, cache tracking
 - **InterfaceRouter** (`src/sr2/pipeline/router.py`) — Routes triggers to pipeline configs
 - **ContentResolverRegistry** (`src/sr2/resolvers/registry.py`) — Pluggable content fetchers (13 built-in)
-- **CompactionEngine** (`src/sr2/compaction/engine.py`) — 5 strategies: schema_and_sample, reference, result_summary, supersede, collapse
+- **CompactionEngine** (`src/sr2/compaction/engine.py`) — 5 strategies: schema_and_sample, reference, result_summary, supersede, collapse; optional cost gate (`cost_gate.py`, `pricing.py`) blocks compaction when cache invalidation cost exceeds token savings
 - **SummarizationEngine** (`src/sr2/summarization/engine.py`) — LLM-powered structured digests
 - **Memory System** (`src/sr2/memory/`) — Extraction, hybrid retrieval (semantic+keyword), conflict resolution
 - **ToolStateMachine** (`src/sr2/tools/state_machine.py`) — Named states with dynamic tool masking

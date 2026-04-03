@@ -97,6 +97,7 @@ Model: `CompactionConfig`
 | `enabled` | boolean | `true` |  | Enable compaction. When True, verbose tool outputs and file contents are replaced with compact references. Compacted content can be re-fetched by the agent using just-in-time retrieval tools. |
 | `raw_window` | integer | `5` |  | Keep last N turns in full detail |
 | `min_content_size` | integer | `100` |  | Don't compact below this token count |
+| `cost_gate` | object | — |  | Cache-cost-aware compaction gating. See [Cost Gate](#cost-gate) below. |
 | `rules` | list[any] | — |  | Compaction rules. Each rule matches a content_type and applies a strategy. Available strategies: schema_and_sample, reference, result_summary, supersede, collapse. |
 
 **Example:**
@@ -104,6 +105,7 @@ Model: `CompactionConfig`
 enabled: true
 raw_window: 5
 min_content_size: 100
+cost_gate: <cost_gate>
 rules: []
 ```
 
@@ -124,6 +126,35 @@ type: <type>
 strategy: <strategy>
 max_compacted_tokens: 80
 recovery_hint: false
+```
+
+#### Cost Gate
+
+Model: `CostGateConfig`
+
+| Field | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `enabled` | boolean | `false` |  | Enable cost-aware compaction gating. When True, each compaction candidate is evaluated against cache invalidation costs before being compacted. |
+| `fallback_model` | string \| null | `null` |  | Fallback model name for LiteLLM pricing lookup when the request model is unknown (e.g., 'claude-sonnet-4-6'). |
+| `custom_pricing` | object \| null | `null` |  | Custom per-token pricing in $/MTok. Expected keys: `input`, `cache_write`, `cache_read`. Takes priority over LiteLLM lookup. |
+| `min_net_savings_usd` | number | `0.001` |  | Minimum net dollar savings required for compaction to be allowed. Set to 0 to allow any cost-positive compaction. |
+
+**Example:**
+```yaml
+enabled: false
+fallback_model: null
+custom_pricing: null
+min_net_savings_usd: 0.001
+```
+
+**Custom pricing example ($/MTok):**
+```yaml
+cost_gate:
+  enabled: true
+  custom_pricing:
+    input: 15.00        # $15/MTok
+    cache_write: 3.75   # $3.75/MTok
+    cache_read: 0.30    # $0.30/MTok
 ```
 
 ### Summarization
