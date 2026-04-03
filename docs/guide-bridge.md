@@ -10,7 +10,7 @@ Tools like Claude Code send the full message history on every request. As conver
 
 **Terminal 1 — start the bridge:**
 ```bash
-pip install -e ".[bridge]"
+pip install -e packages/sr2-bridge
 sr2-bridge
 ```
 
@@ -304,7 +304,7 @@ class BridgeAdapter(Protocol):
         ...
 ```
 
-An OpenAI adapter stub exists at `src/bridge/adapters/openai.py` for future implementation.
+An OpenAI adapter stub exists at `packages/sr2-bridge/src/sr2_bridge/adapters/openai.py` for future implementation.
 
 ## Troubleshooting
 

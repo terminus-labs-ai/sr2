@@ -163,7 +163,7 @@ contents:
 You set a database URL but don't have the PostgreSQL driver. Install it:
 
 ```bash
-pip install -e ".[postgres]"
+pip install -e "packages/sr2[postgres]"
 ```
 
 ### `ImportError: mcp package not installed`
@@ -171,7 +171,7 @@ pip install -e ".[postgres]"
 MCP servers are configured but the MCP SDK isn't installed:
 
 ```bash
-pip install -e ".[mcp]"
+pip install -e "packages/sr2[mcp]"
 ```
 
 ## Circuit Breakers

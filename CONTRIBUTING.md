@@ -7,8 +7,8 @@
 git clone https://github.com/terminus-labs-ai/sr2.git
 cd sr2
 
-# Install with dev dependencies
-pip install -e ".[dev]"
+# Install all packages + dev dependencies
+uv sync --all-extras
 
 # Install pre-commit hooks
 pre-commit install
@@ -34,7 +34,7 @@ RUN_INTEGRATION=1 pytest tests/integration/ -v
 docker compose -f docker-compose.test.yml down
 
 # Single test file
-pytest tests/test_memory/test_extraction.py -v
+pytest tests/sr2/test_memory/test_extraction.py -v
 ```
 
 ## Linting
@@ -43,13 +43,13 @@ We use [Ruff](https://docs.astral.sh/ruff/) for linting and formatting:
 
 ```bash
 # Check for issues
-ruff check src/
+ruff check packages/
 
 # Auto-fix
-ruff check src/ --fix
+ruff check packages/ --fix
 
 # Format
-ruff format src/
+ruff format packages/
 ```
 
 Config is in `pyproject.toml`: Python 3.12 target, 100-char line length.
@@ -64,29 +64,31 @@ Config is in `pyproject.toml`: Python 3.12 target, 100-char line length.
 ## Project Structure
 
 ```
-src/
-├── sr2/           # The library (pip install -e .)
-│   ├── config/        Config models, loader, validation
-│   ├── pipeline/      Engine, router, conversation manager
-│   ├── resolvers/     Content resolvers
-│   ├── cache/         Cache policies
-│   ├── compaction/    Rule-based content compaction
-│   ├── summarization/ LLM-powered summarization
-│   ├── memory/        Extraction, retrieval, conflicts
-│   ├── degradation/   Circuit breaker, degradation ladder
-│   ├── tools/         Tool state machine, masking
-│   ├── metrics/       Prometheus/OTel exporters
-│   └── a2a/           Agent-to-Agent protocol
+packages/
+├── sr2/src/sr2/           # Core library (PyPI: sr2)
+│   ├── config/            Config models, loader, validation
+│   ├── pipeline/          Engine, router, conversation manager
+│   ├── resolvers/         Content resolvers
+│   ├── cache/             Cache policies
+│   ├── compaction/        Rule-based content compaction
+│   ├── summarization/     LLM-powered summarization
+│   ├── memory/            Extraction, retrieval, conflicts
+│   ├── degradation/       Circuit breaker, degradation ladder
+│   ├── tools/             Tool state machine, masking
+│   ├── metrics/           Prometheus/OTel exporters
+│   └── a2a/               Agent-to-Agent protocol
 │
-├── runtime/       # Agent runtime (optional)
-│   ├── agent.py       Main Agent class
-│   ├── cli.py         CLI entry point
-│   ├── llm/           LiteLLM wrapper, loop
-│   ├── plugins/       Telegram, HTTP, timer, A2A
-│   └── session.py     Session management
+├── sr2-runtime/src/sr2_runtime/  # Agent runtime (PyPI: sr2-runtime)
+│   ├── agent.py           Main Agent class
+│   ├── cli.py             CLI entry point (sr2-agent)
+│   ├── llm/               LiteLLM wrapper, loop
+│   ├── plugins/           Telegram, HTTP, timer, A2A
+│   └── session/           Session management
+│
+└── sr2-bridge/src/sr2_bridge/    # Bridge proxy (PyPI: sr2-bridge)
 │
 configs/           # Example configs
-tests/             # 1,157 tests
+tests/             # 1,191 tests
 examples/          # Runnable examples
 ```
 
@@ -99,7 +101,7 @@ examples/          # Runnable examples
 
 ## Config Changes
 
-If you modify Pydantic models in `src/sr2/config/models.py`, regenerate the config docs:
+If you modify Pydantic models in `packages/sr2/src/sr2/config/models.py`, regenerate the config docs:
 
 ```bash
 python -m schema_gen --format md > docs/configuration.md
@@ -107,9 +109,9 @@ python -m schema_gen --format md > docs/configuration.md
 
 ## Adding a New Resolver
 
-1. Create `src/sr2/resolvers/your_resolver.py` implementing the `ContentResolver` protocol
+1. Create `packages/sr2/src/sr2/resolvers/your_resolver.py` implementing the `ContentResolver` protocol
 2. Register it in `SR2._build_resolver_registry()` or let users register it manually
-3. Add tests in `tests/test_resolvers/`
+3. Add tests in `tests/sr2/test_resolvers/`
 
 The resolver protocol:
 

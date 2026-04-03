@@ -281,7 +281,7 @@ Here's a complete A2A-enabled research agent:
 from fastapi import FastAPI
 from sr2.a2a.app import A2AApp
 from sr2.a2a.card import AgentCardGenerator
-from runtime.agent import Agent
+from sr2_runtime.agent import Agent
 
 # Load agent
 agent = Agent(config_path="configs/agents/research")

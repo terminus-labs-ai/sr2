@@ -68,17 +68,17 @@ Keeps the first few lines as a sample plus a total line count.
 **Before (350 tokens):**
 ```
 [Tool: search_files]
-src/sr2/pipeline/engine.py:14: class PipelineEngine:
-src/sr2/pipeline/engine.py:28:     async def compile(self, config, ctx):
-src/sr2/pipeline/engine.py:45:         for layer in config.layers:
-src/sr2/pipeline/engine.py:52:             resolved = await self._resolve_layer(layer, ctx)
-src/sr2/pipeline/engine.py:67:     async def _resolve_layer(self, layer, ctx):
+packages/sr2/src/sr2/pipeline/engine.py:14: class PipelineEngine:
+packages/sr2/src/sr2/pipeline/engine.py:28:     async def compile(self, config, ctx):
+packages/sr2/src/sr2/pipeline/engine.py:45:         for layer in config.layers:
+packages/sr2/src/sr2/pipeline/engine.py:52:             resolved = await self._resolve_layer(layer, ctx)
+packages/sr2/src/sr2/pipeline/engine.py:67:     async def _resolve_layer(self, layer, ctx):
 ... (20 more lines)
 ```
 
 **After (~30 tokens):**
 ```
--> 25 lines. Sample: src/sr2/pipeline/engine.py:14: class PipelineEngine:, src/sr2/pipeline/engine.py:28:     async def compile...
+-> 25 lines. Sample: packages/sr2/src/sr2/pipeline/engine.py:14: class PipelineEngine:, packages/sr2/src/sr2/pipeline/engine.py:28:     async def compile...
 ```
 
 ### `reference`
@@ -99,13 +99,13 @@ import os
 
 **After (~15 tokens):**
 ```
--> Saved to /src/sr2/sr2.py (200 lines, python, 8.5KB)
+-> Saved to /packages/sr2/src/sr2/sr2.py (200 lines, python, 8.5KB)
 ```
 
 With `recovery_hint: true`:
 ```
--> Saved to /src/sr2/sr2.py (200 lines, python, 8.5KB)
-Recovery: read_file("/src/sr2/sr2.py")
+-> Saved to /packages/sr2/src/sr2/sr2.py (200 lines, python, 8.5KB)
+Recovery: read_file("/packages/sr2/src/sr2/sr2.py")
 ```
 
 ### `result_summary`
@@ -166,8 +166,8 @@ File saved.
 When `recovery_hint: true`, the compacted output includes a line showing how the agent can get the original content back:
 
 ```
--> Saved to /src/sr2/sr2.py (200 lines, python, 8.5KB)
-Recovery: read_file("/src/sr2/sr2.py")
+-> Saved to /packages/sr2/src/sr2/sr2.py (200 lines, python, 8.5KB)
+Recovery: read_file("/packages/sr2/src/sr2/sr2.py")
 ```
 
 The agent sees this and can call the tool to re-fetch the full content if needed. This is the key insight: compaction doesn't lose information, it just moves it from "always in context" to "available on demand."

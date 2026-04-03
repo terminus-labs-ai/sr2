@@ -4,9 +4,9 @@
 
 SR2 is a **context engineering library for AI agents** that manages the full lifecycle of what goes into an LLM's context window. It prevents context blowout (token budget overruns, KV-cache invalidation, agent degradation over long conversations) through a config-driven pipeline of caching, compaction, summarization, and memory management.
 
-- **Library** (`src/sr2/`): ~5,900 LOC, pip-installable, minimal dependencies
-- **Runtime** (`src/runtime/`): ~5,000 LOC, optional agent runtime with HTTP, Telegram, MCP, A2A plugins
-- **Bridge** (`src/bridge/`): Context optimization proxy for external LLM callers (Claude Code, LangChain, etc.)
+- **Library** (`packages/sr2/`): ~5,900 LOC, pip-installable, minimal dependencies
+- **Runtime** (`packages/sr2-runtime/`): ~5,000 LOC, optional agent runtime with HTTP, Telegram, MCP, A2A plugins
+- **Bridge** (`packages/sr2-bridge/`): Context optimization proxy for external LLM callers (Claude Code, LangChain, etc.)
 
 ## Architecture
 
@@ -23,16 +23,16 @@ Layer 3: Conversation (append-only) — Session history, compacted/summarized
 - **Summarized Zone**: Oldest content (structured LLM digest)
 
 ### Key Components
-- **PipelineEngine** (`src/sr2/pipeline/engine.py`) — Core compilation, token budgets, cache tracking
-- **InterfaceRouter** (`src/sr2/pipeline/router.py`) — Routes triggers to pipeline configs
-- **ContentResolverRegistry** (`src/sr2/resolvers/registry.py`) — Pluggable content fetchers (13 built-in)
-- **CompactionEngine** (`src/sr2/compaction/engine.py`) — 5 strategies: schema_and_sample, reference, result_summary, supersede, collapse; optional cost gate (`cost_gate.py`, `pricing.py`) blocks compaction when cache invalidation cost exceeds token savings
-- **SummarizationEngine** (`src/sr2/summarization/engine.py`) — LLM-powered structured digests
-- **Memory System** (`src/sr2/memory/`) — Extraction, hybrid retrieval (semantic+keyword), conflict resolution
-- **ToolStateMachine** (`src/sr2/tools/state_machine.py`) — Named states with dynamic tool masking
-- **CircuitBreaker** (`src/sr2/degradation/circuit_breaker.py`) — Per-layer graceful degradation
-- **Heartbeat System** (`src/runtime/heartbeat/`) — Scheduled future agent callbacks with DB persistence, idempotent keys, context carry-over
-- **BridgeEngine** (`src/bridge/engine.py`) — Context optimization proxy using CompactionEngine + ConversationManager + SummarizationEngine for external LLM callers
+- **PipelineEngine** (`packages/sr2/src/sr2/pipeline/engine.py`) — Core compilation, token budgets, cache tracking
+- **InterfaceRouter** (`packages/sr2/src/sr2/pipeline/router.py`) — Routes triggers to pipeline configs
+- **ContentResolverRegistry** (`packages/sr2/src/sr2/resolvers/registry.py`) — Pluggable content fetchers (13 built-in)
+- **CompactionEngine** (`packages/sr2/src/sr2/compaction/engine.py`) — 5 strategies: schema_and_sample, reference, result_summary, supersede, collapse; optional cost gate (`cost_gate.py`, `pricing.py`) blocks compaction when cache invalidation cost exceeds token savings
+- **SummarizationEngine** (`packages/sr2/src/sr2/summarization/engine.py`) — LLM-powered structured digests
+- **Memory System** (`packages/sr2/src/sr2/memory/`) — Extraction, hybrid retrieval (semantic+keyword), conflict resolution
+- **ToolStateMachine** (`packages/sr2/src/sr2/tools/state_machine.py`) — Named states with dynamic tool masking
+- **CircuitBreaker** (`packages/sr2/src/sr2/degradation/circuit_breaker.py`) — Per-layer graceful degradation
+- **Heartbeat System** (`packages/sr2-runtime/src/sr2_runtime/heartbeat/`) — Scheduled future agent callbacks with DB persistence, idempotent keys, context carry-over
+- **BridgeEngine** (`packages/sr2-bridge/src/sr2_bridge/engine.py`) — Context optimization proxy using CompactionEngine + ConversationManager + SummarizationEngine for external LLM callers
 
 ### Config Inheritance
 ```
@@ -52,22 +52,20 @@ For setting up EDI on a new machine, see **SETUP.md**. Quick summary:
 ## Build & Run
 
 ```bash
-# Install
-pip install -e ".[dev]"          # Development (includes ruff, pytest)
-pip install -e ".[runtime]"      # With runtime plugins
-pip install -e ".[all]"          # Everything
+# Install (all packages + dev deps)
+uv sync --all-extras
 
 # Tests
 pytest tests/ --ignore=tests/integration/ -v
-pytest tests/ --ignore=tests/integration/ --cov=sr2 --cov-report=term-missing
+pytest tests/ --ignore=tests/integration/ --cov=sr2 --cov=sr2_bridge --cov=sr2_runtime --cov-report=term-missing
 
 # Integration tests (requires PostgreSQL with pgvector)
 docker compose -f docker-compose.test.yml up -d
 RUN_INTEGRATION=1 pytest tests/integration/ -v
 
 # Lint (enforced by pre-commit)
-ruff check src/
-ruff format src/
+ruff check packages/
+ruff format packages/
 
 # Run example agent
 sr2-agent configs/agents/edi --http --port 8008
@@ -119,32 +117,37 @@ docker compose -f docker-compose.nvidia.yaml up      # NVIDIA GPU / CPU
 ## Directory Structure
 
 ```
-src/sr2/           # Core library
-  config/          # Pydantic config models, YAML loader
-  pipeline/        # Engine, router, conversation manager, prefix tracker
-  resolvers/       # 13 content resolver implementations
-  cache/           # 7 cache policy classes
-  compaction/      # Rule-based content compaction
-  summarization/   # LLM-powered summarization
-  memory/          # Extraction, retrieval, storage, conflicts
-  tools/           # Tool definitions, state machine, masking
-  degradation/     # Circuit breaker
-  metrics/         # Collector, Prometheus/OTel exporters, alerts
-  normalization/   # Response processing (thinking blocks, etc.)
-  a2a/             # Agent-to-Agent protocol
+packages/
+  sr2/src/sr2/             # Core library (PyPI: sr2)
+    config/                # Pydantic config models, YAML loader
+    pipeline/              # Engine, router, conversation manager, prefix tracker
+    resolvers/             # 13 content resolver implementations
+    cache/                 # 7 cache policy classes
+    compaction/            # Rule-based content compaction
+    summarization/         # LLM-powered summarization
+    memory/                # Extraction, retrieval, storage, conflicts
+    tools/                 # Tool definitions, state machine, masking
+    degradation/           # Circuit breaker
+    metrics/               # Collector, Prometheus/OTel exporters, alerts
+    normalization/         # Response processing (thinking blocks, etc.)
+    a2a/                   # Agent-to-Agent protocol
 
-src/runtime/       # Optional agent runtime
-  llm/             # LiteLLM wrapper, agentic loop, streaming
-  mcp/             # MCP client, transports (stdio/HTTP/SSE)
-  plugins/         # HTTP, Telegram, timer, A2A, single-shot plugins
-  session/         # Session lifecycle management
-  heartbeat/       # Scheduled future agent callbacks (model, store, tools, scanner)
-  bridge/          # Context optimization proxy (sr2-bridge CLI, adapters, engine)
+  sr2-runtime/src/sr2_runtime/  # Agent runtime (PyPI: sr2-runtime)
+    llm/                   # LiteLLM wrapper, agentic loop, streaming
+    mcp/                   # MCP client, transports (stdio/HTTP/SSE)
+    plugins/               # HTTP, Telegram, timer, A2A, single-shot plugins
+    session/               # Session lifecycle management
+    heartbeat/             # Scheduled future agent callbacks
 
-configs/           # Example YAML configurations
-  defaults.yaml    # Library defaults
-  agents/edi/      # Example agent config
+  sr2-bridge/src/sr2_bridge/    # Bridge proxy (PyPI: sr2-bridge)
 
-tests/             # 844 tests
-  integration/     # PostgreSQL integration tests
+configs/                   # Example YAML configurations
+  defaults.yaml            # Library defaults
+  agents/edi/              # Example agent config
+
+tests/                     # 1,191 tests
+  sr2/                     # Core library tests
+  runtime/                 # Runtime tests
+  bridge/                  # Bridge tests
+  integration/             # PostgreSQL integration tests
 ```

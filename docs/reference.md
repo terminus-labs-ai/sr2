@@ -135,7 +135,7 @@ Add to `.vscode/settings.json` for YAML autocomplete + inline validation:
 uv run pytest tests/ --ignore=tests/integration/ -v
 
 # Config tests only
-uv run pytest tests/test_config/ -v
+uv run pytest tests/sr2/test_config/ -v
 
 # With coverage
 uv run pytest tests/ --ignore=tests/integration/ --cov=sr2 --cov-report=term-missing
@@ -149,8 +149,8 @@ docker compose -f docker-compose.test.yaml down
 ## Lint
 
 ```bash
-uv run ruff check src/
-uv run ruff format src/
+uv run ruff check packages/
+uv run ruff format packages/
 ```
 
 ## Config Inheritance
@@ -170,9 +170,9 @@ Deep merge, more specific wins. Use `extends:` to reference parent config.
 | `configs/defaults.yaml` | Library-wide defaults |
 | `configs/agents/edi/agent.yaml` | Agent config (system prompt, tools, LLM, plugins) |
 | `configs/agents/edi/interfaces/` | Per-interface pipeline configs |
-| `src/sr2/` | Core context engineering library |
-| `src/runtime/` | Agent runtime (CLI, LLM loop, plugins, sessions) |
-| `src/bridge/` | Bridge proxy (context optimization for external callers) |
+| `packages/sr2/src/sr2/` | Core context engineering library |
+| `packages/sr2-runtime/src/sr2_runtime/` | Agent runtime (CLI, LLM loop, plugins, sessions) |
+| `packages/sr2-bridge/src/sr2_bridge/` | Bridge proxy (context optimization for external callers) |
 | `tests/` | Unit + integration tests |
 
 ## Creating a New Agent
@@ -499,7 +499,7 @@ Policies:
 
 ### Troubleshooting
 
-- **"mcp package not installed"** — Install with `pip install -e ".[mcp]"` or `uv sync --extra mcp`
+- **"mcp package not installed"** — Install with `pip install -e "packages/sr2[mcp]"` or `uv sync --extra mcp`
 - **Server fails to connect** — The agent logs the error and continues without that server's tools. Other servers are unaffected.
 - **Tool not showing up** — Check that the tool name in `tools:` matches exactly what the server reports. Run the server standalone to see its tool list.
 - **Resources/prompts not discovered** — The server must support these capabilities. Check logs for "does not support resources/prompts" debug messages.

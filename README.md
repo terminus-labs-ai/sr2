@@ -53,20 +53,13 @@ Layers are ordered most-stable to least-stable. The system prompt never changes,
 git clone https://github.com/terminus-labs-ai/sr2.git
 cd sr2
 
-# Core library (pydantic, pyyaml, litellm, python-dotenv, aiosqlite)
-pip install -e .
+# Install everything (recommended for development)
+uv sync --all-extras
 
-# With the agent runtime (FastAPI + uvicorn)
-pip install -e ".[runtime]"
-
-# With the bridge proxy (for Claude Code, LangChain, etc.)
-pip install -e ".[bridge]"
-
-# Everything
-pip install -e ".[all]"
-
-# Development
-pip install -e ".[dev]"
+# Or install individual packages
+pip install -e packages/sr2                # Core library only
+pip install -e packages/sr2-runtime        # Agent runtime (depends on sr2)
+pip install -e packages/sr2-bridge         # Bridge proxy (depends on sr2)
 ```
 
 ## Quick Start
@@ -255,50 +248,48 @@ Context breakdown (managed):
 
 SR2 is a **library**, not a framework. It compiles context — your code owns the LLM call, tool execution, and agent loop.
 
-The repo includes an **agent runtime** (`src/runtime/`) that wires the library into a working agent with an LLM loop, session management, Telegram/HTTP/timer plugins, and MCP tool integration. Use it as-is or as a reference for your own integration.
+The repo includes an **agent runtime** (`packages/sr2-runtime/`) that wires the library into a working agent with an LLM loop, session management, Telegram/HTTP/timer plugins, and MCP tool integration. Use it as-is or as a reference for your own integration.
 
 ```
-src/
-├── sr2/           # The library (pip install -e .)
-│   ├── config/        #   Config models, loader, validation, schema gen
-│   ├── pipeline/      #   Engine, router, conversation manager, post-processor
-│   ├── resolvers/     #   Content resolvers (config, input, session, retrieval, etc.)
-│   ├── cache/         #   Cache policies and registry
-│   ├── compaction/    #   Rule-based content compaction
-│   ├── summarization/ #   LLM-powered conversation summarization
-│   ├── memory/        #   Extraction, retrieval, conflicts, resolution
-│   ├── degradation/   #   Circuit breaker and degradation ladder
-│   ├── tools/         #   Tool definitions, state machine, masking strategies
-│   ├── metrics/       #   Collector, exporter, alerts
-│   ├── tokenization/  #   Pluggable tokenizers (heuristic, tiktoken)
-│   ├── normalization/ #   LLM response cleaning (thinking blocks, markdown, JSON extraction)
-│   ├── eval/          #   Multi-turn evaluation framework and benchmarking
-│   └── a2a/           #   Agent-to-Agent protocol support
+packages/
+├── sr2/                   # Core context engineering library (PyPI: sr2)
+│   └── src/sr2/
+│       ├── config/        #   Config models, loader, validation, schema gen
+│       ├── pipeline/      #   Engine, router, conversation manager, post-processor
+│       ├── resolvers/     #   Content resolvers (config, input, session, retrieval, etc.)
+│       ├── cache/         #   Cache policies and registry
+│       ├── compaction/    #   Rule-based content compaction
+│       ├── summarization/ #   LLM-powered conversation summarization
+│       ├── memory/        #   Extraction, retrieval, conflicts, resolution
+│       ├── degradation/   #   Circuit breaker and degradation ladder
+│       ├── tools/         #   Tool definitions, state machine, masking strategies
+│       ├── metrics/       #   Collector, exporter, alerts
+│       ├── tokenization/  #   Pluggable tokenizers (heuristic, tiktoken)
+│       ├── normalization/ #   LLM response cleaning (thinking blocks, markdown, JSON)
+│       ├── eval/          #   Multi-turn evaluation framework and benchmarking
+│       └── a2a/           #   Agent-to-Agent protocol support
 │
-├── runtime/           # Agent runtime (optional, uses the library)
-│   ├── agent.py       #   Main Agent class
-│   ├── cli.py         #   CLI entry point
-│   ├── config.py      #   Runtime configuration
-│   ├── http.py        #   HTTP server and endpoints
-│   ├── tool_executor.py #  Tool execution and MCP integration
-│   ├── llm/           #   LLM client, agentic loop, streaming
-│   ├── mcp/           #   MCP client and transports
-│   ├── plugins/       #   Interface plugins (http, telegram, timer, a2a, single-shot)
-│   ├── session/       #   Session lifecycle management
-│   ├── heartbeat/     #   Scheduled agent callbacks
+├── sr2-runtime/           # Agent runtime (PyPI: sr2-runtime, depends on sr2)
+│   └── src/sr2_runtime/
+│       ├── agent.py       #   Main Agent class
+│       ├── cli.py         #   CLI entry point (sr2-agent)
+│       ├── llm/           #   LLM client, agentic loop, streaming
+│       ├── mcp/           #   MCP client and transports
+│       ├── plugins/       #   Interface plugins (http, telegram, timer, a2a, single-shot)
+│       ├── session/       #   Session lifecycle management
+│       └── heartbeat/     #   Scheduled agent callbacks
 │
-src/bridge/              # Context optimization proxy for external LLM callers
+└── sr2-bridge/            # Context optimization proxy (PyPI: sr2-bridge, depends on sr2)
+    └── src/sr2_bridge/
 │
 configs/               # Example configs
 │   ├── defaults.yaml  #   Library defaults
 │   └── agents/edi/    #   Example agent
 │
-tests/                 # 1,157 tests
-│   ├── test_config/
-│   ├── test_pipeline/
-│   ├── test_memory/
-│   ├── test_compaction/
-│   └── ...
+tests/                 # 1,191 tests
+│   ├── sr2/           #   Core library tests
+│   ├── runtime/       #   Runtime tests
+│   └── bridge/        #   Bridge tests
 ```
 
 ## Running the Bridge
@@ -306,8 +297,8 @@ tests/                 # 1,157 tests
 The bridge optimizes context for external LLM callers like Claude Code.
 
 ```bash
-# Install bridge dependencies
-pip install -e ".[bridge]"
+# Install bridge
+pip install -e packages/sr2-bridge
 
 # Terminal 1: start the bridge (zero-config)
 sr2-bridge
@@ -324,7 +315,7 @@ The repo includes an example agent as a working reference.
 
 ```bash
 # Install everything
-pip install -e ".[all]"
+uv sync --all-extras
 
 # Run with HTTP API
 sr2-agent configs/agents/edi --http --port 8008
@@ -346,7 +337,7 @@ The example agent requires Ollama running locally (see `configs/agents/edi/agent
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev]"
+uv sync --all-extras
 
 # Run tests
 pytest tests/ --ignore=tests/integration/ -v
@@ -357,8 +348,8 @@ RUN_INTEGRATION=1 pytest tests/integration/ -v
 docker compose -f docker-compose.test.yml down
 
 # Lint
-ruff check src/
-ruff format src/
+ruff check packages/
+ruff format packages/
 
 # Generate config docs from Pydantic models
 sr2-config-docs --format md > docs/configuration.md
