@@ -11,8 +11,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --all-extras
-      - run: uv run pytest tests/ -v --ignore=tests/integration/ --cov=sr2 --cov-report=term-missing
-      - run: uv run ruff check src/
+      - run: uv run pytest tests/ -v --ignore=tests/integration/ --cov=sr2 --cov=sr2_bridge --cov=sr2_runtime --cov-report=term-missing
+      - run: uv run ruff check packages/
       - name: Verify config schema is up to date
         run: |
           uv run python -m schema_gen --format json > schema.json.new
