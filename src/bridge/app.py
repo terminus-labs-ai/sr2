@@ -10,6 +10,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
 from bridge.adapters.anthropic import AnthropicAdapter
+from bridge.adapters.base import BridgeAdapter
+from bridge.adapters.openai import OpenAIAdapter
 from bridge.config import BridgeConfig
 from bridge.engine import BridgeEngine
 from bridge.forwarder import BridgeForwarder
@@ -62,11 +64,12 @@ def _log_token_reduction(
 def _build_streaming_response(
     forwarder: BridgeForwarder,
     engine: BridgeEngine,
-    adapter: AnthropicAdapter,
+    adapter: BridgeAdapter,
     body: dict,
     headers: dict[str, str],
     session: BridgeSession,
     query_params: str | None,
+    upstream_path: str = "/v1/messages",
 ) -> StreamingResponse:
     """Build a streaming response that captures text for post-processing."""
     return StreamingResponse(
@@ -78,6 +81,7 @@ def _build_streaming_response(
             headers,
             session,
             query_params=query_params,
+            upstream_path=upstream_path,
         ),
         media_type="text/event-stream",
         headers={
@@ -93,10 +97,11 @@ async def _build_sync_response(
     body: dict,
     headers: dict[str, str],
     query_params: str | None,
+    upstream_path: str = "/v1/messages",
 ) -> Response:
     """Build a non-streaming response."""
     response = await forwarder.forward(
-        "/v1/messages",
+        upstream_path,
         body,
         headers,
         query_params=query_params or None,
@@ -162,17 +167,25 @@ def create_bridge_app(
             logger.info("SR2 Bridge stopped")
 
     app = FastAPI(title="SR2 Bridge", lifespan=lifespan)
-    adapter = AnthropicAdapter(tool_type_overrides=bridge_config.tool_type_overrides or None)
+    anthropic_adapter = AnthropicAdapter(
+        tool_type_overrides=bridge_config.tool_type_overrides or None,
+    )
+    openai_adapter = OpenAIAdapter(
+        tool_type_overrides=bridge_config.tool_type_overrides or None,
+    )
     _key_cache = key_cache or APIKeyCache()
 
     # Track startup time for health endpoint
     start_time = time.time()
 
-    # --- Main proxy route ---
+    # --- Shared proxy logic ---
 
-    @app.post("/v1/messages")
-    async def proxy_messages(request: Request):
-        """Main proxy route: optimize context, forward to upstream, stream back."""
+    async def _proxy_request(
+        request: Request,
+        adapter: BridgeAdapter,
+        upstream_path: str,
+    ):
+        """Shared proxy handler: optimize context, forward to upstream."""
         body = await request.json()
         headers = dict(request.headers)
         is_streaming = body.get("stream", False)
@@ -231,6 +244,7 @@ def create_bridge_app(
                 headers,
                 session,
                 query_params=request.url.query,
+                upstream_path=upstream_path,
             )
         else:
             return await _build_sync_response(
@@ -239,7 +253,20 @@ def create_bridge_app(
                 optimized_body,
                 headers,
                 query_params=request.url.query,
+                upstream_path=upstream_path,
             )
+
+    # --- API routes ---
+
+    @app.post("/v1/messages")
+    async def proxy_messages(request: Request):
+        """Anthropic Messages API proxy."""
+        return await _proxy_request(request, anthropic_adapter, "/v1/messages")
+
+    @app.post("/v1/chat/completions")
+    async def proxy_chat_completions(request: Request):
+        """OpenAI Chat Completions API proxy."""
+        return await _proxy_request(request, openai_adapter, "/v1/chat/completions")
 
     # --- Infrastructure endpoints ---
 
@@ -298,17 +325,18 @@ def _log_task_exception(task: asyncio.Task) -> None:
 async def _stream_and_capture(
     forwarder: BridgeForwarder,
     engine: BridgeEngine,
-    adapter: AnthropicAdapter,
+    adapter: BridgeAdapter,
     body: dict,
     headers: dict[str, str],
     session: BridgeSession,
     query_params: str | None = None,
+    upstream_path: str = "/v1/messages",
 ):
     """Stream SSE from upstream, passthrough each chunk, accumulate response text."""
     accumulated: list[str] = []
 
     async for chunk in forwarder.forward_streaming(
-        "/v1/messages",
+        upstream_path,
         body,
         headers,
         query_params=query_params or None,
