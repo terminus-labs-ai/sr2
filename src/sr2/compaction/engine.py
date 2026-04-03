@@ -3,6 +3,7 @@
 import logging
 from dataclasses import dataclass
 
+from sr2.compaction.cost_gate import CompactionCostGate
 from sr2.compaction.rules import CompactionInput, get_rule
 from sr2.config.models import CompactionConfig
 
@@ -37,6 +38,9 @@ class CompactionEngine:
     def __init__(self, config: CompactionConfig):
         self._config = config
         self._rule_map = self._build_rule_map()
+        self._cost_gate: CompactionCostGate | None = None
+        if config.cost_gate.enabled:
+            self._cost_gate = CompactionCostGate(config.cost_gate)
 
     @property
     def raw_window(self) -> int:
@@ -51,7 +55,11 @@ class CompactionEngine:
             result[rule_config.type] = (rule_config, rule)
         return result
 
-    def compact(self, turns: list[ConversationTurn]) -> CompactionResult:
+    def compact(
+        self,
+        turns: list[ConversationTurn],
+        model_hint: str | None = None,
+    ) -> CompactionResult:
         """Apply compaction to turns outside the raw window.
 
         Rules:
@@ -60,6 +68,7 @@ class CompactionEngine:
         3. Never compact already-compacted turns
         4. Skip content below min_content_size tokens
         5. Match turn's content_type to rule, apply if found
+        6. If cost gate is enabled, only compact if net-positive
         """
         raw_window = self._config.raw_window
         min_size = self._config.min_content_size
@@ -120,6 +129,33 @@ class CompactionEngine:
                 "Turn %d: matched content_type=%r -> strategy=%r (%d tokens before)",
                 turn.turn_number, turn.content_type, rule_config.strategy, est_tokens,
             )
+
+            # Cost gate: estimate savings vs cache invalidation cost
+            if self._cost_gate is not None:
+                # Estimate compacted size as ~25% of original (heuristic)
+                estimated_compacted = max(est_tokens // 4, 10)
+                # Tokens after this turn = sum of all remaining compactable + protected
+                idx = compactable.index(turn)
+                tokens_after = sum(
+                    len(t.content) // 4 for t in compactable[idx + 1 :]
+                ) + sum(len(t.content) // 4 for t in protected)
+
+                decision = self._cost_gate.should_compact(
+                    turn_index=turn.turn_number,
+                    turn_tokens=est_tokens,
+                    estimated_compacted_tokens=estimated_compacted,
+                    total_tokens_after_turn=tokens_after,
+                    model_hint=model_hint,
+                )
+                if not decision.allowed:
+                    logger.info(
+                        "Turn %d: cost gate blocked compaction — %s",
+                        turn.turn_number,
+                        decision.reason,
+                    )
+                    compacted_tokens += est_tokens
+                    continue
+
             inp = CompactionInput(
                 content=turn.content,
                 content_type=turn.content_type,
