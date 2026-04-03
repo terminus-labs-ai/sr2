@@ -317,6 +317,17 @@ class MemoryConfig(BaseModel):
         description="Whether to automatically extract memories from conversation turns. "
         "When False, memories can still be saved explicitly via save_memory tool.",
     )
+    store: str = Field(
+        default="memory",
+        description="Memory store backend name. Built-in: 'memory' (in-memory), 'sqlite'. "
+        "Additional backends (e.g. 'postgres') available via plugins like sr2-pro.",
+    )
+    store_kwargs: dict = Field(
+        default_factory=dict,
+        description="Keyword arguments passed to the memory store constructor. "
+        "E.g. {'db_path': '/tmp/sr2.db'} for SQLite, "
+        "{'dsn': 'postgresql://...'} for PostgreSQL.",
+    )
     scope: MemoryScopeConfig | None = Field(
         default=None,
         description="Scope configuration for memory isolation and sharing. "

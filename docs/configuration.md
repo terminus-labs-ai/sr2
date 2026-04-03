@@ -97,7 +97,7 @@ Model: `CompactionConfig`
 | `enabled` | boolean | `true` |  | Enable compaction. When True, verbose tool outputs and file contents are replaced with compact references. Compacted content can be re-fetched by the agent using just-in-time retrieval tools. |
 | `raw_window` | integer | `5` |  | Keep last N turns in full detail |
 | `min_content_size` | integer | `100` |  | Don't compact below this token count |
-| `cost_gate` | object | — |  | Cache-cost-aware compaction gating. See [Cost Gate](#cost-gate) below. |
+| `cost_gate` | any | — |  | Cache-cost-aware compaction gating. When enabled, each turn is evaluated against prompt caching economics before compaction is applied. |
 | `rules` | list[any] | — |  | Compaction rules. Each rule matches a content_type and applies a strategy. Available strategies: schema_and_sample, reference, result_summary, supersede, collapse. |
 
 **Example:**
@@ -128,35 +128,6 @@ max_compacted_tokens: 80
 recovery_hint: false
 ```
 
-#### Cost Gate
-
-Model: `CostGateConfig`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `enabled` | boolean | `false` |  | Enable cost-aware compaction gating. When True, each compaction candidate is evaluated against cache invalidation costs before being compacted. |
-| `fallback_model` | string \| null | `null` |  | Fallback model name for LiteLLM pricing lookup when the request model is unknown (e.g., 'claude-sonnet-4-6'). |
-| `custom_pricing` | object \| null | `null` |  | Custom per-token pricing in $/MTok. Expected keys: `input`, `cache_write`, `cache_read`. Takes priority over LiteLLM lookup. |
-| `min_net_savings_usd` | number | `0.001` |  | Minimum net dollar savings required for compaction to be allowed. Set to 0 to allow any cost-positive compaction. |
-
-**Example:**
-```yaml
-enabled: false
-fallback_model: null
-custom_pricing: null
-min_net_savings_usd: 0.001
-```
-
-**Custom pricing example ($/MTok):**
-```yaml
-cost_gate:
-  enabled: true
-  custom_pricing:
-    input: 15.00        # $15/MTok
-    cache_write: 3.75   # $3.75/MTok
-    cache_read: 0.30    # $0.30/MTok
-```
-
 ### Summarization
 
 Model: `SummarizationConfig`
@@ -172,6 +143,7 @@ Model: `SummarizationConfig`
 | `injection` | enum | `"flat"` |  | How summaries are injected into context. 'flat' inserts the full summary as a single block. 'selective' inserts only the sections relevant to the current topic (requires intent detection). |
 | `preserve` | list[string] | — |  | Categories of information to always preserve in summaries. These categories are extracted and retained even under heavy token pressure. |
 | `discard` | list[string] | — |  | Categories of information to discard during summarization. Content matching these categories is dropped to save tokens. |
+| `compacted_max_tokens` | integer | `6000` |  | Maximum token budget for the compacted zone before summarization triggers. Summarization fires when compacted_tokens > threshold * compacted_max_tokens. For heavy-traffic proxies (e.g. Claude Code), raise to 50000-100000. |
 
 **`trigger` values:** `token_threshold`, `topic_shift`, `manual`
 
@@ -190,6 +162,7 @@ output_format: structured
 injection: flat
 preserve: []
 discard: []
+compacted_max_tokens: 6000
 ```
 
 ### Retrieval

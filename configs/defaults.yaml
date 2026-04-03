@@ -186,6 +186,14 @@ pipeline:
     # Whether to automatically extract memories from conversation turns. When
     # False, memories can still be saved explicitly via save_memory tool.
     extract: true
+    # Memory store backend name. Built-in: 'memory' (in-memory), 'sqlite'.
+    # Additional backends (e.g. 'postgres') available via plugins like sr2-pro.
+    store: memory
+    # Keyword arguments passed to the memory store constructor. E.g. {'db_path':
+    # '/tmp/sr2.db'} for SQLite, {'dsn': 'postgresql://...'} for PostgreSQL.
+    # store_kwargs:
+    #   <name>: {}
+
     # Scope configuration for memory isolation and sharing. When absent, all
     # memories are accessible (backward compatible).
     # scope:

@@ -19,6 +19,7 @@ from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
 from sr2.memory.retrieval import HybridRetriever
 from sr2.memory.scope import ScopeDetector
+from sr2.memory.registry import get_store
 from sr2.memory.store import InMemoryMemoryStore
 from sr2.metrics.alerts import AlertRuleEngine
 from sr2.metrics.collector import MetricCollector
@@ -515,11 +516,17 @@ class SR2:
     async def set_postgres_store(self, pool) -> None:
         """Late-bind a PostgreSQL memory store.
 
-        Imports PostgresMemoryStore lazily to avoid hard asyncpg dependency.
+        Uses the store registry for resolution, falling back to direct import
+        for backward compatibility.
         """
-        from sr2.memory.store import PostgresMemoryStore
+        try:
+            store_cls = get_store("postgres")
+        except ImportError:
+            # Fall back to direct import if registry doesn't have postgres
+            # (e.g. sr2-pro not installed but PostgresMemoryStore still in core)
+            from sr2.memory.store import PostgresMemoryStore as store_cls
 
-        store = PostgresMemoryStore(pool)
+        store = store_cls(pool)
         await store.create_tables()
         self.set_memory_store(store)
 
