@@ -1,0 +1,46 @@
+services:
+  sr2-claude-code:
+    build: .
+    container_name: sr2-claude-code
+    restart: unless-stopped
+    networks:
+      - sr2
+    ports:
+      - "8741:8008"
+    volumes:
+      - ./configs:/app/configs
+      - ./.dockervols/workspace:/home/workspace
+      - ${HOME}/.claude:/root/.claude
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
+      PROXY_URL: http://cliproxy:9090/v1
+    healthcheck:
+      test: ["CMD", "claude", "--version"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    command: >
+      uv run sr2-agent configs/agents/claude-code-proxy
+      --http --port 8008
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: sr2
+      POSTGRES_PASSWORD: sr2
+      POSTGRES_DB: sr2
+    networks:
+      - sr2
+    volumes:
+      - ./.dockervols/postgres/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sr2"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+networks:
+  sr2:
+    external: false

@@ -108,6 +108,60 @@ class LLMModelConfig(BaseModel):
     )
 
 
+class ClaudeCodeConfig(BaseModel):
+    """Configuration for Claude Code CLI as LLM provider.
+
+    When enabled, the main agent loop uses Claude Code (``claude --bare -p``)
+    instead of LiteLLM. Claude Code handles its own tool execution (Bash, Edit,
+    Read, MCPs, etc.) internally. SR2 retains ownership of context engineering,
+    sessions, and memory — Claude Code runs stateless via ``--bare``.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Use Claude Code CLI instead of LiteLLM for the main agent loop.",
+    )
+    path: str = Field(
+        default="claude",
+        description="Path to the claude CLI binary.",
+    )
+    allowed_tools: list[str] = Field(
+        default_factory=lambda: ["Read", "Glob", "Grep", "Agent", "WebSearch", "WebFetch"],
+        description="Tools to pre-approve via --allowedTools.",
+    )
+    permission_mode: str | None = Field(
+        default=None,
+        description="Permission mode: default, acceptEdits, bypassPermissions.",
+    )
+    max_turns: int | None = Field(
+        default=None,
+        description="Max agentic turns per Claude Code invocation.",
+    )
+    max_budget_usd: float | None = Field(
+        default=None,
+        description="Max cost in USD per Claude Code invocation.",
+    )
+    max_concurrent: int = Field(
+        default=3,
+        ge=1,
+        description="Max concurrent Claude Code subprocesses. Prevents resource exhaustion.",
+    )
+    timeout_seconds: int = Field(
+        default=300,
+        ge=10,
+        description="Subprocess timeout in seconds. Process is killed after this duration.",
+    )
+    working_directory: str | None = Field(
+        default=None,
+        description="Working directory for Claude Code subprocess. "
+        "Affects where Bash, Edit, Read tools operate.",
+    )
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra environment variables for Claude Code subprocess.",
+    )
+
+
 class RuntimeLLMConfig(BaseModel):
     """LLM model and endpoint settings."""
 
@@ -122,6 +176,11 @@ class RuntimeLLMConfig(BaseModel):
     embedding: LLMModelConfig = Field(
         default_factory=lambda: LLMModelConfig(name="text-embedding-3-small"),
         description="Embedding model for memory retrieval.",
+    )
+    claude_code: ClaudeCodeConfig = Field(
+        default_factory=ClaudeCodeConfig,
+        description="Claude Code CLI provider. When enabled, the main agent loop uses "
+        "Claude Code instead of LiteLLM. SR2 context engineering still applies.",
     )
 
 
