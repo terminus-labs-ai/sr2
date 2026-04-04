@@ -90,6 +90,7 @@ runtime:
         - WebSearch
         - WebFetch
       permission_mode: default
+      # dangerously_skip_permissions: true  # YOLO mode — no approval prompts
 
     # Fast model for SR2 internal tasks (summarization, memory extraction).
     fast_model:

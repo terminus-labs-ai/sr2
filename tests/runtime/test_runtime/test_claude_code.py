@@ -124,6 +124,7 @@ def test_builds_command(mock_which):
     assert "Be helpful." in cmd
     assert "--allowedTools" in cmd
     assert "Read,Glob,Grep" in cmd
+    assert "--dangerously-skip-permissions" not in cmd
     assert "--permission-mode" in cmd
     assert "acceptEdits" in cmd
     assert "--max-turns" in cmd
@@ -148,6 +149,21 @@ def test_builds_command_minimal(mock_which):
     assert "--permission-mode" not in cmd
     assert "--max-turns" not in cmd
     assert "--max-budget-usd" not in cmd
+    assert "--dangerously-skip-permissions" not in cmd
+
+
+@patch("shutil.which", return_value="/usr/local/bin/claude")
+def test_builds_command_dangerously_skip_permissions(mock_which):
+    config = _default_config(
+        dangerously_skip_permissions=True,
+        permission_mode="acceptEdits",
+    )
+    provider = ClaudeCodeProvider(config)
+    cmd = provider._build_command("test")
+
+    assert "--dangerously-skip-permissions" in cmd
+    # permission_mode should be skipped when dangerously_skip_permissions is set
+    assert "--permission-mode" not in cmd
 
 
 @patch("shutil.which", return_value="/usr/local/bin/claude")

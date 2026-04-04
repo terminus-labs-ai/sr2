@@ -45,6 +45,7 @@ class ClaudeCodeProvider:
         self._path = config.path
         self._allowed_tools = config.allowed_tools
         self._permission_mode = config.permission_mode
+        self._dangerously_skip_permissions = config.dangerously_skip_permissions
         self._max_turns = config.max_turns
         self._max_budget_usd = config.max_budget_usd
         self._timeout = config.timeout_seconds
@@ -82,7 +83,9 @@ class ClaudeCodeProvider:
             cmd.extend(["--system-prompt", system_prompt])
         if self._allowed_tools:
             cmd.extend(["--allowedTools", ",".join(self._allowed_tools)])
-        if self._permission_mode:
+        if self._dangerously_skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+        elif self._permission_mode:
             cmd.extend(["--permission-mode", self._permission_mode])
         if self._max_turns is not None:
             cmd.extend(["--max-turns", str(self._max_turns)])

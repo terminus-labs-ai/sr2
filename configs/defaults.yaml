@@ -332,6 +332,8 @@ runtime:
       allowed_tools: [Read, Glob, Grep, Agent, WebSearch, WebFetch]
       # Permission mode: default, acceptEdits, bypassPermissions.
       permission_mode: null
+      # Bypass all permission checks. Only for sandboxed environments.
+      dangerously_skip_permissions: false
       # Max agentic turns per Claude Code invocation.
       max_turns: null
       # Max cost in USD per Claude Code invocation.

@@ -111,10 +111,10 @@ class LLMModelConfig(BaseModel):
 class ClaudeCodeConfig(BaseModel):
     """Configuration for Claude Code CLI as LLM provider.
 
-    When enabled, the main agent loop uses Claude Code (``claude --bare -p``)
+    When enabled, the main agent loop uses Claude Code (``claude -p``)
     instead of LiteLLM. Claude Code handles its own tool execution (Bash, Edit,
     Read, MCPs, etc.) internally. SR2 retains ownership of context engineering,
-    sessions, and memory — Claude Code runs stateless via ``--bare``.
+    sessions, and memory.
     """
 
     enabled: bool = Field(
@@ -132,6 +132,11 @@ class ClaudeCodeConfig(BaseModel):
     permission_mode: str | None = Field(
         default=None,
         description="Permission mode: default, acceptEdits, bypassPermissions.",
+    )
+    dangerously_skip_permissions: bool = Field(
+        default=False,
+        description="Bypass all permission checks (--dangerously-skip-permissions). "
+        "Recommended only for sandboxed environments with no internet access.",
     )
     max_turns: int | None = Field(
         default=None,
