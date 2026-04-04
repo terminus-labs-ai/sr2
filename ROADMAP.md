@@ -25,7 +25,7 @@ The foundation: a config-driven context engineering library for AI agents.
 - **Observability overhaul** — 14 new metrics across 5 categories (cache, retrieval, compaction, summarization, pipeline), Grafana dashboard creation and fixes ✅
 - **Session metrics accuracy** — use actual session state for turn count and duration metrics ✅
 - **Response normalization module** — strip thinking blocks, markdown fences, JSON extraction, multi-model compatibility ✅
-- **Memory improvements** — key schema enforcement from config, empty embedding fix, confidence scoring, pgvector format, score clamping, retrieval persistence ✅
+- **Memory improvements** — key schema enforcement from config, empty embedding fix, confidence scoring, score clamping, retrieval persistence ✅
 - **Telegram agent commands** — user-facing commands through Telegram interface ✅
 - **Benchmarks** — performance benchmark suite ✅
 - **Bug fix sweep** — fixes across compaction (log format, content truncation, input mutation), summarization (enabled flag, preserve_recent_turns, token budget), circuit breaker (config values for threshold/cooldown), pipeline (consistency issues), cache (warn on unknown policies, remove dead code), resolvers (standardize token counting, fix state mutation), normalization (multi-model compat) ✅
@@ -46,15 +46,15 @@ The foundation: a config-driven context engineering library for AI agents.
 
 Know whether your context engineering is working — and prove it.
 
-- **Eval harness** — replay conversation transcripts against a pipeline config, output a quality scorecard (token efficiency, cache hit rate, compaction ratio, memory recall accuracy)
-- **Regression detection** — compare scorecards across config versions, flag regressions before they ship
+- **Eval harness** — replay conversation transcripts against a pipeline config, output a quality scorecard (token efficiency, cache hit rate, compaction ratio, memory recall accuracy) ✅
+- **Regression detection** — compare scorecards across config versions, flag regressions before they ship ✅
 - **Transcript fixtures** — record and replay real sessions as repeatable test cases
 - **Config diff** — `sr2 diff config-a/ config-b/` with human-readable impact summary
 
 ### Premium
 
 - Hosted eval runs with historical comparison
-- A/B testing between pipeline configs with statistical significance
+- A/B testing between pipeline configs with statistical significance *(A/B runner included in core eval module)*
 - Regression alerts (CI integration, webhook notifications)
 
 ## v0.3.0 — Cost Intelligence
@@ -102,7 +102,7 @@ Production-grade config lifecycle for teams.
 
 ## Future
 
-- Additional storage backends (Redis, SQLite)
+- Additional storage backends (Redis)
 - Visual config editor
 - Agent marketplace / registry
 
