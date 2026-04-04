@@ -8,17 +8,27 @@ from sr2.resolvers.registry import (
 
 
 class MockResolver:
-    """A mock resolver that satisfies the ContentResolver protocol."""
+    """A mock resolver that satisfies the ContentResolver protocol.
+
+    Echoes config back into content so callers can verify config is passed through.
+    """
 
     async def resolve(self, key, config, context):
-        return ResolvedContent(key=key, content="mock content", tokens=10)
+        # Reflect config into content so tests can verify config propagation
+        if config:
+            content = f"mock content config={config}"
+        else:
+            content = "mock content"
+        tokens = len(content) // 4
+        return ResolvedContent(key=key, content=content, tokens=tokens)
 
 
 class AnotherMockResolver:
     """A second mock resolver for overwrite testing."""
 
     async def resolve(self, key, config, context):
-        return ResolvedContent(key=key, content="another mock", tokens=20)
+        content = "another mock"
+        return ResolvedContent(key=key, content=content, tokens=len(content) // 4)
 
 
 def test_register_and_retrieve():
@@ -75,8 +85,8 @@ def test_register_same_name_overwrites():
 
 
 @pytest.mark.asyncio
-async def test_mock_resolver_resolve():
-    """Register a mock resolver and call resolve() successfully."""
+async def test_mock_resolver_resolve_with_config():
+    """Register a mock resolver and call resolve() — config is reflected in output."""
     registry = ContentResolverRegistry()
     resolver = MockResolver()
     registry.register("config", resolver)
@@ -89,17 +99,31 @@ async def test_mock_resolver_resolve():
     )
 
     retrieved = registry.get("config")
+    config = {"source": "config"}
     result = await retrieved.resolve(
         key="system_prompt",
-        config={"source": "config"},
+        config=config,
         context=ctx,
     )
 
     assert isinstance(result, ResolvedContent)
     assert result.key == "system_prompt"
+    # Config is echoed into the content so we can verify it was passed through
+    assert "config=" in result.content
+    assert "'source': 'config'" in result.content
+    assert result.tokens == len(result.content) // 4
+
+
+@pytest.mark.asyncio
+async def test_mock_resolver_resolve_empty_config():
+    """Mock resolver with empty config returns base content."""
+    resolver = MockResolver()
+    ctx = ResolverContext(agent_config={}, trigger_input="hello")
+
+    result = await resolver.resolve(key="test", config={}, context=ctx)
+
     assert result.content == "mock content"
-    assert result.tokens == 10
-    assert result.metadata is None
+    assert "config=" not in result.content
 
 
 @pytest.mark.asyncio
@@ -114,26 +138,13 @@ async def test_mock_resolver_key_matches_input():
 
 
 @pytest.mark.asyncio
-async def test_mock_resolver_tokens_reasonable_relative_to_content():
-    """Resolver protocol: token count should be in a reasonable range for content length.
-
-    The estimate_tokens heuristic uses len(text) // 4. Any resolver should
-    produce a token count that is non-negative and within a sane ratio of
-    content length (not wildly inflated or zero for non-empty content).
-    """
+async def test_mock_resolver_tokens_use_estimate():
+    """Mock resolver tokens match estimate_tokens(content)."""
     from sr2.resolvers.registry import estimate_tokens
 
     resolver = MockResolver()
     ctx = ResolverContext(agent_config={}, trigger_input="hello")
     result = await resolver.resolve(key="test", config={}, context=ctx)
 
-    # MockResolver hardcodes tokens=10 for "mock content" (12 chars).
-    # estimate_tokens("mock content") == 3, so this is a known divergence
-    # from the heuristic — acceptable for a mock, but real resolvers should
-    # use estimate_tokens(). Verify the invariant on real content:
     expected = estimate_tokens(result.content)
-    assert result.tokens >= 0
-    # For production resolvers the following should hold:
-    # assert result.tokens == expected
-    # Mock uses hardcoded value, so we just document the contract here.
-    assert expected == len(result.content) // 4
+    assert result.tokens == expected

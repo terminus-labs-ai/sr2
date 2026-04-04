@@ -157,6 +157,38 @@ class TestRetrievalResolver:
         assert result_limited.metadata["memory_count"] <= 3
         assert result_all.metadata["memory_count"] > result_limited.metadata["memory_count"]
 
+    @pytest.mark.asyncio
+    async def test_empty_config_uses_defaults(self, store):
+        """Empty config uses default top_k=10 and max_tokens=4000."""
+        for i in range(15):
+            await store.save(Memory(key=f"fact.{i}", value=f"alice info {i}"))
+
+        retriever = HybridRetriever(store=store, strategy="keyword")
+        resolver = RetrievalResolver(retriever=retriever)
+        context = ResolverContext(agent_config={}, trigger_input="alice info")
+
+        result_default = await resolver.resolve("memories", {}, context)
+        result_explicit = await resolver.resolve(
+            "memories", {"top_k": 10, "max_tokens": 4000}, context
+        )
+
+        # Both should return same count since {} defaults to top_k=10, max_tokens=4000
+        assert result_default.metadata["memory_count"] == result_explicit.metadata["memory_count"]
+
+    @pytest.mark.asyncio
+    async def test_top_k_one_returns_single_memory(self, store):
+        """top_k=1 returns at most one memory."""
+        for i in range(5):
+            await store.save(Memory(key=f"fact.{i}", value=f"alice fact {i}"))
+
+        retriever = HybridRetriever(store=store, strategy="keyword")
+        resolver = RetrievalResolver(retriever=retriever)
+        context = ResolverContext(agent_config={}, trigger_input="alice fact")
+
+        result = await resolver.resolve("memories", {"top_k": 1}, context)
+
+        assert result.metadata["memory_count"] == 1
+
 
 class TestRetrievalResolverHybridStrategy:
     """Tests for RetrievalResolver with hybrid strategy (keyword + semantic)."""

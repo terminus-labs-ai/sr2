@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -13,7 +12,6 @@ from sr2_runtime.llm import (
     LLMClient,
     LLMResponse,
     LLMLoop,
-    LoopResult,
     StreamEndEvent,
     TextDeltaEvent,
     ToolResultEvent,
@@ -348,7 +346,7 @@ class TestLoopRunStreaming:
             events.append(event)
 
         stream_content = StreamContentConfig(tool_status=True, tool_results=True)
-        result = await loop.run_streaming(
+        await loop.run_streaming(
             [{"role": "user", "content": "go"}],
             stream_callback=callback,
             stream_content=stream_content,
@@ -439,7 +437,7 @@ class TestLoopRunStreaming:
         async def callback(event):
             events.append(event)
 
-        result = await loop.run_streaming(
+        await loop.run_streaming(
             [{"role": "user", "content": "go"}],
             stream_callback=callback,
             stream_content=None,
@@ -455,7 +453,7 @@ class TestLoopRunStreaming:
 # StreamRetractEvent retraction tests
 # ---------------------------------------------------------------------------
 
-from sr2_runtime.llm.streaming import StreamRetractEvent
+from sr2_runtime.llm.streaming import StreamRetractEvent  # noqa: E402
 
 
 class TestStreamRetraction:

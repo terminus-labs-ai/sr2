@@ -136,6 +136,143 @@ class TestConflictResolver:
         assert old is None
 
     @pytest.mark.asyncio
+    async def test_semi_stable_conflict_archives_old(self, store):
+        """Semi-stable memory conflict → old archived, new kept (matches identity behavior)."""
+        existing = Memory(key="user.employer", value="Google", memory_type="semi_stable")
+        new = Memory(key="user.employer", value="Anthropic", memory_type="semi_stable")
+        await store.save(existing)
+        await store.save(new)
+
+        resolver = ConflictResolver(store=store)
+        conflict = Conflict(
+            new_memory=new, existing_memory=existing,
+            conflict_type="key_match", confidence=1.0,
+        )
+        result = await resolver.resolve(conflict)
+
+        assert result.action == "archive_old"
+        assert result.winner.value == "Anthropic"
+        assert result.loser.value == "Google"
+
+        old = await store.get(existing.id)
+        assert old is not None
+        assert old.archived is True
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_conflict_falls_back_to_archive(self, store):
+        """Ephemeral memory type not in default strategies → falls back to latest_wins_archive."""
+        existing = Memory(key="user.current_task", value="reading", memory_type="ephemeral")
+        new = Memory(key="user.current_task", value="coding", memory_type="ephemeral")
+        await store.save(existing)
+        await store.save(new)
+
+        resolver = ConflictResolver(store=store)
+        conflict = Conflict(
+            new_memory=new, existing_memory=existing,
+            conflict_type="key_match", confidence=1.0,
+        )
+        result = await resolver.resolve(conflict)
+
+        # ephemeral is NOT in the default strategies dict, so it falls back
+        # to the "default" key (also missing), then to latest_wins_archive
+        assert result.action == "archive_old"
+        assert result.winner.value == "coding"
+        assert result.loser.value == "reading"
+
+        old = await store.get(existing.id)
+        assert old is not None
+        assert old.archived is True
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_with_explicit_discard_strategy(self, store):
+        """Ephemeral memory with explicit discard strategy → old deleted."""
+        existing = Memory(key="user.current_task", value="reading", memory_type="ephemeral")
+        new = Memory(key="user.current_task", value="coding", memory_type="ephemeral")
+        await store.save(existing)
+        await store.save(new)
+
+        resolver = ConflictResolver(
+            store=store,
+            strategies={"ephemeral": "latest_wins_discard"},
+        )
+        conflict = Conflict(
+            new_memory=new, existing_memory=existing,
+            conflict_type="key_match", confidence=1.0,
+        )
+        result = await resolver.resolve(conflict)
+
+        assert result.action == "keep_new"
+        assert result.winner.value == "coding"
+
+        old = await store.get(existing.id)
+        assert old is None
+
+    def test_default_strategies_are_correct(self):
+        """Verify the default strategy mapping without custom overrides."""
+        resolver = ConflictResolver(store=None)  # store unused for this check
+        assert resolver._strategies == {
+            "identity": "latest_wins_archive",
+            "semi_stable": "latest_wins_archive",
+            "dynamic": "latest_wins_discard",
+        }
+        # ephemeral is intentionally absent from defaults
+        assert "ephemeral" not in resolver._strategies
+
+    def test_custom_strategies_override_defaults(self):
+        """Custom strategies dict fully replaces defaults (not merged)."""
+        custom = {"identity": "keep_both", "dynamic": "keep_both"}
+        resolver = ConflictResolver(store=None, strategies=custom)
+        assert resolver._strategies == custom
+        # Defaults like semi_stable are NOT present when custom is provided
+        assert "semi_stable" not in resolver._strategies
+
+    @pytest.mark.asyncio
+    async def test_custom_default_key_used_for_unknown_type(self, store):
+        """A 'default' key in strategies is used when memory type has no explicit strategy."""
+        existing = Memory(key="k", value="old", memory_type="ephemeral")
+        new = Memory(key="k", value="new", memory_type="ephemeral")
+        await store.save(existing)
+
+        resolver = ConflictResolver(
+            store=store,
+            strategies={"default": "latest_wins_discard"},
+        )
+        conflict = Conflict(
+            new_memory=new, existing_memory=existing,
+            conflict_type="key_match", confidence=1.0,
+        )
+        result = await resolver.resolve(conflict)
+
+        # Should use the "default" key → discard
+        assert result.action == "keep_new"
+
+        old = await store.get(existing.id)
+        assert old is None
+
+    @pytest.mark.asyncio
+    async def test_unknown_strategy_string_falls_back_to_archive(self, store):
+        """Unrecognized strategy string → logs warning, falls back to latest_wins_archive."""
+        existing = Memory(key="k", value="old", memory_type="identity")
+        new = Memory(key="k", value="new", memory_type="identity")
+        await store.save(existing)
+
+        resolver = ConflictResolver(
+            store=store,
+            strategies={"identity": "some_invalid_strategy"},
+        )
+        conflict = Conflict(
+            new_memory=new, existing_memory=existing,
+            conflict_type="key_match", confidence=1.0,
+        )
+        result = await resolver.resolve(conflict)
+
+        assert result.action == "archive_old"
+
+        old = await store.get(existing.id)
+        assert old is not None
+        assert old.archived is True
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "memory_type, expected_action",
         [

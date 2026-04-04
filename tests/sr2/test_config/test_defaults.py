@@ -2,7 +2,6 @@ import pytest
 from pathlib import Path
 from sr2.config.loader import ConfigLoader
 from sr2.config.validation import validate_config
-from sr2.compaction.rules import BUILT_IN_RULES
 
 DEFAULTS_PATH = str(Path(__file__).parent.parent.parent.parent / "configs" / "defaults.yaml")
 

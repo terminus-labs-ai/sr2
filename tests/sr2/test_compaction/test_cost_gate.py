@@ -100,9 +100,14 @@ class TestShouldCompact:
             estimated_compacted_tokens=500,
             total_tokens_after_turn=1000,
         )
+        # savings = 4500 * 3.0/1M = 0.0135
+        # invalidation = 1000 * (3.75 - 0.30)/1M = 0.00345
+        # net = 0.0135 - 0.00345 = 0.01005
         assert decision.allowed is True
         assert decision.tokens_saved == 4500
-        assert decision.net_usd > 0
+        assert decision.estimated_savings_usd == pytest.approx(0.0135)
+        assert decision.estimated_invalidation_cost_usd == pytest.approx(0.00345)
+        assert decision.net_usd == pytest.approx(0.01005)
 
     def test_small_turn_large_tail_blocks(self):
         """Tiny token savings + huge downstream invalidation => blocked."""
@@ -113,8 +118,14 @@ class TestShouldCompact:
             estimated_compacted_tokens=150,
             total_tokens_after_turn=100_000,
         )
+        # savings = 50 * 3.0/1M = 0.00015
+        # invalidation = 100000 * (3.75 - 0.30)/1M = 0.345
+        # net = 0.00015 - 0.345 = -0.34485
         assert decision.allowed is False
-        assert decision.net_usd < 0
+        assert decision.tokens_saved == 50
+        assert decision.estimated_savings_usd == pytest.approx(0.00015)
+        assert decision.estimated_invalidation_cost_usd == pytest.approx(0.345)
+        assert decision.net_usd == pytest.approx(-0.34485)
 
     def test_min_net_savings_threshold(self):
         """Net positive but below threshold => blocked."""
@@ -125,8 +136,59 @@ class TestShouldCompact:
             estimated_compacted_tokens=500,
             total_tokens_after_turn=1000,
         )
-        # Net is positive but tiny (few cents), under $1 threshold
+        # net = 0.01005, well under $1 threshold
         assert decision.allowed is False
+        assert decision.net_usd == pytest.approx(0.01005)
+
+    def test_boundary_at_exact_threshold(self):
+        """Net exactly equal to threshold => blocked (requires strictly greater)."""
+        # We want net == min_net exactly. Use custom pricing for clean math.
+        # savings = 1000 tokens * $1/1M = $0.001
+        # invalidation = 0 tokens => $0
+        # net = $0.001
+        pricing = CachePricing(
+            input_cost=1.0 / 1_000_000,
+            cache_write_cost=1.0 / 1_000_000,
+            cache_read_cost=0.0,
+            source="test",
+        )
+        gate_exact = _make_gate(min_net=0.001)
+        gate_exact._pricing_cache["__none__"] = pricing
+
+        decision = gate_exact.should_compact(
+            turn_index=0,
+            turn_tokens=2000,
+            estimated_compacted_tokens=1000,
+            total_tokens_after_turn=0,
+        )
+        # savings = 1000 * 1.0/1M = 0.001, invalidation = 0
+        # net = 0.001, threshold = 0.001 => NOT strictly greater => blocked
+        assert decision.net_usd == pytest.approx(0.001)
+        assert decision.allowed is False, "net == threshold should be blocked (strict >)"
+
+    def test_boundary_just_above_threshold(self):
+        """Net just above threshold => allowed."""
+        # savings = 1001 tokens * $1/1M = $0.001001
+        # invalidation = 0 tokens => $0
+        # net = $0.001001 > $0.001
+        pricing = CachePricing(
+            input_cost=1.0 / 1_000_000,
+            cache_write_cost=1.0 / 1_000_000,
+            cache_read_cost=0.0,
+            source="test",
+        )
+        gate_above = _make_gate(min_net=0.001)
+        gate_above._pricing_cache["__none__"] = pricing
+
+        decision = gate_above.should_compact(
+            turn_index=0,
+            turn_tokens=2001,
+            estimated_compacted_tokens=1000,
+            total_tokens_after_turn=0,
+        )
+        # savings = 1001 * 1.0/1M = 0.001001, net = 0.001001 > 0.001
+        assert decision.net_usd == pytest.approx(0.001001)
+        assert decision.allowed is True
 
     def test_fail_open_always_allows(self):
         """When pricing is fail_open, compaction is always allowed."""
@@ -145,7 +207,7 @@ class TestShouldCompact:
         assert decision.pricing_source == "fail_open"
 
     def test_decision_fields_populated(self):
-        """All CostGateDecision fields have sensible values."""
+        """All CostGateDecision fields have exact expected values."""
         gate = _make_gate()
         decision = gate.should_compact(
             turn_index=3,
@@ -153,10 +215,15 @@ class TestShouldCompact:
             estimated_compacted_tokens=500,
             total_tokens_after_turn=5000,
         )
+        # savings = 1500 * 3.0/1M = 0.0045
+        # invalidation = 5000 * (3.75 - 0.30)/1M = 0.01725
+        # net = 0.0045 - 0.01725 = -0.01275
         assert decision.tokens_saved == 1500
         assert decision.cache_invalidation_tokens == 5000
-        assert decision.estimated_savings_usd > 0
-        assert decision.estimated_invalidation_cost_usd >= 0
+        assert decision.estimated_savings_usd == pytest.approx(0.0045)
+        assert decision.estimated_invalidation_cost_usd == pytest.approx(0.01725)
+        assert decision.net_usd == pytest.approx(-0.01275)
+        assert decision.allowed is False  # net is negative, below min_net=0.001
         assert isinstance(decision.reason, str)
         assert decision.pricing_source == "test"
 
@@ -176,7 +243,7 @@ class TestEvaluateBatch:
         """
         gate = _make_gate(min_net=0.0)
         candidates = [
-            # Large savings (50000 tokens saved), small tail (100 tokens) => clearly net-positive
+            # Large savings (49500 tokens saved), small tail (100 tokens) => clearly net-positive
             CompactionCandidate(turn_index=0, turn_tokens=50000, estimated_compacted_tokens=500, total_tokens_after_turn=100),
             # Second turn: tail=80, but first already invalidated 100 => effective = max(0, 80-100) = 0
             CompactionCandidate(turn_index=1, turn_tokens=3000, estimated_compacted_tokens=300, total_tokens_after_turn=80),
@@ -184,14 +251,21 @@ class TestEvaluateBatch:
         decisions = gate.evaluate_batch(candidates)
         assert len(decisions) == 2
 
-        # First must be allowed: savings far exceed invalidation
-        assert decisions[0].allowed is True, (
-            f"First candidate should be allowed (large savings, small tail). Reason: {decisions[0].reason}"
-        )
-        # Second sees zero effective invalidation (80 - 100 clamped to 0)
-        assert decisions[1].cache_invalidation_tokens == 0, (
-            f"Expected 0 effective invalidation tokens, got {decisions[1].cache_invalidation_tokens}"
-        )
+        # First: savings = 49500 * 3.0/1M = 0.1485, invalidation = 100 * 3.45/1M = 0.000345
+        # net = 0.1485 - 0.000345 = 0.148155
+        assert decisions[0].allowed is True
+        assert decisions[0].tokens_saved == 49500
+        assert decisions[0].estimated_savings_usd == pytest.approx(0.1485)
+        assert decisions[0].estimated_invalidation_cost_usd == pytest.approx(0.000345)
+        assert decisions[0].net_usd == pytest.approx(0.148155)
+
+        # Second: effective invalidation = max(0, 80 - 100) = 0, savings = 2700 * 3.0/1M = 0.0081
+        # net = 0.0081 - 0 = 0.0081
+        assert decisions[1].allowed is True
+        assert decisions[1].tokens_saved == 2700
+        assert decisions[1].cache_invalidation_tokens == 0
+        assert decisions[1].estimated_invalidation_cost_usd == pytest.approx(0.0)
+        assert decisions[1].net_usd == pytest.approx(0.0081)
 
     def test_batch_processes_in_turn_order(self):
         """Candidates are sorted by turn_index regardless of input order."""
@@ -280,5 +354,5 @@ class TestEngineIntegration:
             ConversationTurn(turn_number=1, role="user", content="hello"),
         ]
         result = engine.compact(turns)
-        # Gate should allow, and rule should compact
-        assert result.turns_compacted >= 0  # depends on rule behavior
+        # Gate should allow, and the tool_output rule should compact the large turn
+        assert result.turns_compacted >= 1

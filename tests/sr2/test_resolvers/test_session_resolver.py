@@ -46,6 +46,68 @@ async def test_window_limits_messages():
 
 
 @pytest.mark.asyncio
+async def test_window_one_returns_last_message():
+    """Window=1 returns only the last message."""
+    resolver = SessionResolver()
+    ctx = ResolverContext(
+        agent_config={
+            "session_history": [
+                {"role": "user", "content": "First"},
+                {"role": "assistant", "content": "Second"},
+                {"role": "user", "content": "Third"},
+            ],
+        },
+        trigger_input="hello",
+    )
+
+    result = await resolver.resolve("history", {"window": 1}, ctx)
+
+    assert result.content == "user: Third"
+
+
+@pytest.mark.asyncio
+async def test_no_window_config_returns_all_messages():
+    """Empty config (no window key) returns all messages without truncation."""
+    resolver = SessionResolver()
+    history = [
+        {"role": "user", "content": "First"},
+        {"role": "assistant", "content": "Second"},
+        {"role": "user", "content": "Third"},
+        {"role": "assistant", "content": "Fourth"},
+        {"role": "user", "content": "Fifth"},
+    ]
+    ctx = ResolverContext(
+        agent_config={"session_history": history},
+        trigger_input="hello",
+    )
+
+    result = await resolver.resolve("history", {}, ctx)
+
+    assert result.content.count("\n") == 4  # 5 messages, 4 newlines
+    assert result.content.startswith("user: First")
+    assert result.content.endswith("user: Fifth")
+
+
+@pytest.mark.asyncio
+async def test_window_larger_than_history_returns_all():
+    """Window larger than history length returns everything."""
+    resolver = SessionResolver()
+    ctx = ResolverContext(
+        agent_config={
+            "session_history": [
+                {"role": "user", "content": "Only"},
+            ],
+        },
+        trigger_input="hello",
+    )
+
+    result_windowed = await resolver.resolve("history", {"window": 100}, ctx)
+    result_no_window = await resolver.resolve("history", {}, ctx)
+
+    assert result_windowed.content == result_no_window.content == "user: Only"
+
+
+@pytest.mark.asyncio
 async def test_empty_history_returns_empty():
     """Empty history returns empty string."""
     resolver = SessionResolver()

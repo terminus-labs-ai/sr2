@@ -1,13 +1,12 @@
 """Tests for A2A server adapter."""
 
 import json
-from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sr2.a2a.card import AgentCardGenerator
-from sr2.a2a.server import A2ARequest, A2AResponse, A2AServerAdapter
+from sr2.a2a.server import A2ARequest, A2AServerAdapter
 from sr2.pipeline.engine import CompiledContext, PipelineEngine
 from sr2.pipeline.result import PipelineResult
 from sr2.pipeline.router import InterfaceRouter

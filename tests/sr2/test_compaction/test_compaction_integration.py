@@ -6,7 +6,6 @@ with summarization.
 """
 
 import json
-import logging
 
 import pytest
 
@@ -109,14 +108,24 @@ class TestCompactionOnlyIntegration:
         # Compaction must have run (not None)
         assert result is not None, "Compaction should have triggered with 20 turns"
 
-        # At least some tool outputs should be compacted
-        assert result.turns_compacted > 0, (
-            f"Expected tool outputs to be compacted, but turns_compacted={result.turns_compacted}"
+        # Turns 0-14 are compactable (20 - RAW_WINDOW=5 = 15 turns outside raw window).
+        # Of those, tool_output turns are at i%3==1: i=1,4,7,10,13 → 5 tool outputs.
+        # User turns (i%3==0) are never compacted. Assistant turns have no content_type.
+        assert result.turns_compacted == 5, (
+            f"Expected 5 tool_output turns compacted, got {result.turns_compacted}"
         )
 
-        # Token count should decrease
-        assert result.compacted_tokens < result.original_tokens, (
-            f"Compaction should reduce tokens: {result.original_tokens} -> {result.compacted_tokens}"
+        # Verify exact original_tokens: engine sums len(content)//4 for all turns
+        # using their pre-compaction content. For the 5 compacted tool turns, the
+        # original content was _long_tool_output() (identical for each).
+        tool_content = _long_tool_output()
+        tool_tokens = len(tool_content) // 4
+        non_compacted = [t for t in result.turns if not t.compacted]
+        expected_original = (
+            sum(len(t.content) // 4 for t in non_compacted) + 5 * tool_tokens
+        )
+        assert result.original_tokens == expected_original, (
+            f"Expected original_tokens={expected_original}, got {result.original_tokens}"
         )
 
         # Raw zone should have exactly raw_window turns
@@ -171,7 +180,11 @@ class TestCompactionOnlyIntegration:
 
         zones = mgr.zones()
         compacted_tools = [t for t in zones.compacted if t.compacted and t.content_type == "tool_output"]
-        assert len(compacted_tools) > 0, "Should have at least one compacted tool output"
+        # 10 turns, RAW_WINDOW=5: compactable = turns 0-4.
+        # Tool turns at i=0,2,4 (even indices) → 3 tool outputs in compactable zone.
+        assert len(compacted_tools) == 3, (
+            f"Expected 3 compacted tool outputs, got {len(compacted_tools)}"
+        )
 
         for turn in compacted_tools:
             tool_name = turn.metadata.get("tool_name", "the tool")
@@ -245,7 +258,10 @@ class TestCompactionOnlyIntegration:
 
         transitions = mgr.get_zone_transitions()
         assert "raw_to_compacted" in transitions, "Should track raw->compacted transitions"
-        assert transitions["raw_to_compacted"] > 0
+        # 10 turns started in raw, 5 remain (RAW_WINDOW=5) → 5 transitioned
+        assert transitions["raw_to_compacted"] == 5, (
+            f"Expected 5 raw->compacted transitions, got {transitions['raw_to_compacted']}"
+        )
 
     def test_compaction_idempotent_across_runs(self):
         """Running compaction multiple times should be idempotent."""
@@ -254,7 +270,7 @@ class TestCompactionOnlyIntegration:
         for i in range(10):
             mgr.add_turn(_make_tool_turn(i))
 
-        result1 = mgr.run_compaction()
+        mgr.run_compaction()
         result2 = mgr.run_compaction()
 
         # Second run should compact nothing (all eligible turns already compacted)
@@ -272,15 +288,21 @@ class TestCompactionOnlyIntegration:
             mgr.add_turn(_make_tool_turn(i))
         result1 = mgr.run_compaction()
         assert result1 is not None
-        first_compacted = result1.turns_compacted
+        # 8 turns - RAW_WINDOW(5) = 3 compactable, all tool_output
+        assert result1.turns_compacted == 3, (
+            f"Phase 1: expected 3 turns compacted, got {result1.turns_compacted}"
+        )
 
         # Phase 2: Add 8 more turns, compact again
         for i in range(8, 16):
             mgr.add_turn(_make_tool_turn(i))
         result2 = mgr.run_compaction()
         assert result2 is not None
-        # New turns should get compacted, old ones already done
-        assert result2.turns_compacted > 0
+        # 16 total turns - RAW_WINDOW(5) = 11 compactable.
+        # Turns 0-2 already compacted (skipped), turns 3-10 are new → 8 compacted.
+        assert result2.turns_compacted == 8, (
+            f"Phase 2: expected 8 turns compacted, got {result2.turns_compacted}"
+        )
 
         # Raw window still respected
         assert len(mgr.zones().raw) == self.RAW_WINDOW
@@ -376,7 +398,11 @@ class TestCompactionPlusSummarizationIntegration:
         # Step 1: Run compaction
         compaction_result = mgr.run_compaction()
         assert compaction_result is not None
-        assert compaction_result.turns_compacted > 0, "Compaction should have compacted tool outputs"
+        # 35 turns - RAW_WINDOW(3) = 32 compactable. Tool turns (i%3==1):
+        # i=1,4,7,10,13,16,19,22,25,28,31 → 11 tool outputs in compactable zone.
+        assert compaction_result.turns_compacted == 11, (
+            f"Expected 11 tool outputs compacted, got {compaction_result.turns_compacted}"
+        )
 
         # Step 2: Run summarization
         summ_result = await mgr.run_summarization()
@@ -466,7 +492,10 @@ class TestCompactionPlusSummarizationIntegration:
 
         transitions = mgr.get_zone_transitions()
         assert "raw_to_compacted" in transitions
-        assert transitions["raw_to_compacted"] > 0
+        # 20 turns started in raw, 3 remain (RAW_WINDOW=3) → 17 transitioned
+        assert transitions["raw_to_compacted"] == 17, (
+            f"Expected 17 raw->compacted transitions, got {transitions['raw_to_compacted']}"
+        )
 
         zones = mgr.zones()
         if len(zones.summarized) > 0:

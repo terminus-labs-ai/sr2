@@ -1,9 +1,8 @@
 """Tests for the loop detector."""
 
-import pytest
 
 from sr2_runtime.llm.loop import ToolCallRecord
-from sr2_runtime.llm.loop_detector import LoopDetection, detect_loop
+from sr2_runtime.llm.loop_detector import detect_loop
 
 
 def _record(name: str, args: dict | None = None, result: str = "ok") -> ToolCallRecord:

@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 
 from sr2.pipeline.engine import CompiledContext
 from sr2.resolvers.registry import ResolvedContent

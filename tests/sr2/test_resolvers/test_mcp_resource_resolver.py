@@ -60,3 +60,25 @@ async def test_resolve_token_count(context):
     result = await resolver.resolve(key="uri", config={}, context=context)
 
     assert result.tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_server_config_routes_to_correct_server(context):
+    """Different server config values route to different servers."""
+    captured = {}
+
+    async def mock_read(uri, server_name=None):
+        captured["server_name"] = server_name
+        return f"from {server_name}"
+
+    resolver = MCPResourceResolver(mock_read)
+
+    result_a = await resolver.resolve(key="uri", config={"server": "alpha"}, context=context)
+    assert captured["server_name"] == "alpha"
+    assert result_a.metadata["server"] == "alpha"
+
+    result_b = await resolver.resolve(key="uri", config={"server": "beta"}, context=context)
+    assert captured["server_name"] == "beta"
+    assert result_b.metadata["server"] == "beta"
+
+    assert result_a.content != result_b.content

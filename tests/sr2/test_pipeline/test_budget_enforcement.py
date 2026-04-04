@@ -8,16 +8,14 @@ import logging
 
 import pytest
 
-from sr2.pipeline.engine import PipelineEngine, CompiledContext, BudgetOverflowHandler
+from sr2.pipeline.engine import PipelineEngine
 from sr2.resolvers.registry import ContentResolverRegistry, ResolverContext, ResolvedContent, estimate_tokens
-from sr2.cache.registry import CachePolicyRegistry
 from sr2.cache.policies import create_default_cache_registry
 from sr2.config.models import PipelineConfig, LayerConfig, ContentItemConfig
-from sr2.compaction.engine import CompactionEngine, ConversationTurn, CompactionResult
-from sr2.compaction.rules import CompactionOutput
+from sr2.compaction.engine import CompactionEngine, ConversationTurn
 from sr2.config.models import CompactionConfig, CompactionRuleConfig
 from sr2.pipeline.conversation import ConversationManager
-from sr2.summarization.engine import SummarizationEngine, SummarizationResult
+from sr2.summarization.engine import SummarizationEngine
 from sr2.config.models import SummarizationConfig
 
 
@@ -766,6 +764,106 @@ class TestInterfaceSpecificBudgets:
         assert result.layers["core"][0].tokens == 500
         assert result.layers["core"][0].content == "system prompt"
         assert result.tokens <= 3000
+
+
+class TestRouterDrivenBudgetEnforcement:
+    """Integration: InterfaceRouter selects different configs per interface,
+    each with its own token budget, and the engine enforces them independently.
+    """
+
+    def _build_engine_and_router(self, interface_budgets: dict[str, int]):
+        """Build a PipelineEngine + InterfaceRouter with per-interface budgets.
+
+        All interfaces share the same two-layer config (core + dynamic),
+        differing only in token_budget.
+        """
+        from sr2.config.loader import ConfigLoader
+        from sr2.pipeline.router import InterfaceRouter
+
+        core_resolver = MockResolver(content="system prompt", tokens=500)
+        big_resolver = MockResolver(content="x" * 40000, tokens=10000)
+
+        resolvers = ContentResolverRegistry()
+        resolvers.register("core_src", core_resolver)
+        resolvers.register("big_src", big_resolver)
+
+        engine = PipelineEngine(resolvers, create_default_cache_registry())
+
+        interfaces = {}
+        for name, budget in interface_budgets.items():
+            interfaces[name] = {
+                "token_budget": budget,
+                "layers": [
+                    {
+                        "name": "core",
+                        "cache_policy": "immutable",
+                        "contents": [{"key": "c", "source": "core_src"}],
+                    },
+                    {
+                        "name": "dynamic",
+                        "cache_policy": "always_new",
+                        "contents": [{"key": "d", "source": "big_src"}],
+                    },
+                ],
+            }
+
+        loader = ConfigLoader()
+        router = InterfaceRouter(interfaces, loader)
+        return engine, router
+
+    async def test_each_interface_gets_its_own_budget(self):
+        """Route to 3 interfaces with different budgets; each enforced independently."""
+        budgets = {"heartbeat": 3000, "a2a": 8000, "user_message": 48000}
+        engine, router = self._build_engine_and_router(budgets)
+
+        for interface_name, expected_budget in budgets.items():
+            config = router.route(interface_name)
+            assert config.token_budget == expected_budget
+
+            result = await engine.compile(config, _make_context())
+            assert result.tokens <= expected_budget, (
+                f"Interface '{interface_name}' exceeded its budget of {expected_budget}: "
+                f"got {result.tokens}"
+            )
+
+    async def test_same_content_different_budgets_different_truncation(self):
+        """Same resolver content compiled under different budgets produces different token counts."""
+        budgets = {"small": 3000, "large": 48000}
+        engine, router = self._build_engine_and_router(budgets)
+
+        small_config = router.route("small")
+        large_config = router.route("large")
+
+        result_small = await engine.compile(small_config, _make_context())
+        result_large = await engine.compile(large_config, _make_context())
+
+        # Small budget must truncate more aggressively
+        assert result_small.tokens <= 3000
+        assert result_large.tokens <= 48000
+        assert result_small.tokens < result_large.tokens
+
+    async def test_router_caches_config_per_interface(self):
+        """Router caches configs so repeated route() calls return the same object."""
+        from sr2.config.loader import ConfigLoader
+        from sr2.pipeline.router import InterfaceRouter
+
+        loader = ConfigLoader()
+        router = InterfaceRouter(
+            {
+                "chat": {"token_budget": 24000, "layers": []},
+                "heartbeat": {"token_budget": 3000, "layers": []},
+            },
+            loader,
+        )
+
+        chat1 = router.route("chat")
+        chat2 = router.route("chat")
+        heartbeat = router.route("heartbeat")
+
+        assert chat1 is chat2, "Router should cache configs"
+        assert chat1.token_budget != heartbeat.token_budget, (
+            "Different interfaces should have different budgets"
+        )
 
 
 class TestPreRotationThreshold:

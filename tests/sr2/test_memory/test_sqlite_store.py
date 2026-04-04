@@ -1,7 +1,6 @@
 """Tests for SQLiteMemoryStore backend."""
 
 import pytest
-from datetime import datetime
 
 from sr2.memory.schema import Memory
 from sr2.memory.store import SQLiteMemoryStore

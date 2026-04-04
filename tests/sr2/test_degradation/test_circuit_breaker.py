@@ -171,6 +171,83 @@ class TestCircuitBreakerHalfOpen:
         time.sleep(0.1)
         assert cb.is_open("stage") is False
 
+    def test_cooldown_expiry_clears_internal_state(self):
+        """When is_open() detects cooldown expiry, it clears failure count and open_since."""
+        cb = CircuitBreaker(threshold=2, cooldown_seconds=0.05)
+        self._open_breaker(cb)
+
+        # Verify state exists while open
+        assert cb._failure_counts["stage"] == 2
+        assert "stage" in cb._open_since
+
+        time.sleep(0.1)
+        cb.is_open("stage")
+
+        # After is_open() triggers the transition, internal state is cleared
+        assert cb._failure_counts.get("stage") is None
+        assert cb._open_since.get("stage") is None
+
+    def test_failure_count_resets_after_cooldown(self):
+        """After cooldown, failure count restarts from 0 — full threshold required to reopen."""
+        cb = CircuitBreaker(threshold=3, cooldown_seconds=0.05)
+        self._open_breaker(cb)
+
+        time.sleep(0.1)
+        assert cb.is_open("stage") is False
+
+        # One or two failures should NOT reopen (threshold=3, count starts fresh)
+        cb.record_failure("stage")
+        assert cb.is_open("stage") is False
+        cb.record_failure("stage")
+        assert cb.is_open("stage") is False
+
+        # Third failure reopens
+        cb.record_failure("stage")
+        assert cb.is_open("stage") is True
+
+    def test_full_cycle_open_halfopen_close_reopen(self):
+        """Full state cycle: CLOSED -> OPEN -> half-open -> CLOSED -> OPEN again."""
+        cb = CircuitBreaker(threshold=2, cooldown_seconds=0.05)
+
+        # CLOSED -> OPEN
+        self._open_breaker(cb)
+
+        # OPEN -> half-open (cooldown expires)
+        time.sleep(0.1)
+        assert cb.is_open("stage") is False
+
+        # half-open -> CLOSED (probe succeeds)
+        cb.record_success("stage")
+        assert cb.is_open("stage") is False
+
+        # CLOSED -> OPEN again (new failures)
+        cb.record_failure("stage")
+        cb.record_failure("stage")
+        assert cb.is_open("stage") is True
+
+    def test_half_open_does_not_affect_other_stages(self):
+        """A stage entering half-open doesn't disturb other stages."""
+        cb = CircuitBreaker(threshold=2, cooldown_seconds=0.05)
+
+        # Open both stages
+        self._open_breaker(cb, "alpha")
+        self._open_breaker(cb, "beta")
+
+        # Only let alpha's cooldown expire
+        time.sleep(0.1)
+
+        # alpha transitions to half-open (is_open clears its state)
+        assert cb.is_open("alpha") is False
+
+        # beta also expired (same cooldown), but its state is independent
+        assert cb.is_open("beta") is False
+
+        # Fail alpha again — only alpha reopens
+        cb.record_failure("alpha")
+        cb.record_failure("alpha")
+        assert cb.is_open("alpha") is True
+        assert cb.is_open("beta") is False
+
 
 class TestCircuitBreakerThresholdParametrized:
     """Verify breaker opens at exactly the configured threshold."""

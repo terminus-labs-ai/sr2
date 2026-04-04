@@ -1,7 +1,7 @@
 """Tests for interface plugins."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -175,7 +175,7 @@ class TestHTTPPlugin:
         mock_request.json.return_value = {"message": "hello", "session_id": "sess_42"}
         mock_request.headers = {}
 
-        resp = await routes["chat"](mock_request)
+        await routes["chat"](mock_request)
         assert cb.call_count == 1
         trigger = cb.call_args[0][0]
         assert trigger.session_name == "sess_42"

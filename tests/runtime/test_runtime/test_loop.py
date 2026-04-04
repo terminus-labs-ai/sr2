@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from sr2_runtime.llm import LLMResponse, LLMLoop, LoopResult, ToolCallRecord
+from sr2_runtime.llm import LLMResponse, LLMLoop
 from sr2.tools.models import (
     ToolDefinition,
     ToolManagementConfig,

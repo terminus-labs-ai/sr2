@@ -8,7 +8,6 @@ from sr2.config.models import SummarizationConfig
 from sr2.summarization.engine import (
     StructuredSummary,
     SummarizationEngine,
-    SummarizationResult,
 )
 
 

@@ -37,6 +37,55 @@ class TestSchemaAndSampleRule:
         assert output.was_compacted is False
         assert output.content == content
 
+    def test_recovery_hint_with_tool_name(self):
+        """recovery_hint=True produces 'Re-fetch with {tool_name}' format."""
+        content = "\n".join(f"line {i}" for i in range(20))
+        inp = CompactionInput(
+            content=content, content_type="tool_output", tokens=200,
+            metadata={"tool_name": "search_files"},
+        )
+        rule = SchemaAndSampleRule()
+        output = rule.compact(inp, {"recovery_hint": True})
+
+        assert output.recovery_hint == "Re-fetch with search_files"
+
+    def test_recovery_hint_missing_tool_name_falls_back(self):
+        """When metadata has no tool_name, recovery hint uses 'the tool'."""
+        content = "\n".join(f"line {i}" for i in range(20))
+        inp = CompactionInput(
+            content=content, content_type="tool_output", tokens=200,
+            metadata={},
+        )
+        rule = SchemaAndSampleRule()
+        output = rule.compact(inp, {"recovery_hint": True})
+
+        assert output.recovery_hint == "Re-fetch with the tool"
+
+    def test_recovery_hint_disabled(self):
+        """recovery_hint=False (or absent) produces no hint."""
+        content = "\n".join(f"line {i}" for i in range(20))
+        inp = CompactionInput(
+            content=content, content_type="tool_output", tokens=200,
+            metadata={"tool_name": "search_files"},
+        )
+        rule = SchemaAndSampleRule()
+        output = rule.compact(inp, {})
+
+        assert output.recovery_hint is None
+
+    def test_recovery_hint_not_compacted_short_content(self):
+        """Short content (not compacted) produces no recovery hint."""
+        content = "line 1\nline 2\nline 3"
+        inp = CompactionInput(
+            content=content, content_type="tool_output", tokens=20,
+            metadata={"tool_name": "search_files"},
+        )
+        rule = SchemaAndSampleRule()
+        output = rule.compact(inp, {"recovery_hint": True})
+
+        assert output.was_compacted is False
+        assert output.recovery_hint is None
+
 
 class TestReferenceRule:
     """Tests for ReferenceRule."""
@@ -58,14 +107,29 @@ class TestReferenceRule:
         assert "python" in output.content
         assert output.recovery_hint == 'read_file("/src/main.py")'
 
-    def test_missing_metadata(self):
-        """Missing metadata handled gracefully."""
+    def test_recovery_hint_always_produced(self):
+        """ReferenceRule always produces a recovery hint, regardless of config."""
+        inp = CompactionInput(
+            content="lots of code...",
+            content_type="file_content",
+            tokens=500,
+            metadata={"file_path": "/src/utils.py"},
+        )
+        rule = ReferenceRule()
+        # Even without recovery_hint in config, ReferenceRule always sets it
+        output = rule.compact(inp, {})
+
+        assert output.recovery_hint == 'read_file("/src/utils.py")'
+
+    def test_missing_metadata_recovery_hint_uses_unknown(self):
+        """Missing metadata produces recovery hint with 'unknown' path."""
         inp = CompactionInput(content="data", content_type="file_content", tokens=100)
         rule = ReferenceRule()
         output = rule.compact(inp, {})
 
         assert output.was_compacted is True
         assert "unknown" in output.content
+        assert output.recovery_hint == 'read_file("unknown")'
 
 
 class TestResultSummaryRule:
@@ -111,6 +175,32 @@ class TestResultSummaryRule:
         output = rule.compact(inp, {"max_output_lines": 2})
 
         assert "more lines" in output.content
+
+    def test_recovery_hint_from_result_path(self):
+        """recovery_hint comes from metadata.result_path."""
+        inp = CompactionInput(
+            content="test passed\nall good",
+            content_type="code_execution",
+            tokens=50,
+            metadata={"exit_code": 0, "result_path": "/tmp/result_abc.log"},
+        )
+        rule = ResultSummaryRule()
+        output = rule.compact(inp, {})
+
+        assert output.recovery_hint == "/tmp/result_abc.log"
+
+    def test_recovery_hint_none_when_no_result_path(self):
+        """Without result_path in metadata, recovery_hint is None."""
+        inp = CompactionInput(
+            content="test passed\nall good",
+            content_type="code_execution",
+            tokens=50,
+            metadata={"exit_code": 0},
+        )
+        rule = ResultSummaryRule()
+        output = rule.compact(inp, {})
+
+        assert output.recovery_hint is None
 
 
 class TestSupersedeRule:

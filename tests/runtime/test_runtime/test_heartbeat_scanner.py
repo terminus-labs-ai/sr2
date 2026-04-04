@@ -1,6 +1,5 @@
 """Tests for heartbeat scanner."""
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 

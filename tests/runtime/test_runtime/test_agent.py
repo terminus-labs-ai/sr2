@@ -9,7 +9,7 @@ import pytest
 
 from sr2_runtime.agent import Agent, AgentConfig
 from sr2_runtime.plugins.base import TriggerContext
-from sr2_runtime.tool_executor import SimpleTool, ToolExecutor
+from sr2_runtime.tool_executor import SimpleTool
 
 # Resolve the project root (where configs/defaults.yaml lives)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))

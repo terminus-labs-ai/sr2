@@ -24,9 +24,9 @@ _benchmarks_dir = os.path.abspath(_benchmarks_dir)
 if _benchmarks_dir not in sys.path:
     sys.path.insert(0, _benchmarks_dir)
 
-import _shared  # noqa: F401 — sets up sr2 on sys.path
+import _shared  # noqa: E402, F401 — sets up sr2 on sys.path
 
-from token_savings import BenchmarkResult, run_benchmark
+from token_savings import BenchmarkResult, run_benchmark  # noqa: E402
 
 
 @pytest.fixture(scope="module")

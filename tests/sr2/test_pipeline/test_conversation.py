@@ -266,3 +266,126 @@ class TestConversationManager:
         assert transitions["raw_to_compacted"] > 0
         assert "compacted_to_summarized" in transitions
         assert transitions["compacted_to_summarized"] > 0
+
+    @pytest.mark.asyncio
+    async def test_three_zone_full_lifecycle(self):
+        """Full lifecycle: turns flow raw -> compacted -> summarized across multiple cycles.
+
+        Verifies:
+        - Specific turn numbers land in the correct zones
+        - Oldest turns get summarized, newest stay in raw
+        - Multiple summarization cycles accumulate summaries
+        - Zone ordering invariant: summarized < compacted < raw (by turn number)
+        """
+        call_count = 0
+
+        async def mock_llm(system: str, prompt: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            return json.dumps({
+                "summary_of_turns": f"batch-{call_count}",
+                "key_decisions": [f"Decision from batch {call_count}"],
+                "unresolved": [],
+                "facts": [f"Fact from batch {call_count}"],
+                "user_preferences": [],
+                "errors_encountered": [],
+            })
+
+        raw_window = 3
+        compaction_engine = _make_compaction_engine(raw_window=raw_window)
+        summ_config = SummarizationConfig(
+            trigger="token_threshold",
+            threshold=0.3,
+            preserve_recent_turns=1,
+        )
+        summ_engine = SummarizationEngine(config=summ_config, llm_callable=mock_llm)
+
+        mgr = ConversationManager(
+            compaction_engine=compaction_engine,
+            summarization_engine=summ_engine,
+            raw_window=raw_window,
+            compacted_max_tokens=80,  # Low so summarization triggers easily
+        )
+
+        # --- Cycle 1: Add turns 0-7, compact, summarize ---
+        for i in range(8):
+            content = f"Turn {i}: {'x' * 200}"  # ~50+ tokens each
+            role = "user" if i % 2 == 0 else "assistant"
+            mgr.add_turn(_make_turn(i, role=role, content=content))
+
+        assert len(mgr.zones().raw) == 8
+        assert len(mgr.zones().compacted) == 0
+
+        # Compact: older turns move to compacted, last 3 stay in raw
+        mgr.run_compaction()
+        zones = mgr.zones()
+        assert len(zones.raw) == raw_window
+        raw_turn_nums_1 = [t.turn_number for t in zones.raw]
+        compacted_turn_nums_1 = [t.turn_number for t in zones.compacted]
+        assert raw_turn_nums_1 == [5, 6, 7], f"Raw should have newest turns, got {raw_turn_nums_1}"
+        assert compacted_turn_nums_1 == [0, 1, 2, 3, 4], (
+            f"Compacted should have older turns, got {compacted_turn_nums_1}"
+        )
+
+        # Summarize: compacted turns (except preserve_recent=1) become summary
+        summ_result = await mgr.run_summarization()
+        assert summ_result is not None
+        zones = mgr.zones()
+        assert len(zones.summarized) == 1
+        assert "batch 1" in zones.summarized[0].lower() or "batch-1" in zones.summarized[0].lower() or "Decision from batch 1" in zones.summarized[0]
+        # preserve_recent_turns=1 keeps the last compacted turn
+        assert len(zones.compacted) == 1
+        assert zones.compacted[0].turn_number == 4, (
+            "Preserved compacted turn should be the most recent one (turn 4)"
+        )
+        assert len(zones.raw) == raw_window
+
+        # --- Cycle 2: Add turns 8-13, compact again, summarize again ---
+        for i in range(8, 14):
+            content = f"Turn {i}: {'y' * 200}"
+            role = "user" if i % 2 == 0 else "assistant"
+            mgr.add_turn(_make_turn(i, role=role, content=content))
+
+        # raw now has 3 (from before) + 6 new = 9 turns
+        assert len(mgr.zones().raw) == 9
+
+        mgr.run_compaction()
+        zones = mgr.zones()
+        assert len(zones.raw) == raw_window
+        raw_turn_nums_2 = [t.turn_number for t in zones.raw]
+        assert raw_turn_nums_2 == [11, 12, 13], (
+            f"Raw should have newest turns after 2nd compaction, got {raw_turn_nums_2}"
+        )
+        # Compacted should have: preserved turn 4 + turns 5-10
+        compacted_turn_nums_2 = [t.turn_number for t in zones.compacted]
+        assert 4 in compacted_turn_nums_2, "Previously preserved turn 4 should still be in compacted"
+
+        # Second summarization
+        summ_result_2 = await mgr.run_summarization()
+        assert summ_result_2 is not None
+        zones = mgr.zones()
+        assert len(zones.summarized) == 2, "Should have 2 accumulated summaries"
+        assert len(zones.compacted) == 1, "preserve_recent_turns=1 keeps one compacted turn"
+
+        # --- Verify zone ordering invariant ---
+        # Compacted turns should have higher turn numbers than summarized content
+        # Raw turns should have higher turn numbers than compacted turns
+        if zones.compacted:
+            max_compacted = max(t.turn_number for t in zones.compacted)
+            min_raw = min(t.turn_number for t in zones.raw)
+            assert max_compacted < min_raw, (
+                f"Compacted turns ({max_compacted}) must precede raw turns ({min_raw})"
+            )
+
+        # Verify raw zone always has the absolute newest turns
+        assert zones.raw[-1].turn_number == 13
+        assert zones.raw[0].turn_number == 11
+
+        # --- Verify cumulative zone transitions ---
+        transitions = mgr.get_zone_transitions()
+        assert transitions["raw_to_compacted"] > 5, (
+            f"Expected many raw->compacted transitions, got {transitions['raw_to_compacted']}"
+        )
+        assert transitions["compacted_to_summarized"] > 3, (
+            f"Expected multiple compacted->summarized transitions, got {transitions['compacted_to_summarized']}"
+        )

@@ -2,7 +2,7 @@
 
 import pytest
 
-from sr2.compaction.engine import CompactionEngine, CompactionResult, ConversationTurn
+from sr2.compaction.engine import CompactionEngine, ConversationTurn
 from sr2.config.models import CompactionConfig, CompactionRuleConfig
 
 
@@ -50,7 +50,7 @@ class TestCompactionEngine:
             ConversationTurn(turn_number=1, role="assistant", content="ok"),
             ConversationTurn(turn_number=2, role="assistant", content="done"),
         ]
-        result = engine.compact(turns)
+        engine.compact(turns)
 
         assert turns[0].compacted is False
 
@@ -347,4 +347,177 @@ class TestMinContentSizeBoundary:
         result = engine.compact(turns)
         assert result.turns_compacted == 0, (
             f"Content below min_content_size ({min_size - 1} < {min_size} tokens) should NOT be compacted"
+        )
+
+
+class TestRecoveryHintInCompactedContent:
+    """Engine appends '\\n  Recovery: {hint}' to compacted content.
+
+    Each rule produces a different recovery_hint format:
+    - SchemaAndSampleRule (tool_output): 'Re-fetch with {tool_name}'
+    - ReferenceRule (file_content): 'read_file("{path}")'
+    - ResultSummaryRule (code_execution): metadata.result_path or None
+
+    The engine is responsible for appending the hint to the content string.
+    These tests verify the engine-level behavior, not the rule-level hint generation.
+    """
+
+    def test_tool_output_recovery_hint_format(self):
+        """Tool output compaction appends 'Re-fetch with {tool_name}' recovery hint."""
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=5,
+            rules=[
+                CompactionRuleConfig(
+                    type="tool_output",
+                    strategy="schema_and_sample",
+                    recovery_hint=True,
+                ),
+            ],
+        )
+        engine = CompactionEngine(config)
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="tool_result",
+                content=_long_content(20),
+                content_type="tool_output",
+                metadata={"tool_name": "list_directory"},
+            ),
+            ConversationTurn(turn_number=1, role="assistant", content="ok"),
+        ]
+        result = engine.compact(turns)
+
+        assert result.turns_compacted == 1
+        compacted = result.turns[0]
+        assert compacted.content.endswith("\n  Recovery: Re-fetch with list_directory"), (
+            f"Expected tool output recovery hint format, got: {compacted.content!r}"
+        )
+
+    def test_file_content_recovery_hint_format(self):
+        """File content compaction appends 'read_file(\"{path}\")' recovery hint."""
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=5,
+            rules=[
+                CompactionRuleConfig(
+                    type="file_content",
+                    strategy="reference",
+                ),
+            ],
+        )
+        engine = CompactionEngine(config)
+        file_path = "/src/models/user.py"
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="tool_result",
+                content="class User:\n" + "\n".join(f"    field_{i} = {i}" for i in range(20)),
+                content_type="file_content",
+                metadata={"file_path": file_path, "line_count": 21, "language": "python"},
+            ),
+            ConversationTurn(turn_number=1, role="assistant", content="ok"),
+        ]
+        result = engine.compact(turns)
+
+        assert result.turns_compacted == 1
+        compacted = result.turns[0]
+        expected_suffix = f'\n  Recovery: read_file("{file_path}")'
+        assert compacted.content.endswith(expected_suffix), (
+            f"Expected file content recovery hint format ending with {expected_suffix!r}, "
+            f"got: {compacted.content!r}"
+        )
+
+    def test_code_execution_recovery_hint_with_result_path(self):
+        """Code execution with result_path appends it as recovery hint."""
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=5,
+            rules=[
+                CompactionRuleConfig(
+                    type="code_execution",
+                    strategy="result_summary",
+                ),
+            ],
+        )
+        engine = CompactionEngine(config)
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="tool_result",
+                content="Running tests...\n" + "\n".join(f"test_{i} passed" for i in range(20)),
+                content_type="code_execution",
+                metadata={"exit_code": 0, "result_path": "/tmp/exec_42.log"},
+            ),
+            ConversationTurn(turn_number=1, role="assistant", content="ok"),
+        ]
+        result = engine.compact(turns)
+
+        assert result.turns_compacted == 1
+        compacted = result.turns[0]
+        assert "\n  Recovery: /tmp/exec_42.log" in compacted.content, (
+            f"Expected code execution recovery hint with result_path, got: {compacted.content!r}"
+        )
+
+    def test_code_execution_no_recovery_hint_without_result_path(self):
+        """Code execution without result_path has no recovery hint appended."""
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=5,
+            rules=[
+                CompactionRuleConfig(
+                    type="code_execution",
+                    strategy="result_summary",
+                ),
+            ],
+        )
+        engine = CompactionEngine(config)
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="tool_result",
+                content="Running tests...\n" + "\n".join(f"test_{i} passed" for i in range(20)),
+                content_type="code_execution",
+                metadata={"exit_code": 0},
+            ),
+            ConversationTurn(turn_number=1, role="assistant", content="ok"),
+        ]
+        result = engine.compact(turns)
+
+        assert result.turns_compacted == 1
+        compacted = result.turns[0]
+        assert "Recovery:" not in compacted.content, (
+            f"No recovery hint expected when result_path is absent, got: {compacted.content!r}"
+        )
+
+    def test_tool_output_no_recovery_hint_when_disabled(self):
+        """Tool output with recovery_hint=False has no hint appended."""
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=5,
+            rules=[
+                CompactionRuleConfig(
+                    type="tool_output",
+                    strategy="schema_and_sample",
+                    recovery_hint=False,
+                ),
+            ],
+        )
+        engine = CompactionEngine(config)
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="tool_result",
+                content=_long_content(20),
+                content_type="tool_output",
+                metadata={"tool_name": "search_files"},
+            ),
+            ConversationTurn(turn_number=1, role="assistant", content="ok"),
+        ]
+        result = engine.compact(turns)
+
+        assert result.turns_compacted == 1
+        compacted = result.turns[0]
+        assert "Recovery:" not in compacted.content, (
+            f"No recovery hint expected when recovery_hint=False, got: {compacted.content!r}"
         )

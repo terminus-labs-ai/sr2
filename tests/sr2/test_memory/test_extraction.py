@@ -216,6 +216,36 @@ class TestMaxMemoriesBoundary:
         assert len(result.memories) == expected
 
 
+class TestMaxMemoriesPerTurnParametrized:
+    """Parametrized tests for max_memories_per_turn config values."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "num_items, max_memories, expected",
+        [
+            (8, 8, 8),     # exactly at cap
+            (3, 8, 3),     # below cap — fewer items than limit
+            (8, 0, 0),     # zero disables extraction entirely
+            (8, 999, 8),   # very large cap — effectively unlimited
+            (1, 1, 1),     # single item, cap=1
+        ],
+        ids=["at_cap", "below_cap", "zero_disables", "unlimited", "single"],
+    )
+    async def test_max_memories_per_turn(self, store, num_items, max_memories, expected):
+        """max_memories_per_turn: boundary, below-cap, and unlimited cases."""
+        items = [{"key": f"fact.{i}", "value": f"value {i}"} for i in range(num_items)]
+
+        async def mock_llm(prompt: str) -> str:
+            return json.dumps(items)
+
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm, store=store, max_memories_per_turn=max_memories,
+        )
+        result = await extractor.extract("lots of info")
+
+        assert len(result.memories) == expected
+
+
 class TestNoiseFilters:
     """Tests for extraction noise filters."""
 

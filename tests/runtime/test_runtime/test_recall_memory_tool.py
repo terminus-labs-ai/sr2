@@ -5,7 +5,7 @@ import pytest
 from sr2_runtime.tool_executor import RecallMemoryTool
 from sr2.config.models import MemoryScopeConfig
 from sr2.memory.retrieval import HybridRetriever
-from sr2.memory.schema import Memory, MemorySearchResult
+from sr2.memory.schema import Memory
 from sr2.memory.store import InMemoryMemoryStore
 
 

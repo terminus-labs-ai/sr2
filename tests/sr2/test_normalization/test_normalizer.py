@@ -1,6 +1,5 @@
 """Tests for ResponseNormalizer."""
 
-import pytest
 
 from sr2.normalization.normalizer import ResponseNormalizer
 from sr2.normalization.steps import (

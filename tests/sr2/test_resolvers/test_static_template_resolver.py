@@ -38,3 +38,17 @@ async def test_template_token_count():
     result = await resolver.resolve("words", config, ctx)
 
     assert result.tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_different_templates_produce_different_content():
+    """Different config templates produce different resolved content."""
+    resolver = StaticTemplateResolver()
+    ctx = ResolverContext(agent_config={}, trigger_input="hello")
+
+    result_a = await resolver.resolve("intro", {"template": "You are a pirate."}, ctx)
+    result_b = await resolver.resolve("intro", {"template": "You are a scientist."}, ctx)
+
+    assert result_a.content == "You are a pirate."
+    assert result_b.content == "You are a scientist."
+    assert result_a.content != result_b.content

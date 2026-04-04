@@ -1,6 +1,6 @@
 """Tests for memory store (InMemoryMemoryStore)."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
