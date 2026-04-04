@@ -31,9 +31,9 @@ The foundation: a config-driven context engineering library for AI agents.
 - **Bug fix sweep** — fixes across compaction (log format, content truncation, input mutation), summarization (enabled flag, preserve_recent_turns, token budget), circuit breaker (config values for threshold/cooldown), pipeline (consistency issues), cache (warn on unknown policies, remove dead code), resolvers (standardize token counting, fix state mutation), normalization (multi-model compat) ✅
 - **Docker Compose demo stack** — `docker compose up` with example agent + Prometheus + Grafana + Postgres + Open-WebUI + Ollama ✅
 
-### Remaining
+- **HTTP interface parity** — route HTTP/OpenAI-compatible requests through the interface plugin system ✅
 
-- **HTTP interface parity** — route HTTP/OpenAI-compatible requests through the interface plugin system instead of bypassing `handle_user_message()`. Currently the agent-level `pipeline:` config is used as a fallback, but proper per-interface routing (session lifecycle enforcement, dedicated pipeline config) requires an explicit `api` interface entry.
+### Remaining
 - **Remaining metrics instrumentation** — four defined metrics still lack data sources and need new tracking infrastructure:
   - `sr2_task_completion_rate` — track pipeline success/failure ratio over time (needs an invocation outcome counter)
   - `sr2_response_quality` — proxy quality signal from memory extraction success, user feedback, or LLM-as-judge scoring
