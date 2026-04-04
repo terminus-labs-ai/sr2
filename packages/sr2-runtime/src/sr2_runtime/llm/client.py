@@ -320,7 +320,10 @@ class LLMClient:
         if self._embedding.api_base:
             kwargs["api_base"] = self._embedding.api_base
 
-        kwargs["encoding_format"] = "float"  # llama.cpp rejects null
+        provider = self._infer_provider(self._embedding)
+        if provider not in ("ollama",):
+            kwargs["encoding_format"] = "float"  # llama.cpp rejects null
+
         response = await litellm.aembedding(**kwargs)
         return response.data[0]["embedding"]
 

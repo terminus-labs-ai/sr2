@@ -288,3 +288,31 @@ class TestToolCodeParsing:
 
     def test_looks_like_tool_call_plain_text_false(self):
         assert LLMClient._looks_like_tool_call("Just regular text") is False
+
+
+class TestEmbed:
+    """Tests for the embed method."""
+
+    @pytest.mark.asyncio
+    async def test_embed_openai_includes_encoding_format(self):
+        """OpenAI embeddings should include encoding_format='float'."""
+        client = _make_client(
+            embedding=LLMModelConfig(name="text-embedding-3-small"),
+        )
+        mock_response = SimpleNamespace(data=[{"embedding": [0.1, 0.2]}])
+        with patch("litellm.aembedding", new_callable=AsyncMock, return_value=mock_response) as mock_embed:
+            await client.embed("hello")
+            kwargs = mock_embed.call_args.kwargs
+            assert kwargs["encoding_format"] == "float"
+
+    @pytest.mark.asyncio
+    async def test_embed_ollama_excludes_encoding_format(self):
+        """Ollama embeddings should NOT include encoding_format."""
+        client = _make_client(
+            embedding=LLMModelConfig(name="ollama/nomic-embed-text"),
+        )
+        mock_response = SimpleNamespace(data=[{"embedding": [0.1, 0.2]}])
+        with patch("litellm.aembedding", new_callable=AsyncMock, return_value=mock_response) as mock_embed:
+            await client.embed("hello")
+            kwargs = mock_embed.call_args.kwargs
+            assert "encoding_format" not in kwargs
