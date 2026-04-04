@@ -1,0 +1,44 @@
+# Python #
+*.pyc
+__pycache__/
+.pytest_cache/
+.venv
+venv
+
+# Docker #
+.dockerenv
+.dockervols
+
+# Miscellaneous #
+*.log
+*.swp
+*.swo
+*.env
+!.env.example
+
+# Python #
+*.pyc
+__pycache__/
+.pytest_cache/
+.venv
+venv
+
+# Docker #
+.dockerenv
+
+# Miscellaneous #
+*.log
+*.swp
+*.swo
+
+# TypeScript #
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+.coverage
+.ruff_cache
+site/
+.claude/*.local.*
+.opencode

@@ -1,0 +1,66 @@
+site_name: SR2
+site_description: Context engineering library for AI agents
+site_url: https://sr2.dev
+repo_url: https://github.com/terminus-labs-ai/sr2
+repo_name: terminus-labs-ai/sr2
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Core Concepts:
+    - Architecture: architecture.md
+    - Configuration: configuration.md
+  - Guides:
+    - Memory System: guide-memory.md
+    - Compaction: guide-compaction.md
+    - Tool Masking: guide-tool-masking.md
+    - Custom Resolvers: guide-custom-resolvers.md
+    - Circuit Breakers: guide-circuit-breakers.md
+    - Agent-to-Agent: guide-a2a.md
+    - Bridge Proxy: guide-bridge.md
+    - Heartbeats: guide-heartbeats.md
+    - Evaluation: guide-eval-harness.md
+  - Operations:
+    - Observability: observability.md
+    - Troubleshooting: troubleshooting.md
+    - Reference: reference.md
+  - SR2 Pro: pro.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
