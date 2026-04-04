@@ -196,7 +196,7 @@ Config inheritance: `defaults.yaml` → `agent.yaml` → `interfaces/user_messag
 
 **Dynamic heartbeats.** Agents can schedule future callbacks to themselves via `schedule_heartbeat` / `cancel_heartbeat` tools. Supports idempotent keys, context carry-over from the original session, and DB persistence. Use it for async monitoring, retries, or timed reminders. See [Heartbeat Guide](docs/guide-heartbeats.md).
 
-**Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search. Automatic scope detection assigns memories to the correct project/team context without manual configuration. Supports PostgreSQL and SQLite backends.
+**Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search. Automatic scope detection assigns memories to the correct project/team context without manual configuration. SQLite backend included; PostgreSQL via [sr2-pro](https://sr2.dev/pricing).
 
 **Intent detection.** Classify user messages to detect topic shifts, enabling context-aware memory refresh and selective summarization. Foundation for LLM-based topic understanding.
 
@@ -263,7 +263,7 @@ packages/
 │       ├── memory/        #   Extraction, retrieval, conflicts, resolution
 │       ├── degradation/   #   Circuit breaker and degradation ladder
 │       ├── tools/         #   Tool definitions, state machine, masking strategies
-│       ├── metrics/       #   Collector, exporter, alerts
+│       ├── metrics/       #   Collector and pluggable exporter registry
 │       ├── tokenization/  #   Pluggable tokenizers (heuristic, tiktoken)
 │       ├── normalization/ #   LLM response cleaning (thinking blocks, markdown, JSON)
 │       ├── eval/          #   Multi-turn evaluation framework and benchmarking
@@ -373,7 +373,7 @@ SR2 works with any LLM framework — it compiles context, your framework handles
 - **[Quick Reference](docs/reference.md)** — CLI commands, config structure, key directories
 - **[Configuration Reference](docs/configuration.md)** — Every config field, auto-generated from Pydantic models
 - **[Architecture Overview](docs/architecture.md)** — Pipeline flow, three-zone conversation, multi-agent
-- **[Memory System](docs/guide-memory.md)** — Extraction, conflict resolution, retrieval (SQLite + PostgreSQL backends)
+- **[Memory System](docs/guide-memory.md)** — Extraction, conflict resolution, retrieval (SQLite included, PostgreSQL via sr2-pro)
 - **[Compaction](docs/guide-compaction.md)** — Five strategies for compressing tool outputs
 - **[Tool Masking](docs/guide-tool-masking.md)** — Dynamic tool visibility with state machines
 - **[Custom Resolvers](docs/guide-custom-resolvers.md)** — Build pluggable content sources (5 patterns + examples)

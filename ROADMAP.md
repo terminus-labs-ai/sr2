@@ -12,7 +12,7 @@ The foundation: a config-driven context engineering library for AI agents.
 - Memory system: extraction, conflict resolution, hybrid retrieval
 - Tool state machine with three masking strategies
 - Per-layer circuit breakers and graceful degradation
-- Prometheus and OpenTelemetry metrics export
+- Built-in metrics collector with pluggable exporter registry. Prometheus and OpenTelemetry export via [sr2-pro](https://sr2.dev/pricing)
 - Agent runtime with HTTP, Telegram, timer, and A2A plugins
 - MCP client with stdio/HTTP/SSE transport
 

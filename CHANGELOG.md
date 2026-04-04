@@ -41,7 +41,7 @@ Initial public release.
 - Dimensional matching (`best_fit`, `exact`, `fallback_to_generic`)
 - Automatic scope detection — LLM-based `scope_ref` inference from session context, with per-session caching and graceful degradation
 - `list_scope_refs()` on all store backends for querying existing scope/scope_ref pairs
-- Multiple storage backends: In-memory (testing), PostgreSQL (production), SQLite (lightweight)
+- Multiple storage backends: In-memory (testing), SQLite (lightweight). PostgreSQL available via [sr2-pro](https://sr2.dev/pricing)
 
 **Tool Masking**
 - Tool state machine with named states and conditional transitions
@@ -54,9 +54,8 @@ Initial public release.
 
 **Metrics & Observability**
 - 28 pipeline metrics (cache hit rate, token usage, stage timing, degradation events)
-- Prometheus text exposition exporter
-- OpenTelemetry OTLP exporter
-- Alert rule engine with configurable thresholds
+- Built-in metric collector with pluggable exporter registry
+- Prometheus, OpenTelemetry, and alert rules available via [sr2-pro](https://sr2.dev/pricing)
 
 **Content Resolvers**
 - Built-in resolvers: `config`, `input`, `session`, `runtime`, `static_template`, `retrieval`, `mcp_resource`, `mcp_prompt`, `intent_detection`, `preemptive_rotation`

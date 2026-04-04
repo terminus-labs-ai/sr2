@@ -316,7 +316,9 @@ All metrics include `agent` and `interface` labels.
 
 ---
 
-## Built-in Alerts
+## Built-in Alerts (sr2-pro)
+
+> **Requires [sr2-pro](https://sr2.dev/pricing).** Install with `pip install sr2-pro`.
 
 The `AlertRuleEngine` monitors metrics in real-time with these default thresholds:
 
