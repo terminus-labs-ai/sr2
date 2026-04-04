@@ -3,7 +3,7 @@ bridge:
   host: 0.0.0.0
 
   forwarding:
-    upstream_url: http://192.168.50.58:9300
+    upstream_url: https://api.anthropic.com
     timeout_seconds: 1800
     model: claude-opus-4-6
     fast_model: claude-haiku-4-5
