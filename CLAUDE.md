@@ -93,11 +93,10 @@ docker compose -f docker-compose.claude-code.yaml up # Claude Code + proxy
 
 ## Claude Code Provider
 
-SR2-runtime can use Claude Code CLI (`claude --bare -p`) as the main LLM
+SR2-runtime can use Claude Code CLI (`claude -p`) as the main LLM
 provider. Claude Code handles tool execution (Bash, Edit, Read, MCPs, etc.)
 internally while SR2 retains ownership of context engineering (compaction,
-summarization, memory) and session management. Claude Code runs stateless
-via `--bare` — SR2 is the sole memory system.
+summarization, memory) and session management.
 
 ```yaml
 # In agent.yaml:

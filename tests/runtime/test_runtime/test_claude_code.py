@@ -116,7 +116,6 @@ def test_builds_command(mock_which):
     cmd = provider._build_command("hello world", system_prompt="Be helpful.")
 
     assert cmd[0] == "/usr/local/bin/claude"
-    assert "--bare" in cmd
     assert "-p" in cmd
     assert "hello world" in cmd
     assert "--output-format" in cmd
@@ -144,7 +143,6 @@ def test_builds_command_minimal(mock_which):
     provider = ClaudeCodeProvider(config)
     cmd = provider._build_command("test")
 
-    assert "--bare" in cmd
     assert "-p" in cmd
     assert "--system-prompt" not in cmd
     assert "--permission-mode" not in cmd

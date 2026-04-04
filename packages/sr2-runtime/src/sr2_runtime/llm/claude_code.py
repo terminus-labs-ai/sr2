@@ -4,8 +4,8 @@ Claude Code handles its own tool execution (Bash, Edit, Read, MCPs, etc.)
 internally. SR2's LLMLoop is bypassed; SR2 retains ownership of context
 engineering (compaction, summarization, memory) and session management.
 
-The provider runs Claude Code with ``--bare`` so that SR2 is the sole memory
-system — no CLAUDE.md files, no auto-memory, no hooks.
+The provider disables auto-memory and hooks so that SR2 is the sole context
+system, while preserving Claude Code's native OAuth/subscription auth.
 """
 
 from __future__ import annotations
@@ -36,9 +36,9 @@ logger = logging.getLogger(__name__)
 class ClaudeCodeProvider:
     """Wraps the Claude Code CLI as an LLM provider.
 
-    Instead of calling an API via LiteLLM, spawns ``claude --bare -p``
-    with ``--output-format stream-json``. Claude Code runs its own agentic
-    loop internally; SR2 provides context via ``--system-prompt``.
+    Spawns ``claude -p`` with ``--output-format stream-json``.
+    Claude Code runs its own agentic loop internally; SR2 provides
+    context via ``--system-prompt``.
     """
 
     def __init__(self, config: ClaudeCodeConfig) -> None:
@@ -71,7 +71,6 @@ class ClaudeCodeProvider:
         """Build the claude CLI command from config and arguments."""
         cmd = [
             self._resolved_path,
-            "--bare",
             "-p",
             prompt,
             "--output-format",
@@ -149,7 +148,7 @@ class ClaudeCodeProvider:
         cmd = self._build_command(prompt, system_prompt)
         kwargs = self._build_subprocess_kwargs()
 
-        logger.info(f"Spawning Claude Code: {cmd[0]} --bare -p '<prompt>' ...")
+        logger.info(f"Spawning Claude Code: {cmd[0]} -p '<prompt>' ...")
         logger.debug(f"Full command: {cmd}")
 
         proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
