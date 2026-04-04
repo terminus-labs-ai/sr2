@@ -56,7 +56,7 @@ def _discover_entry_points() -> None:
 
     for ep in entry_points(group="sr2.exporters"):
         try:
-            ep.load()
+            ep.load()()
         except Exception:
             logger.warning("Failed to load exporter plugin: %s", ep.name, exc_info=True)
 

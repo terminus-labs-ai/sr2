@@ -6,7 +6,11 @@ from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_to
 
 @pytest.mark.asyncio
 async def test_resolve_existing_key():
-    """Happy path: key exists in agent_config."""
+    """Happy path: key exists in agent_config.
+
+    Note: ConfigResolver ignores the `config` dict parameter — it reads
+    from context.agent_config[key] directly. The empty dict is correct here.
+    """
     resolver = ConfigResolver()
     ctx = ResolverContext(
         agent_config={"system_prompt": "You are helpful."},

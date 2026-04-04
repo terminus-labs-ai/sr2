@@ -105,6 +105,96 @@ class TestCreateDefaultCacheRegistry:
             assert policy is not None
 
 
+class TestRefreshOnStateChangeMultiTurn:
+    """Multi-turn state transitions for RefreshOnStateChangePolicy."""
+
+    def test_state_cycle_a_b_a(self):
+        """State returns to original hash — policy correctly detects the return as no-change.
+
+        Sequence: A (first) -> B (changed) -> A (returned).
+        The policy compares current vs. previous only (not full history),
+        so A->A when previous was B should trigger recompute.
+        """
+        policy = RefreshOnStateChangePolicy()
+
+        state_a = PipelineState(state_hash="hash_a")
+        state_b = PipelineState(state_hash="hash_b")
+        state_a2 = PipelineState(state_hash="hash_a")
+
+        # Turn 1: first call (no previous)
+        assert policy.should_recompute("state", state_a, None) is True
+
+        # Turn 2: A -> B (hash changed)
+        assert policy.should_recompute("state", state_b, state_a) is True
+
+        # Turn 3: B -> A (hash changed back — still a change relative to previous)
+        assert policy.should_recompute("state", state_a2, state_b) is True
+
+    def test_repeated_same_state_no_recompute(self):
+        """Staying in the same state across multiple turns never triggers recompute."""
+        policy = RefreshOnStateChangePolicy()
+
+        state = PipelineState(state_hash="stable")
+        prev = PipelineState(state_hash="stable")
+
+        for _ in range(5):
+            assert policy.should_recompute("state", state, prev) is False
+
+
+class TestRefreshOnTopicShiftMultiTurn:
+    """Multi-turn topic transitions for RefreshOnTopicShiftPolicy."""
+
+    def test_topic_return_triggers_recompute(self):
+        """Returning to a previous topic after a detour triggers recompute.
+
+        Sequence: greet -> weather -> greet.
+        Policy compares current intent to previous intent only, so
+        returning to 'greet' from 'weather' is a change.
+        """
+        policy = RefreshOnTopicShiftPolicy()
+
+        greet = PipelineState(current_intent="greet")
+        weather = PipelineState(current_intent="weather")
+        greet2 = PipelineState(current_intent="greet")
+
+        # Turn 1: first call
+        assert policy.should_recompute("memory", greet, None) is True
+
+        # Turn 2: greet -> weather
+        assert policy.should_recompute("memory", weather, greet) is True
+
+        # Turn 3: weather -> greet (return to previous topic)
+        assert policy.should_recompute("memory", greet2, weather) is True
+
+    def test_same_topic_sustained_no_recompute(self):
+        """Staying on the same topic across turns never triggers recompute."""
+        policy = RefreshOnTopicShiftPolicy()
+
+        prev = PipelineState(current_intent="coding")
+        current = PipelineState(current_intent="coding")
+
+        for _ in range(5):
+            assert policy.should_recompute("memory", current, prev) is False
+
+    def test_none_intent_transition(self):
+        """Transition from a set intent to None counts as a topic shift."""
+        policy = RefreshOnTopicShiftPolicy()
+
+        prev = PipelineState(current_intent="greet")
+        current = PipelineState(current_intent=None)
+
+        assert policy.should_recompute("memory", current, prev) is True
+
+    def test_none_to_none_no_recompute(self):
+        """Both intents None — no topic shift."""
+        policy = RefreshOnTopicShiftPolicy()
+
+        prev = PipelineState(current_intent=None)
+        current = PipelineState(current_intent=None)
+
+        assert policy.should_recompute("memory", current, prev) is False
+
+
 class TestRegistryGetUnknown:
     """Registry get() on unknown name raises KeyError."""
 

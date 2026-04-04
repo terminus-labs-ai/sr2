@@ -199,3 +199,70 @@ class TestConversationManager:
         assert len(all_turns) == 3
         assert all_turns[0].turn_number == 0
         assert all_turns[2].turn_number == 2
+
+    @pytest.mark.asyncio
+    async def test_three_zone_end_to_end(self):
+        """All three zones populated: raw (recent), compacted (compressed), summarized (oldest).
+
+        Workflow: add many turns -> compact -> add more -> compact -> summarize.
+        Verifies that turns flow correctly through the zone pipeline:
+        raw -> compacted -> summarized.
+        """
+        async def mock_llm(system: str, prompt: str) -> str:
+            return json.dumps({
+                "summary_of_turns": "0-4",
+                "key_decisions": ["Adopted Python 3.12"],
+                "unresolved": [],
+                "facts": ["Server runs on port 8008"],
+                "user_preferences": [],
+                "errors_encountered": [],
+            })
+
+        compaction_engine = _make_compaction_engine(raw_window=3)
+        summ_config = SummarizationConfig(
+            trigger="token_threshold", threshold=0.3, preserve_recent_turns=1
+        )
+        summ_engine = SummarizationEngine(config=summ_config, llm_callable=mock_llm)
+
+        mgr = ConversationManager(
+            compaction_engine=compaction_engine,
+            summarization_engine=summ_engine,
+            raw_window=3,
+            compacted_max_tokens=100,  # Low threshold so summarization triggers easily
+        )
+
+        # Phase 1: Add enough turns to force compaction
+        for i in range(8):
+            content = f"Turn {i} content with enough text to be meaningful: {'x' * 200}"
+            mgr.add_turn(_make_turn(i, role="user" if i % 2 == 0 else "assistant", content=content))
+
+        # All 8 turns in raw, nothing compacted yet
+        assert len(mgr.zones().raw) == 8
+        assert len(mgr.zones().compacted) == 0
+
+        # Run compaction: overflow moves older turns to compacted zone
+        result = mgr.run_compaction()
+        assert result is not None
+        assert len(mgr.zones().raw) <= 3  # raw_window=3
+        assert len(mgr.zones().compacted) > 0  # Older turns moved here
+
+        # Phase 2: Run summarization on compacted zone
+        summ_result = await mgr.run_summarization()
+        assert summ_result is not None
+
+        # Verify all three zones are populated
+        zones = mgr.zones()
+        assert len(zones.summarized) >= 1, "Summarized zone should have at least one summary"
+        # preserve_recent_turns=1 keeps 1 turn in compacted
+        assert len(zones.compacted) <= 1, "Compacted zone should have at most 1 preserved turn"
+        assert len(zones.raw) <= 3, "Raw zone should have at most raw_window turns"
+
+        # Verify summary content is present
+        assert "Python 3.12" in zones.summarized[0]
+
+        # Verify zone transitions were tracked
+        transitions = mgr.get_zone_transitions()
+        assert "raw_to_compacted" in transitions
+        assert transitions["raw_to_compacted"] > 0
+        assert "compacted_to_summarized" in transitions
+        assert transitions["compacted_to_summarized"] > 0

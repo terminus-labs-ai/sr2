@@ -157,6 +157,30 @@ class TestRawParametersPassthrough:
         assert schema["parameters"]["required"] == ["arg1"]
 
 
+class TestDeniedToolsPrecedence:
+    """denied_tools takes precedence over allowed_tools (doc: guide-tool-masking.md)."""
+
+    def test_allowed_list_excludes_denied_from_all(self):
+        """allowed_tools='all' + denied_tools=['rm'] -> rm excluded from masking output."""
+        state = ToolStateConfig(name="executing", allowed_tools="all", denied_tools=["rm"])
+        strategy = AllowedListStrategy()
+        result = strategy.apply(_make_tools(), state)
+
+        assert "rm" not in result["allowed_tools"]
+        assert set(result["allowed_tools"]) == {"read_file", "write_file", "bash"}
+        schema_names = [s["name"] for s in result["tool_schemas"]]
+        assert "rm" not in schema_names
+
+    def test_logit_mask_excludes_denied_from_all(self):
+        """LogitMaskStrategy correctly splits denied tools from allowed_tools='all'."""
+        state = ToolStateConfig(name="executing", allowed_tools="all", denied_tools=["rm"])
+        strategy = LogitMaskStrategy()
+        result = strategy.apply(_make_tools(), state)
+
+        assert "rm" in result["denied_tool_tokens"]
+        assert "rm" not in result["allowed_tool_tokens"]
+
+
 class TestGetMaskingStrategy:
     def test_get_existing(self):
         """get_masking_strategy returns correct instance."""

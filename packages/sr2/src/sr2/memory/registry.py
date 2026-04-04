@@ -52,7 +52,7 @@ def _discover_entry_points() -> None:
 
     for ep in entry_points(group="sr2.stores"):
         try:
-            ep.load()  # triggers register_store() call
+            ep.load()()
         except Exception:
             logger.warning("Failed to load store plugin: %s", ep.name, exc_info=True)
 

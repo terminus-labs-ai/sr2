@@ -1,5 +1,6 @@
 """Tests for hybrid retrieval engine."""
 
+import math
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -173,3 +174,46 @@ class TestHybridRetriever:
         # Re-fetch from store to verify persistence
         updated = await store.get(mem.id)
         assert updated.access_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_k", [1, 3, 10, 50])
+    async def test_top_k_parametrized(self, store, top_k):
+        """top_k caps results: 20 stored memories, returns at most top_k."""
+        for i in range(20):
+            await store.save(Memory(key=f"item.{i}", value=f"item number {i}"))
+
+        retriever = HybridRetriever(store=store, strategy="keyword")
+        results = await retriever.retrieve("item", top_k=top_k)
+
+        expected = min(top_k, 20)
+        assert len(results) == expected
+
+    @pytest.mark.asyncio
+    async def test_recency_weight_zero_disables_boost(self, store):
+        """With recency_weight=0 and frequency_weight=0, recency has no effect on scores."""
+        old = Memory(
+            key="user.old_fact",
+            value="old keyword",
+            last_accessed=datetime.now(UTC) - timedelta(days=365),
+            access_count=0,
+        )
+        recent = Memory(
+            key="user.new_fact",
+            value="recent keyword",
+            last_accessed=datetime.now(UTC),
+            access_count=0,
+        )
+        await store.save(old)
+        await store.save(recent)
+
+        retriever = HybridRetriever(
+            store=store,
+            strategy="keyword",
+            recency_weight=0.0,
+            frequency_weight=0.0,
+        )
+        results = await retriever.retrieve("keyword")
+
+        assert len(results) == 2
+        # Both should have equal scores — base keyword score (0.7) * 1.0
+        assert results[0].relevance_score == pytest.approx(results[1].relevance_score)

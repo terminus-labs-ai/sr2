@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from sr2.degradation.circuit_breaker import CircuitBreaker
 
 
@@ -108,3 +110,76 @@ class TestCircuitBreakerIndependentStages:
         cb.record_success("stage_a")
         assert cb.is_open("stage_a") is False
         assert cb._failure_counts.get("stage_b") == 1
+
+
+class TestCircuitBreakerHalfOpen:
+    """Half-open state machine: after cooldown, one trial is allowed."""
+
+    def _open_breaker(self, cb: CircuitBreaker, stage: str = "stage") -> None:
+        """Record enough failures to open the breaker."""
+        for _ in range(cb._threshold):
+            cb.record_failure(stage)
+        assert cb.is_open(stage) is True
+
+    def test_half_open_single_failure_reopens(self):
+        """After cooldown expires, a single failure re-opens the breaker."""
+        cb = CircuitBreaker(threshold=2, cooldown_seconds=0.05)
+        self._open_breaker(cb)
+
+        time.sleep(0.1)
+        # Cooldown expired — breaker should now be closed (half-open trial)
+        assert cb.is_open("stage") is False
+
+        # Trial fails — one failure shouldn't open (threshold=2),
+        # but record enough to re-open
+        cb.record_failure("stage")
+        cb.record_failure("stage")
+        assert cb.is_open("stage") is True
+
+    def test_half_open_success_closes(self):
+        """After cooldown expires, a success closes the breaker and resets counters."""
+        cb = CircuitBreaker(threshold=2, cooldown_seconds=0.05)
+        self._open_breaker(cb)
+
+        time.sleep(0.1)
+        # Cooldown expired — is_open returns False (clears state internally)
+        assert cb.is_open("stage") is False
+
+        # Record success — breaker stays closed, counters cleared
+        cb.record_success("stage")
+        assert cb.is_open("stage") is False
+        assert cb._failure_counts.get("stage") is None
+        assert cb._open_since.get("stage") is None
+
+    def test_half_open_failure_resets_cooldown(self):
+        """After half-open failure re-opens, cooldown restarts from scratch."""
+        cb = CircuitBreaker(threshold=1, cooldown_seconds=0.05)
+        self._open_breaker(cb)
+
+        time.sleep(0.1)
+        # Cooldown expired — half-open
+        assert cb.is_open("stage") is False
+
+        # Fail again — re-opens immediately (threshold=1)
+        cb.record_failure("stage")
+        assert cb.is_open("stage") is True
+
+        # Should still be open immediately (cooldown just restarted)
+        assert cb.is_open("stage") is True
+
+        # Wait for second cooldown
+        time.sleep(0.1)
+        assert cb.is_open("stage") is False
+
+
+class TestCircuitBreakerThresholdParametrized:
+    """Verify breaker opens at exactly the configured threshold."""
+
+    @pytest.mark.parametrize("threshold", [1, 2, 3, 5])
+    def test_threshold_opens_at_exact_count(self, threshold):
+        cb = CircuitBreaker(threshold=threshold, cooldown_seconds=300.0)
+        for i in range(threshold - 1):
+            cb.record_failure("stage")
+            assert cb.is_open("stage") is False, f"Opened early at failure {i+1}/{threshold}"
+        cb.record_failure("stage")
+        assert cb.is_open("stage") is True, f"Should open at failure {threshold}"

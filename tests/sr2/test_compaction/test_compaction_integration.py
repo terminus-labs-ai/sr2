@@ -153,7 +153,12 @@ class TestCompactionOnlyIntegration:
                 )
 
     def test_compacted_content_includes_recovery_hints(self):
-        """Compacted tool outputs must include recovery hints."""
+        """Compacted tool outputs must include recovery hints with tool name.
+
+        Engine appends: '\\n  Recovery: {hint}'
+        SchemaAndSampleRule with recovery_hint=True produces: 'Re-fetch with {tool_name}'
+        So final format is: '\\n  Recovery: Re-fetch with {tool_name}'
+        """
         mgr = self._build_pipeline()
 
         for i in range(10):
@@ -169,12 +174,65 @@ class TestCompactionOnlyIntegration:
         assert len(compacted_tools) > 0, "Should have at least one compacted tool output"
 
         for turn in compacted_tools:
-            assert "Recovery:" in turn.content, (
-                f"Turn {turn.turn_number} missing recovery hint. Content: {turn.content}"
+            tool_name = turn.metadata.get("tool_name", "the tool")
+            expected_hint = f"\n  Recovery: Re-fetch with {tool_name}"
+            assert expected_hint in turn.content, (
+                f"Turn {turn.turn_number} missing expected recovery hint "
+                f"'{expected_hint}'. Content: {turn.content}"
             )
-            assert "Re-fetch" in turn.content, (
-                f"Turn {turn.turn_number} recovery hint doesn't contain re-fetch instruction"
-            )
+
+    def test_file_content_recovery_hint_format(self):
+        """File content compacted with ReferenceRule must include read_file recovery hint.
+
+        ReferenceRule produces recovery_hint='read_file("{path}")'.
+        Engine appends: '\\n  Recovery: read_file("{path}")'.
+        """
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=2,
+            min_content_size=10,
+            rules=[
+                CompactionRuleConfig(
+                    type="file_content",
+                    strategy="reference",
+                    recovery_hint=True,
+                ),
+            ],
+        )
+        engine = CompactionEngine(config)
+        mgr = ConversationManager(
+            compaction_engine=engine,
+            summarization_engine=None,
+            raw_window=2,
+            compacted_max_tokens=10000,
+        )
+
+        file_path = "/src/app/main.py"
+        file_content = "def main():\n" + "\n".join(f"    x_{i} = {i}" for i in range(30))
+        file_turn = ConversationTurn(
+            turn_number=0,
+            role="tool_result",
+            content=file_content,
+            content_type="file_content",
+            metadata={"file_path": file_path, "line_count": 31, "language": "python"},
+        )
+        mgr.add_turn(file_turn)
+        mgr.add_turn(_make_assistant_turn(1, "Here's the file."))
+        mgr.add_turn(_make_user_turn(2, "Thanks"))
+        mgr.add_turn(_make_assistant_turn(3, "You're welcome"))
+
+        result = mgr.run_compaction()
+        assert result is not None
+        assert result.turns_compacted == 1
+
+        compacted_turn = [t for t in mgr.zones().compacted if t.compacted][0]
+        # ReferenceRule replaces content with "→ Saved to {path} ({metadata})"
+        assert f"Saved to {file_path}" in compacted_turn.content
+        # Recovery hint format: read_file("{path}")
+        expected_recovery = f'\n  Recovery: read_file("{file_path}")'
+        assert expected_recovery in compacted_turn.content, (
+            f"Expected recovery hint '{expected_recovery}' in content: {compacted_turn.content}"
+        )
 
     def test_zone_transitions_tracked(self):
         """Zone transition metrics should be updated after compaction."""
@@ -377,8 +435,23 @@ class TestCompactionPlusSummarizationIntegration:
             assert len(zones.compacted) == 2, (
                 f"Expected 2 preserved turns, got {len(zones.compacted)}"
             )
-            # These should be the most recent turns from the compacted zone
-            assert zones.compacted[-1].turn_number == compacted_before[-1].turn_number
+            # Preserved turns must be the MOST RECENT from the compacted zone,
+            # not arbitrary ones. Verify identity of both preserved turns.
+            expected_preserved = compacted_before[-2:]
+            for i, (actual, expected) in enumerate(zip(zones.compacted, expected_preserved)):
+                assert actual.turn_number == expected.turn_number, (
+                    f"Preserved turn {i}: expected turn_number={expected.turn_number}, "
+                    f"got {actual.turn_number}. Preserved turns must be the most recent."
+                )
+                assert actual.content == expected.content, (
+                    f"Preserved turn {i} (turn_number={actual.turn_number}): "
+                    f"content changed after summarization"
+                )
+            # Also verify ordering: preserved turns should be in ascending turn order
+            assert zones.compacted[0].turn_number < zones.compacted[1].turn_number, (
+                f"Preserved turns should be in ascending order: "
+                f"{zones.compacted[0].turn_number} >= {zones.compacted[1].turn_number}"
+            )
 
     @pytest.mark.asyncio
     async def test_zone_transitions_tracked_through_both(self):
@@ -506,3 +579,165 @@ class TestCompactionRuleMatching:
         ]
         result = engine.compact(turns)
         assert result.turns_compacted == 0
+
+
+class TestCompactionDisabled:
+    """When enabled=False, compaction must never run regardless of content."""
+
+    def test_compaction_disabled_no_turns_compacted(self):
+        """With enabled=False, turns matching rules are never compacted."""
+        config = CompactionConfig(
+            enabled=False,
+            raw_window=2,
+            min_content_size=5,
+            rules=[
+                CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
+                CompactionRuleConfig(type="file_content", strategy="reference"),
+                CompactionRuleConfig(type="code_execution", strategy="result_summary"),
+            ],
+        )
+        engine = CompactionEngine(config)
+        mgr = ConversationManager(
+            compaction_engine=engine,
+            summarization_engine=None,
+            raw_window=2,
+            compacted_max_tokens=10000,
+        )
+
+        # Add turns that WOULD match every configured rule if enabled
+        mgr.add_turn(ConversationTurn(
+            turn_number=0, role="tool_result",
+            content=_long_tool_output(20),
+            content_type="tool_output",
+            metadata={"tool_name": "search"},
+        ))
+        mgr.add_turn(ConversationTurn(
+            turn_number=1, role="tool_result",
+            content="def main():\n" + "\n".join(f"    line_{i} = {i}" for i in range(30)),
+            content_type="file_content",
+            metadata={"file_path": "/src/main.py", "line_count": 30},
+        ))
+        mgr.add_turn(ConversationTurn(
+            turn_number=2, role="tool_result",
+            content="Running tests...\n" + "\n".join(f"test_{i} PASSED" for i in range(20)),
+            content_type="code_execution",
+            metadata={"exit_code": 0},
+        ))
+        # Padding turns to push others outside raw window
+        mgr.add_turn(_make_assistant_turn(3, "ok"))
+        mgr.add_turn(_make_assistant_turn(4, "done"))
+
+        result = mgr.run_compaction()
+
+        # run_compaction returns None when disabled
+        assert result is None, (
+            "run_compaction should return None when compaction is disabled"
+        )
+
+        # Verify all turns are untouched — none have compacted=True
+        zones = mgr.zones()
+        all_turns = zones.compacted + zones.raw
+        for turn in all_turns:
+            assert turn.compacted is False, (
+                f"Turn {turn.turn_number} (content_type={turn.content_type}) "
+                f"was compacted despite enabled=False"
+            )
+
+
+class TestRuleMatchingBehavior:
+    """Tests for rule matching mechanics in CompactionEngine._build_rule_map.
+
+    The docs say 'if a turn matches multiple types, the first matching rule wins.'
+    However, the implementation uses a dict keyed by content_type. Each turn has
+    exactly one content_type, so there's no ambiguity at match time. But if two
+    rules are configured with the SAME type, the dict overwrites — meaning the
+    LAST rule definition wins, not the first.
+
+    This test documents that behavior.
+    """
+
+    def test_duplicate_type_last_rule_wins(self):
+        """When two rules share the same type, the last one in the list is used.
+
+        This is a dict-overwrite behavior, not 'first match wins'. The docs are
+        misleading — there's no list-scan; it's a dict lookup by content_type.
+        """
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=5,
+            rules=[
+                # First rule for tool_output: schema_and_sample
+                CompactionRuleConfig(
+                    type="tool_output",
+                    strategy="schema_and_sample",
+                    max_compacted_tokens=80,
+                ),
+                # Second rule for tool_output: collapse (overwrites the first)
+                CompactionRuleConfig(
+                    type="tool_output",
+                    strategy="collapse",
+                ),
+            ],
+        )
+        engine = CompactionEngine(config)
+
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="tool_result",
+                content=_long_tool_output(20),
+                content_type="tool_output",
+                metadata={"tool_name": "search_files", "args_summary": "*.py"},
+            ),
+            _make_assistant_turn(1),
+        ]
+        result = engine.compact(turns)
+
+        assert result.turns_compacted == 1
+        compacted = result.turns[0]
+        # CollapseRule produces "→ ✓ {tool_name}({args_summary})"
+        assert "✓" in compacted.content and "search_files" in compacted.content, (
+            f"Expected collapse strategy output (last rule wins), got: {compacted.content}"
+        )
+        # Verify it did NOT use schema_and_sample (which produces "X lines. Sample:")
+        assert "lines" not in compacted.content, (
+            f"First rule (schema_and_sample) was used instead of last rule (collapse): {compacted.content}"
+        )
+
+    def test_each_content_type_maps_to_one_rule(self):
+        """A turn's content_type is looked up in a dict — exactly one rule applies.
+
+        This confirms there's no ambiguity: each content_type has at most one
+        rule, and matching is O(1) dict lookup, not a list scan.
+        """
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=5,
+            rules=[
+                CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
+                CompactionRuleConfig(type="file_content", strategy="reference"),
+            ],
+        )
+        engine = CompactionEngine(config)
+
+        # Verify the internal rule map has exactly one entry per type
+        assert len(engine._rule_map) == 2
+        assert "tool_output" in engine._rule_map
+        assert "file_content" in engine._rule_map
+
+        # A turn with content_type="tool_output" gets schema_and_sample, not reference
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="tool_result",
+                content=_long_tool_output(20),
+                content_type="tool_output",
+                metadata={"tool_name": "search"},
+            ),
+            _make_assistant_turn(1),
+        ]
+        result = engine.compact(turns)
+        assert result.turns_compacted == 1
+        assert "lines" in result.turns[0].content, (
+            "tool_output should use schema_and_sample strategy"
+        )

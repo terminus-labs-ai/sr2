@@ -169,18 +169,29 @@ class TestEvaluateBatch:
     """Test evaluate_batch cascading invalidation logic."""
 
     def test_cascading_invalidation_reduces_cost(self):
-        """Later turns benefit from earlier turns already invalidating the cache."""
+        """Later turns benefit from earlier turns already invalidating the cache.
+
+        Setup: first candidate has large savings and small tail so it's clearly allowed.
+        Second candidate's effective invalidation is reduced by the first's already_invalidated.
+        """
         gate = _make_gate(min_net=0.0)
         candidates = [
-            CompactionCandidate(turn_index=0, turn_tokens=3000, estimated_compacted_tokens=300, total_tokens_after_turn=10000),
-            CompactionCandidate(turn_index=1, turn_tokens=3000, estimated_compacted_tokens=300, total_tokens_after_turn=7000),
+            # Large savings (50000 tokens saved), small tail (100 tokens) => clearly net-positive
+            CompactionCandidate(turn_index=0, turn_tokens=50000, estimated_compacted_tokens=500, total_tokens_after_turn=100),
+            # Second turn: tail=80, but first already invalidated 100 => effective = max(0, 80-100) = 0
+            CompactionCandidate(turn_index=1, turn_tokens=3000, estimated_compacted_tokens=300, total_tokens_after_turn=80),
         ]
         decisions = gate.evaluate_batch(candidates)
         assert len(decisions) == 2
-        # If first is allowed, second should see reduced invalidation cost
-        if decisions[0].allowed:
-            # Second decision's effective invalidation should be 0 (7000 - 10000 is clamped to 0)
-            assert decisions[1].cache_invalidation_tokens == 0
+
+        # First must be allowed: savings far exceed invalidation
+        assert decisions[0].allowed is True, (
+            f"First candidate should be allowed (large savings, small tail). Reason: {decisions[0].reason}"
+        )
+        # Second sees zero effective invalidation (80 - 100 clamped to 0)
+        assert decisions[1].cache_invalidation_tokens == 0, (
+            f"Expected 0 effective invalidation tokens, got {decisions[1].cache_invalidation_tokens}"
+        )
 
     def test_batch_processes_in_turn_order(self):
         """Candidates are sorted by turn_index regardless of input order."""

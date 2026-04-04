@@ -134,3 +134,38 @@ class TestConflictResolver:
 
         old = await store.get(existing.id)
         assert old is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "memory_type, expected_action",
+        [
+            ("identity", "archive_old"),
+            ("semi_stable", "archive_old"),
+            ("dynamic", "keep_new"),
+            ("ephemeral", "archive_old"),  # ephemeral not in defaults → falls back to archive
+        ],
+        ids=["identity_archives", "semi_stable_archives", "dynamic_discards", "ephemeral_fallback"],
+    )
+    async def test_default_strategy_per_memory_type(self, store, memory_type, expected_action):
+        """Default ConflictResolver (no custom strategies) applies correct strategy per type."""
+        existing = Memory(key="test.key", value="old_value", memory_type=memory_type)
+        new = Memory(key="test.key", value="new_value", memory_type=memory_type)
+        await store.save(existing)
+
+        resolver = ConflictResolver(store=store)
+        conflict = Conflict(
+            new_memory=new, existing_memory=existing,
+            conflict_type="key_match", confidence=1.0,
+        )
+        result = await resolver.resolve(conflict)
+
+        assert result.action == expected_action
+        assert result.winner.value == "new_value"
+
+        if expected_action == "archive_old":
+            old = await store.get(existing.id)
+            assert old is not None
+            assert old.archived is True
+        else:
+            old = await store.get(existing.id)
+            assert old is None

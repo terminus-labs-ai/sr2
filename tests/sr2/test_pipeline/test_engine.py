@@ -413,3 +413,55 @@ class TestPipelineEngine:
         assert result.prefix_snapshot.full_hash is not None
         assert "core" in result.prefix_snapshot.layer_hashes
         assert result.prefix_snapshot.prefix_tokens == 10
+
+    async def test_kv_cache_layer_ordering_l1_l2_l3(self):
+        """Compiled context preserves layer order: L1 (core) -> L2 (memory) -> L3 (conversation).
+
+        The pipeline assembles layers in config order (most-stable to least-stable).
+        This ensures KV-cache prefix stability: immutable layers come first so that
+        the prefix can be reused across turns.
+        """
+        resolver_core = MockResolver(content="system prompt text", tokens=100)
+        resolver_memory = MockResolver(content="retrieved memories", tokens=80)
+        resolver_conv = MockResolver(content="user: hello\nassistant: hi", tokens=60)
+
+        resolvers = ContentResolverRegistry()
+        resolvers.register("core_src", resolver_core)
+        resolvers.register("memory_src", resolver_memory)
+        resolvers.register("conv_src", resolver_conv)
+
+        engine = PipelineEngine(resolvers, create_default_cache_registry())
+        config = _make_config([
+            LayerConfig(
+                name="core",
+                cache_policy="immutable",
+                contents=[ContentItemConfig(key="sys", source="core_src")],
+            ),
+            LayerConfig(
+                name="memory",
+                cache_policy="immutable",
+                contents=[ContentItemConfig(key="mem", source="memory_src")],
+            ),
+            LayerConfig(
+                name="conversation",
+                cache_policy="always_new",
+                contents=[ContentItemConfig(key="conv", source="conv_src")],
+            ),
+        ])
+
+        result = await engine.compile(config, _make_context())
+
+        # Verify layer ordering in the compiled output
+        layer_names = list(result.layers.keys())
+        assert layer_names == ["core", "memory", "conversation"], (
+            f"Layers must be ordered L1->L2->L3, got {layer_names}"
+        )
+
+        # Verify content order in the serialized output
+        content = result.content
+        core_pos = content.index("system prompt text")
+        memory_pos = content.index("retrieved memories")
+        conv_pos = content.index("user: hello")
+        assert core_pos < memory_pos < conv_pos, (
+            "Content must be ordered: core < memory < conversation"
+        )

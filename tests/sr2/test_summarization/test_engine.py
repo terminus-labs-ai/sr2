@@ -164,3 +164,52 @@ class TestSummarizationEngine:
         assert result.summary.facts == []
         assert result.summary.user_preferences == []
         assert result.summary.errors_encountered == []
+
+
+class TestSummarizationTriggerTypes:
+    """Tests for trigger type behavior: token_threshold, topic_shift, manual."""
+
+    def test_manual_trigger_never_auto_triggers(self):
+        """With trigger='manual', should_trigger() always returns False."""
+        config = SummarizationConfig(trigger="manual", threshold=0.1)
+        engine = SummarizationEngine(config=config)
+
+        # Even with tokens far exceeding threshold, manual trigger never fires
+        assert engine.should_trigger(compacted_tokens=9999, max_tokens=100) is False
+        assert engine.should_trigger(compacted_tokens=100, max_tokens=100) is False
+        assert engine.should_trigger(compacted_tokens=0, max_tokens=100) is False
+
+    @pytest.mark.asyncio
+    async def test_manual_trigger_summarize_still_works_when_called_explicitly(self):
+        """With trigger='manual', explicit summarize() call still works."""
+        async def mock_llm(system: str, prompt: str) -> str:
+            return "Manual summary of the conversation."
+
+        config = SummarizationConfig(trigger="manual", output_format="prose")
+        engine = SummarizationEngine(config=config, llm_callable=mock_llm)
+
+        # should_trigger is False
+        assert engine.should_trigger(compacted_tokens=9999, max_tokens=100) is False
+
+        # But explicit summarize() works fine
+        result = await engine.summarize("conversation text", "1-10", original_tokens=500)
+        assert isinstance(result.summary, str)
+        assert "Manual summary" in result.summary
+
+    def test_topic_shift_trigger_does_not_respond_to_token_count(self):
+        """With trigger='topic_shift', token counts alone don't trigger summarization."""
+        config = SummarizationConfig(trigger="topic_shift", threshold=0.1)
+        engine = SummarizationEngine(config=config)
+
+        # Even with tokens way over threshold, topic_shift doesn't respond to token counts
+        assert engine.should_trigger(compacted_tokens=9999, max_tokens=100) is False
+        assert engine.should_trigger(compacted_tokens=100, max_tokens=100) is False
+
+    def test_disabled_engine_never_triggers(self):
+        """With enabled=False, no trigger type fires."""
+        for trigger in ("token_threshold", "topic_shift", "manual"):
+            config = SummarizationConfig(enabled=False, trigger=trigger, threshold=0.1)
+            engine = SummarizationEngine(config=config)
+            assert engine.should_trigger(compacted_tokens=9999, max_tokens=100) is False, (
+                f"Disabled engine with trigger={trigger} should never trigger"
+            )

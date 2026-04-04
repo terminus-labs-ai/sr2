@@ -103,3 +103,18 @@ class TestDimensionalMatcher:
         assert results[0].memory.value == "high"
         scores = [r.relevance_score for r in results]
         assert scores == sorted(scores, reverse=True)
+
+    def test_best_fit_exact_multiplier_values(self):
+        """best_fit applies documented multipliers: 1.2x match, 0.3x mismatch, 0.9x unscoped."""
+        matcher = DimensionalMatcher(matching_strategy="best_fit")
+        base_score = 0.5
+
+        matched = _make_result("matched", base_score, dims={"channel": "slack"})
+        mismatched = _make_result("mismatched", base_score, dims={"channel": "email"})
+        unscoped = _make_result("unscoped", base_score)
+
+        matcher.filter([matched, mismatched, unscoped], {"channel": "slack"})
+
+        assert matched.relevance_score == pytest.approx(base_score * 1.2)
+        assert mismatched.relevance_score == pytest.approx(base_score * 0.3)
+        assert unscoped.relevance_score == pytest.approx(base_score * 0.9)

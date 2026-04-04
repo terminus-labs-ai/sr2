@@ -688,6 +688,140 @@ class TestBudgetChangeBetweenSessions:
         assert engine.truncation_events == 3
 
 
+class TestInterfaceSpecificBudgets:
+    """Tests for per-interface token budget enforcement."""
+
+    @pytest.mark.parametrize(
+        "interface_name,token_budget",
+        [
+            ("heartbeat", 3000),
+            ("a2a", 8000),
+            ("user_message", 48000),
+        ],
+    )
+    async def test_interface_budget_enforced(self, interface_name, token_budget):
+        """Different interfaces have different token budgets; each is enforced."""
+        # Create a resolver that produces content near each budget boundary
+        content_tokens = token_budget + 500  # Exceeds budget to trigger enforcement
+        big_resolver = MockResolver(content="x" * (content_tokens * 4), tokens=content_tokens)
+        core_resolver = MockResolver(content="core", tokens=200)
+
+        resolvers = ContentResolverRegistry()
+        resolvers.register("core_src", core_resolver)
+        resolvers.register("big_src", big_resolver)
+
+        engine = PipelineEngine(resolvers, create_default_cache_registry())
+        config = _make_config(
+            [
+                LayerConfig(
+                    name="core",
+                    cache_policy="immutable",
+                    contents=[ContentItemConfig(key="c", source="core_src")],
+                ),
+                LayerConfig(
+                    name="dynamic",
+                    cache_policy="always_new",
+                    contents=[ContentItemConfig(key="d", source="big_src")],
+                ),
+            ],
+            token_budget=token_budget,
+        )
+
+        result = await engine.compile(config, _make_context())
+
+        assert result.tokens <= token_budget, (
+            f"Interface '{interface_name}' budget {token_budget} exceeded: "
+            f"got {result.tokens} tokens"
+        )
+
+    async def test_small_budget_still_preserves_core_layer(self):
+        """Even with a very small budget (heartbeat), the core layer is preserved."""
+        core_resolver = MockResolver(content="system prompt", tokens=500)
+        extra_resolver = MockResolver(content="x" * 12000, tokens=3000)
+
+        resolvers = ContentResolverRegistry()
+        resolvers.register("core_src", core_resolver)
+        resolvers.register("extra_src", extra_resolver)
+
+        engine = PipelineEngine(resolvers, create_default_cache_registry())
+        config = _make_config(
+            [
+                LayerConfig(
+                    name="core",
+                    cache_policy="immutable",
+                    contents=[ContentItemConfig(key="c", source="core_src")],
+                ),
+                LayerConfig(
+                    name="extra",
+                    cache_policy="always_new",
+                    contents=[ContentItemConfig(key="e", source="extra_src")],
+                ),
+            ],
+            token_budget=3000,
+        )
+
+        result = await engine.compile(config, _make_context())
+
+        # Core layer must be untouched
+        assert result.layers["core"][0].tokens == 500
+        assert result.layers["core"][0].content == "system prompt"
+        assert result.tokens <= 3000
+
+
+class TestPreRotationThreshold:
+    """Tests for pre-emptive context rotation threshold."""
+
+    def test_should_rotate_at_75_percent(self):
+        """pre_rot_threshold=0.25 means rotation triggers at 75% usage (1 - 0.25)."""
+        from sr2.resolvers.preemptive_rotation_resolver import PreemptiveRotationResolver
+
+        budget = 10000
+        threshold = 1 - 0.25  # 0.75 — triggers when 75% consumed
+
+        # At exactly 75% — should rotate
+        assert PreemptiveRotationResolver.should_rotate(7500, budget, threshold) is True
+        # Above 75% — should rotate
+        assert PreemptiveRotationResolver.should_rotate(8000, budget, threshold) is True
+        # Below 75% — should NOT rotate
+        assert PreemptiveRotationResolver.should_rotate(7000, budget, threshold) is False
+
+    def test_rotation_status_details(self):
+        """get_rotation_status returns correct ratio and threshold info."""
+        from sr2.resolvers.preemptive_rotation_resolver import PreemptiveRotationResolver
+
+        status = PreemptiveRotationResolver.get_rotation_status(
+            current_tokens=7500, token_budget=10000, threshold=0.75
+        )
+
+        assert status["should_rotate"] is True
+        assert status["ratio"] == 0.75
+        assert status["threshold"] == 0.75
+        assert status["tokens_until_rotation"] == 0
+
+    def test_rotation_not_triggered_below_threshold(self):
+        """Rotation not triggered when usage is below threshold."""
+        from sr2.resolvers.preemptive_rotation_resolver import PreemptiveRotationResolver
+
+        status = PreemptiveRotationResolver.get_rotation_status(
+            current_tokens=5000, token_budget=10000, threshold=0.75
+        )
+
+        assert status["should_rotate"] is False
+        assert status["ratio"] == 0.5
+        assert status["tokens_until_rotation"] == 2500  # 7500 - 5000
+
+    def test_pre_rot_threshold_config_default(self):
+        """PipelineConfig.pre_rot_threshold defaults to 0.25."""
+        config = PipelineConfig(token_budget=10000, layers=[])
+        assert config.pre_rot_threshold == 0.25
+
+    def test_zero_budget_does_not_crash(self):
+        """should_rotate with zero budget returns False (no division by zero)."""
+        from sr2.resolvers.preemptive_rotation_resolver import PreemptiveRotationResolver
+
+        assert PreemptiveRotationResolver.should_rotate(100, 0, 0.75) is False
+
+
 class TestBudgetEnforcementLogging:
     """Tests for proper logging during budget enforcement."""
 
