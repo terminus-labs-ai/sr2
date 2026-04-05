@@ -20,7 +20,6 @@ import logging
 import os
 import shutil
 import time
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -136,54 +135,49 @@ class ClaudeCodeAdapter:
         system_prompt: str | None,
         messages: list[dict],
     ) -> tuple[str | None, str]:
-        """Serialize SR2's optimized context into system_prompt + prompt strings.
+        """Extract the latest user message as the prompt.
 
-        The system prompt is passed via ``--system-prompt``.  The full
-        conversation history (user + assistant turns) is serialized into
-        the prompt string so Claude Code sees the complete context.
+        SR2's pipeline compiles all context (memories, session summaries,
+        retrieved knowledge, tool schemas) into the system prompt passed
+        via ``--system-prompt``.  The ``-p`` prompt only needs the current
+        user message — SR2 is the sole context provider.
+
+        For multimodal messages (content-block lists), non-text blocks
+        (e.g. images) are described as text placeholders since Claude Code
+        CLI only accepts text prompts.
 
         Returns:
             (system_prompt, prompt) tuple ready for ``_build_command``.
         """
-        parts: list[str] = []
-        for msg in messages:
+        last_user_message = ""
+        for msg in reversed(messages):
             role = msg.get("role", "user")
-            content = msg.get("content", "")
+            if role == "user":
+                content = msg.get("content", "")
+                # Handle Anthropic content-block lists (may include images, etc.)
+                if isinstance(content, list):
+                    parts: list[str] = []
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        block_type = block.get("type", "")
+                        if block_type == "text":
+                            parts.append(block.get("text", ""))
+                        elif block_type == "image":
+                            # Image blocks can't be passed via CLI text prompt;
+                            # include a placeholder so the model knows media was sent.
+                            source = block.get("source", {})
+                            media_type = source.get("media_type", "image")
+                            parts.append(f"[Attached image: {media_type}]")
+                        elif block_type == "document":
+                            parts.append("[Attached document]")
+                        else:
+                            parts.append(f"[Attached media: {block_type}]")
+                    content = "\n".join(parts)
+                last_user_message = content
+                break
 
-            # Handle Anthropic content-block lists
-            if isinstance(content, list):
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        if block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
-                        elif block.get("type") == "tool_use":
-                            text_parts.append(
-                                f"[Tool call: {block.get('name', '?')}]"
-                            )
-                        elif block.get("type") == "tool_result":
-                            result_content = block.get("content", "")
-                            if isinstance(result_content, list):
-                                result_content = " ".join(
-                                    b.get("text", "")
-                                    for b in result_content
-                                    if isinstance(b, dict)
-                                )
-                            text_parts.append(f"[Tool result: {result_content}]")
-                    else:
-                        text_parts.append(str(block))
-                content = "\n".join(text_parts)
-
-            if role == "system":
-                # System messages go into the system prompt
-                continue
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-            else:
-                parts.append(f"Human: {content}")
-
-        prompt = "\n\n".join(parts) if parts else ""
-        return system_prompt, prompt
+        return system_prompt, last_user_message
 
     # ------------------------------------------------------------------
     # Execution
@@ -213,7 +207,9 @@ class ClaudeCodeAdapter:
         sys_prompt, prompt = self.serialize_conversation(system_prompt, messages)
         async with self._semaphore:
             return await self._run_subprocess(
-                prompt=prompt, system_prompt=sys_prompt, stream_callback=stream_callback,
+                prompt=prompt,
+                system_prompt=sys_prompt,
+                stream_callback=stream_callback,
             )
 
     async def _run_subprocess(
@@ -261,14 +257,20 @@ class ClaudeCodeAdapter:
                     response_text=f"Error: Claude Code timed out after {self._timeout} seconds.",
                     stopped_reason="error",
                 )
+            except asyncio.CancelledError:
+                logger.info(
+                    "Claude Code subprocess cancelled (client disconnect), killing PID %s",
+                    proc.pid,
+                )
+                proc.kill()
+                await proc.wait()
+                raise
 
             await proc.wait()
 
             if proc.returncode != 0:
                 stderr_out = await proc.stderr.read()
-                stderr_text = (
-                    stderr_out.decode(errors="replace")[:1000] if stderr_out else ""
-                )
+                stderr_text = stderr_out.decode(errors="replace")[:1000] if stderr_out else ""
                 logger.error(
                     "Claude Code exited with code %d: %s",
                     proc.returncode,
@@ -355,18 +357,14 @@ class ClaudeCodeAdapter:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                logger.warning(
-                    "Malformed JSON from Claude Code, skipping: %s", line[:200]
-                )
+                logger.warning("Malformed JSON from Claude Code, skipping: %s", line[:200])
                 continue
 
             event_type = event.get("type", "")
 
             # System init
             if event_type == "system" and event.get("subtype") == "init":
-                logger.info(
-                    "Claude Code session: %s", event.get("session_id", "unknown")
-                )
+                logger.info("Claude Code session: %s", event.get("session_id", "unknown"))
                 continue
 
             # Assistant message (text + tool_use blocks)
@@ -382,7 +380,7 @@ class ClaudeCodeAdapter:
                             # Emit only the NEW text (delta), not the full cumulative text
                             prev = getattr(acc, "last_emitted_text", "")
                             if text != prev:
-                                delta = text[len(prev):] if text.startswith(prev) else text
+                                delta = text[len(prev) :] if text.startswith(prev) else text
                                 if delta:
                                     await _emit(TextDeltaEvent(content=delta))
                                     acc.last_emitted_text = text
@@ -396,33 +394,30 @@ class ClaudeCodeAdapter:
                             "start_time": time.perf_counter(),
                             "iteration": acc.current_iteration,
                         }
-                        await _emit(ToolStartEvent(
-                            tool_name=tool_name,
-                            tool_call_id=tool_id,
-                            arguments=tool_input,
-                        ))
+                        await _emit(
+                            ToolStartEvent(
+                                tool_name=tool_name,
+                                tool_call_id=tool_id,
+                                arguments=tool_input,
+                            )
+                        )
                 continue
 
             # Tool result
             if event_type == "tool_result" or (
-                event_type == "assistant"
-                and event.get("message", {}).get("role") == "tool"
+                event_type == "assistant" and event.get("message", {}).get("role") == "tool"
             ):
                 tool_id = event.get("tool_use_id", "")
                 content = event.get("content", "")
                 if isinstance(content, list):
                     content = " ".join(
-                        c.get("text", "")
-                        for c in content
-                        if c.get("type") == "text"
+                        c.get("text", "") for c in content if c.get("type") == "text"
                     )
                 is_error = event.get("is_error", False)
 
                 pending = acc.pending_tools.pop(tool_id, None)
                 if pending:
-                    duration = (
-                        time.perf_counter() - pending["start_time"]
-                    ) * 1000
+                    duration = (time.perf_counter() - pending["start_time"]) * 1000
                     acc.tool_calls.append(
                         ToolCallRecord(
                             tool_name=pending["name"],
@@ -435,12 +430,14 @@ class ClaudeCodeAdapter:
                             iteration=pending["iteration"],
                         )
                     )
-                    await _emit(ToolResultEvent(
-                        tool_name=pending["name"],
-                        tool_call_id=tool_id,
-                        result=str(content)[:500],
-                        success=not is_error,
-                    ))
+                    await _emit(
+                        ToolResultEvent(
+                            tool_name=pending["name"],
+                            tool_call_id=tool_id,
+                            result=str(content)[:500],
+                            success=not is_error,
+                        )
+                    )
                 continue
 
             # Result event — final summary with token counts
