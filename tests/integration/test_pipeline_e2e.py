@@ -15,7 +15,6 @@ import pytest
 from sr2.cache.policies import create_default_cache_registry
 from sr2.config.loader import ConfigLoader
 from sr2.config.models import PipelineConfig
-from sr2.config.validation import validate_config
 from sr2.metrics.collector import MetricCollector
 from sr2.pipeline.engine import PipelineEngine
 from sr2.pipeline.router import InterfaceRouter

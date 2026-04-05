@@ -1,17 +1,14 @@
 """End-to-end tests for A2A round-trip: tool call → HTTP → response → session recording."""
 
-import json
 import os
 import tempfile
-from itertools import groupby
-from operator import attrgetter
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from sr2_runtime.llm import LLMResponse, LLMLoop
 from sr2_runtime.llm.context_bridge import ContextBridge
-from sr2_runtime.session.session import Session, SessionConfig
+from sr2_runtime.session.session import Session
 from sr2.a2a.client import A2AClientTool, A2AToolConfig
 from sr2_runtime.tool_executor import ToolExecutor
 
@@ -162,7 +159,7 @@ class TestA2ARoundTrip:
 
         loop = LLMLoop(llm_client=mock_llm, tool_executor=executor)
         messages = [{"role": "user", "content": "Call remote"}]
-        result = await loop.run(messages)
+        await loop.run(messages)
 
         # Error should be in the tool result
         tool_result_msgs = [m for m in messages if m.get("role") == "tool"]
@@ -192,7 +189,7 @@ class TestA2ARoundTrip:
 
         loop = LLMLoop(llm_client=mock_llm, tool_executor=executor)
         messages = [{"role": "user", "content": "Ask"}]
-        result = await loop.run(messages)
+        await loop.run(messages)
 
         # Empty string should be the tool result (not dropped)
         tool_result_msgs = [m for m in messages if m.get("role") == "tool"]
@@ -510,7 +507,7 @@ pipeline:
                 session_lifecycle="persistent",
                 input_data="Were the systems OK?",
             )
-            response2 = await agent._handle_trigger(trigger2)
+            await agent._handle_trigger(trigger2)
 
         # The second LLM call should have received messages with the A2A result
         # Check the messages passed to the third complete() call (turn 2)

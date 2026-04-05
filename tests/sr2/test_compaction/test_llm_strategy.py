@@ -79,8 +79,11 @@ class TestLLMCompactionStrategy:
         result = await strategy.compact(turns)
 
         assert result.original_tokens == 300  # 3 * (400 // 4)
-        assert result.compacted_tokens > 0
-        assert result.compacted_tokens < result.original_tokens
+        # LLM returned summary="short" -> compacted_tokens = len("short") // 4 = 1
+        expected_compacted = len("short") // 4
+        assert result.compacted_tokens == expected_compacted, (
+            f"Expected compacted_tokens={expected_compacted}, got {result.compacted_tokens}"
+        )
 
     @pytest.mark.asyncio
     async def test_llm_failure_fallback(self):

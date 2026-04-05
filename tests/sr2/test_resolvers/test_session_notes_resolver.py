@@ -83,3 +83,29 @@ class TestSessionNotesResolver:
             "session_notes", {"max_tokens": 5000}, _context(["note"])
         )
         assert "<session_notes>" in result.content
+
+    @pytest.mark.asyncio
+    async def test_default_max_tokens_is_2000(self):
+        """Empty config uses default max_tokens=2000, fitting many notes."""
+        resolver = SessionNotesResolver()
+        # Each note is ~40 chars = ~10 tokens. 100 notes = ~1000 tokens, under 2000 default.
+        notes = [f"note number {i} with extra text padding" for i in range(100)]
+        result = await resolver.resolve("session_notes", {}, _context(notes))
+
+        note_lines = [line for line in result.content.split("\n") if line.startswith("- ")]
+        assert len(note_lines) == 100  # All fit under default 2000 token cap
+
+    @pytest.mark.asyncio
+    async def test_small_max_tokens_truncates_more_than_default(self):
+        """Explicit small max_tokens truncates more aggressively than default."""
+        resolver = SessionNotesResolver()
+        notes = [f"note number {i} with some padding text" for i in range(20)]
+
+        result_default = await resolver.resolve("session_notes", {}, _context(notes))
+        result_small = await resolver.resolve(
+            "session_notes", {"max_tokens": 30}, _context(notes)
+        )
+
+        default_lines = [line for line in result_default.content.split("\n") if line.startswith("- ")]
+        small_lines = [line for line in result_small.content.split("\n") if line.startswith("- ")]
+        assert len(small_lines) < len(default_lines)

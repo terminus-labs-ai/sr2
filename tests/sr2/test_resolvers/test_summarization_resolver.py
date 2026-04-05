@@ -61,6 +61,48 @@ class TestSummarizationResolver:
         assert "A" * 400 not in result.content
         assert result.metadata["summary_count"] < 3
 
+    @pytest.mark.asyncio
+    async def test_no_max_tokens_returns_all_summaries(self, context):
+        """Empty config (no max_tokens) returns all summaries without truncation."""
+        resolver = SummarizationResolver()
+        resolver.add_summary("A" * 400)  # ~100 tokens
+        resolver.add_summary("B" * 400)  # ~100 tokens
+        resolver.add_summary("C" * 400)  # ~100 tokens
+
+        result = await resolver.resolve("summaries", {}, context)
+
+        assert "A" * 400 in result.content
+        assert "B" * 400 in result.content
+        assert "C" * 400 in result.content
+        assert result.metadata["summary_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_large_enough_keeps_all(self, context):
+        """max_tokens large enough to fit all summaries keeps them all."""
+        resolver = SummarizationResolver()
+        resolver.add_summary("Short 1")
+        resolver.add_summary("Short 2")
+
+        result = await resolver.resolve("summaries", {"max_tokens": 99999}, context)
+
+        assert "Short 1" in result.content
+        assert "Short 2" in result.content
+        assert result.metadata["summary_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_keeps_newest_drops_oldest(self, context):
+        """max_tokens truncation preserves newest summaries, drops oldest."""
+        resolver = SummarizationResolver()
+        resolver.add_summary("OLDEST " + "x" * 100)
+        resolver.add_summary("MIDDLE " + "y" * 100)
+        resolver.add_summary("NEWEST " + "z" * 20)
+
+        # Budget that fits NEWEST but not all three
+        result = await resolver.resolve("summaries", {"max_tokens": 20}, context)
+
+        assert "NEWEST" in result.content
+        assert "OLDEST" not in result.content
+
     def test_format_structured_summary_all_fields(self):
         """format_structured_summary formats all fields correctly."""
         summary = StructuredSummary(

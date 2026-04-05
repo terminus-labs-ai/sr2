@@ -116,7 +116,7 @@ class TestEntryPointDiscovery:
 
         mock_ep = MagicMock()
         mock_ep.name = "plugin"
-        mock_ep.load.side_effect = load_plugin
+        mock_ep.load.return_value = load_plugin
 
         with patch("importlib.metadata.entry_points", return_value=[mock_ep]):
             result = get_store("plugin")

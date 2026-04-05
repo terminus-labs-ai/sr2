@@ -1,3 +1,5 @@
+import pytest
+
 from sr2.degradation import DEGRADATION_ORDER
 from sr2.degradation.ladder import DegradationLadder
 
@@ -51,3 +53,44 @@ class TestDegradationLadder:
         ladder.degrade()  # raw_context
         assert ladder.level == "raw_context"
         assert ladder.should_skip("retrieval") is True
+
+
+# Complete skip matrix from source: level -> set of skipped stages
+_SKIP_MATRIX: dict[str, set[str]] = {
+    "full": set(),
+    "skip_summarization": {"summarization"},
+    "skip_intent": {"summarization", "intent_detection"},
+    "raw_context": {"summarization", "intent_detection", "retrieval", "compaction"},
+    "system_prompt_only": {
+        "summarization",
+        "intent_detection",
+        "retrieval",
+        "compaction",
+        "session",
+        "memory",
+    },
+}
+
+# All stages that appear anywhere in the skip map
+_ALL_STAGES = sorted(
+    {"summarization", "intent_detection", "retrieval", "compaction", "session", "memory"}
+)
+
+# Build parametrize list: (level, stage, expected_skip)
+_LEVEL_STAGE_PARAMS = [
+    pytest.param(level, stage, stage in skipped, id=f"{level}-{stage}")
+    for level, skipped in _SKIP_MATRIX.items()
+    for stage in _ALL_STAGES
+]
+
+
+class TestDegradationLadderMatrix:
+    """Exhaustive test: every level x stage combination returns the correct should_skip value."""
+
+    @pytest.mark.parametrize("level,stage,expected_skip", _LEVEL_STAGE_PARAMS)
+    def test_should_skip_matrix(self, level: str, stage: str, expected_skip: bool):
+        ladder = DegradationLadder()
+        # Advance ladder to the target level
+        while ladder.level != level:
+            ladder.degrade()
+        assert ladder.should_skip(stage) is expected_skip

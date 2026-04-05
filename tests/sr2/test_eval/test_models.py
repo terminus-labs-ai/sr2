@@ -1,6 +1,5 @@
 """Tests for eval models."""
 
-import pytest
 from datetime import datetime
 
 from sr2.eval.models import (

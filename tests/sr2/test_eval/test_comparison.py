@@ -1,6 +1,5 @@
 """Tests for A/B testing and regression detection."""
 
-import pytest
 from datetime import datetime
 
 from sr2.eval.comparison import (
@@ -10,7 +9,7 @@ from sr2.eval.comparison import (
     _severity_for_degradation,
     RegressionDetector,
 )
-from sr2.eval.models import EvalCase, EvalMetrics, EvalResult
+from sr2.eval.models import EvalMetrics, EvalResult
 
 
 def test_mean() -> None:

@@ -138,3 +138,58 @@ class TestA2AClientTool:
         card = await tool.fetch_agent_card()
 
         assert card is None
+
+    @pytest.mark.asyncio
+    async def test_payload_is_stateless_no_session_history(self):
+        """A2A calls are stateless: payload contains only task_id, message, and optional
+        metadata/skill_id. No session history, conversation context, or agent state is injected."""
+        captured_payloads = []
+
+        async def mock_http(url, payload, timeout):
+            captured_payloads.append(payload)
+            return {"status": "completed", "result": "ok"}
+
+        tool = A2AClientTool(config=_make_config(), http_callable=mock_http)
+        await tool.execute(message="Summarize the document")
+
+        assert len(captured_payloads) == 1
+        payload = captured_payloads[0]
+
+        # Payload should only contain these known fields
+        allowed_keys = {"task_id", "message", "metadata", "skill_id"}
+        assert set(payload.keys()).issubset(allowed_keys), (
+            f"Payload has unexpected keys: {set(payload.keys()) - allowed_keys}"
+        )
+
+        # Must NOT contain session/conversation/history data
+        forbidden_keys = {
+            "session_id", "session_history", "conversation", "history",
+            "context", "turns", "messages", "agent_state",
+        }
+        for key in forbidden_keys:
+            assert key not in payload, f"Stateless A2A payload must not contain '{key}'"
+
+        # Verify core fields are present
+        assert "task_id" in payload
+        assert payload["message"] == "Summarize the document"
+
+    @pytest.mark.asyncio
+    async def test_payload_stateless_with_metadata(self):
+        """A2A payload with metadata still doesn't inject session state."""
+        captured_payloads = []
+
+        async def mock_http(url, payload, timeout):
+            captured_payloads.append(payload)
+            return {"status": "completed", "result": "ok"}
+
+        tool = A2AClientTool(
+            config=_make_config(skill_id="analyze"),
+            http_callable=mock_http,
+        )
+        await tool.execute(message="Analyze data", metadata={"source": "internal"})
+
+        payload = captured_payloads[0]
+        # With metadata and skill_id, still only allowed keys
+        assert set(payload.keys()) == {"task_id", "message", "metadata", "skill_id"}
+        assert payload["metadata"] == {"source": "internal"}
+        assert payload["skill_id"] == "analyze"

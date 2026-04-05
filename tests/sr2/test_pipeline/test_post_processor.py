@@ -5,7 +5,7 @@ import json
 import pytest
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.config.models import CompactionConfig, CompactionRuleConfig
+from sr2.config.models import CompactionConfig
 from sr2.memory.conflicts import ConflictDetector
 from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
@@ -107,7 +107,6 @@ class TestPostLLMProcessor:
         conv = ConversationManager(compaction_engine=engine, raw_window=3)
 
         # Monkey-patch compaction to fail
-        original_run = conv.run_compaction
         def failing_compaction():
             raise RuntimeError("Compaction broke")
         conv.run_compaction = failing_compaction

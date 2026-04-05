@@ -1,5 +1,4 @@
 import yaml
-import pytest
 from pathlib import Path
 
 from schema_gen import (
@@ -13,7 +12,6 @@ from schema_gen import (
     _generate_yaml_example,
 )
 from sr2.config.models import PipelineConfig
-from sr2_runtime.config import AgentYAMLConfig
 
 
 DEFAULTS_PATH = str(Path(__file__).parent.parent.parent.parent / "configs" / "defaults.yaml")

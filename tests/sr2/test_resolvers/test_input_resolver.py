@@ -6,7 +6,11 @@ from sr2.resolvers.registry import ResolvedContent, ResolverContext, estimate_to
 
 @pytest.mark.asyncio
 async def test_dict_input_reads_key():
-    """Dict input: reads key from dict."""
+    """Dict input: reads key from dict.
+
+    Note: InputResolver ignores the `config` dict parameter — it reads
+    from context.trigger_input directly. The empty dict is correct here.
+    """
     resolver = InputResolver()
     ctx = ResolverContext(
         agent_config={},

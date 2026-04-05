@@ -1,6 +1,5 @@
 """Tests for sample eval suites."""
 
-import pytest
 
 from sr2.eval.sample_suites import (
     create_coherence_suite,

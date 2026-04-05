@@ -51,7 +51,7 @@ class TestToolStateMachine:
     def test_allowed_tools_respects_state(self):
         """get_allowed_tools() respects current state."""
         sm = ToolStateMachine(_make_config())
-        sm._current_state_name = "planning"
+        sm.try_transition("agent_intent", {"intent": "planning"})
         assert sm.get_allowed_tools() == ["read_file"]
 
     def test_transition_matching_trigger_and_condition(self):
@@ -77,7 +77,8 @@ class TestToolStateMachine:
     def test_transition_from_any(self):
         """try_transition() from 'any' works from any current state."""
         sm = ToolStateMachine(_make_config())
-        sm._current_state_name = "planning"
+        sm.try_transition("agent_intent", {"intent": "planning"})
+        assert sm.current_state_name == "planning"
         result = sm.try_transition("pipeline_signal")
         assert result is True
         assert sm.current_state_name == "default"
@@ -112,7 +113,7 @@ class TestToolStateMachine:
     def test_get_masking_output(self):
         """get_masking_output() returns strategy-specific output."""
         sm = ToolStateMachine(_make_config())
-        sm._current_state_name = "planning"
+        sm.try_transition("agent_intent", {"intent": "planning"})
         output = sm.get_masking_output()
         assert "allowed_tools" in output
         assert output["allowed_tools"] == ["read_file"]
@@ -138,6 +139,31 @@ class TestToolStateMachine:
     def test_get_denied_tools(self):
         """get_denied_tools() returns correct list."""
         sm = ToolStateMachine(_make_config())
-        sm._current_state_name = "executing"
+        sm.try_transition("agent_intent", {"intent": "planning"})
+        sm.try_transition("agent_intent", {"intent": "executing"})
         denied = sm.get_denied_tools()
         assert denied == ["rm"]
+
+    def test_denied_tools_precedence_over_allowed_all(self):
+        """denied_tools takes precedence over allowed_tools='all'."""
+        sm = ToolStateMachine(_make_config())
+        # Transition to 'executing' which has allowed_tools="all", denied_tools=["rm"]
+        sm.try_transition("agent_intent", {"intent": "planning"})
+        sm.try_transition("agent_intent", {"intent": "executing"})
+        allowed = sm.get_allowed_tools()
+        assert "rm" not in allowed
+        assert "read_file" in allowed
+        assert "write_file" in allowed
+        assert "bash" in allowed
+
+    def test_state_history_tracks_all_visited_states(self):
+        """State history tracks all states visited in order, including initial."""
+        sm = ToolStateMachine(_make_config())
+        assert sm.state_history == ["default"]
+        sm.try_transition("agent_intent", {"intent": "planning"})
+        assert sm.state_history == ["default", "planning"]
+        sm.try_transition("agent_intent", {"intent": "executing"})
+        assert sm.state_history == ["default", "planning", "executing"]
+        # Reset via pipeline_signal back to default
+        sm.try_transition("pipeline_signal")
+        assert sm.state_history == ["default", "planning", "executing", "default"]

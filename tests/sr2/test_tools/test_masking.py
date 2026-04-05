@@ -157,6 +157,130 @@ class TestRawParametersPassthrough:
         assert schema["parameters"]["required"] == ["arg1"]
 
 
+class TestDeniedToolsPrecedence:
+    """denied_tools takes precedence over allowed_tools (doc: guide-tool-masking.md)."""
+
+    def test_allowed_list_excludes_denied_from_all(self):
+        """allowed_tools='all' + denied_tools=['rm'] -> rm excluded from masking output."""
+        state = ToolStateConfig(name="executing", allowed_tools="all", denied_tools=["rm"])
+        strategy = AllowedListStrategy()
+        result = strategy.apply(_make_tools(), state)
+
+        assert "rm" not in result["allowed_tools"]
+        assert set(result["allowed_tools"]) == {"read_file", "write_file", "bash"}
+        schema_names = [s["name"] for s in result["tool_schemas"]]
+        assert "rm" not in schema_names
+
+    def test_logit_mask_excludes_denied_from_all(self):
+        """LogitMaskStrategy correctly splits denied tools from allowed_tools='all'."""
+        state = ToolStateConfig(name="executing", allowed_tools="all", denied_tools=["rm"])
+        strategy = LogitMaskStrategy()
+        result = strategy.apply(_make_tools(), state)
+
+        assert "rm" in result["denied_tool_tokens"]
+        assert "rm" not in result["allowed_tool_tokens"]
+
+    # --- Precedence: tool in BOTH allowed and denied ---
+
+    def test_tool_in_both_lists_is_denied(self):
+        """A tool in both allowed_tools and denied_tools must be denied."""
+        state = ToolStateConfig(
+            name="conflict",
+            allowed_tools=["read_file", "bash"],
+            denied_tools=["bash"],
+        )
+        assert not state.is_tool_allowed("bash")
+
+    def test_allowed_list_denies_tool_in_both_lists(self):
+        """AllowedListStrategy excludes a tool that appears in both lists."""
+        state = ToolStateConfig(
+            name="conflict",
+            allowed_tools=["read_file", "write_file", "bash"],
+            denied_tools=["write_file"],
+        )
+        strategy = AllowedListStrategy()
+        result = strategy.apply(_make_tools(), state)
+
+        assert "write_file" not in result["allowed_tools"]
+        assert set(result["allowed_tools"]) == {"read_file", "bash"}
+        schema_names = [s["name"] for s in result["tool_schemas"]]
+        assert "write_file" not in schema_names
+
+    def test_logit_mask_denies_tool_in_both_lists(self):
+        """LogitMaskStrategy treats a tool in both lists as denied."""
+        state = ToolStateConfig(
+            name="conflict",
+            allowed_tools=["read_file", "bash"],
+            denied_tools=["bash"],
+        )
+        strategy = LogitMaskStrategy()
+        result = strategy.apply(_make_tools(), state)
+
+        assert "bash" in result["denied_tool_tokens"]
+        assert "bash" not in result["allowed_tool_tokens"]
+
+    def test_prefill_skips_denied_tool(self):
+        """PrefillStrategy falls back when the only allowed tool is also denied."""
+        state = ToolStateConfig(
+            name="conflict",
+            allowed_tools=["bash"],
+            denied_tools=["bash"],
+        )
+        strategy = PrefillStrategy()
+        result = strategy.apply(_make_tools(), state)
+
+        assert result["response_prefix"] == ""
+        assert result["forced_tool"] is None
+
+    # --- Only in allowed_tools (not denied) ---
+
+    def test_tool_only_in_allowed_is_permitted(self):
+        """A tool in allowed_tools but not denied_tools is allowed."""
+        state = ToolStateConfig(
+            name="selective",
+            allowed_tools=["read_file", "bash"],
+            denied_tools=["rm"],
+        )
+        assert state.is_tool_allowed("read_file")
+        assert state.is_tool_allowed("bash")
+
+    # --- Only in denied_tools ---
+
+    def test_tool_only_in_denied_is_blocked(self):
+        """A tool in denied_tools (with allowed_tools='all') is blocked."""
+        state = ToolStateConfig(
+            name="restricted",
+            allowed_tools="all",
+            denied_tools=["rm", "bash"],
+        )
+        assert not state.is_tool_allowed("rm")
+        assert not state.is_tool_allowed("bash")
+        # Others still allowed
+        assert state.is_tool_allowed("read_file")
+
+    # --- In neither list ---
+
+    def test_tool_in_neither_list_with_explicit_allowed(self):
+        """Tool not in allowed_tools (explicit list) and not in denied_tools -> denied."""
+        state = ToolStateConfig(
+            name="narrow",
+            allowed_tools=["read_file"],
+            denied_tools=["rm"],
+        )
+        # bash is in neither list; with an explicit allowed list it's implicitly denied
+        assert not state.is_tool_allowed("bash")
+
+    def test_tool_in_neither_list_with_all_allowed(self):
+        """Tool not in denied_tools with allowed_tools='all' -> allowed."""
+        state = ToolStateConfig(
+            name="open",
+            allowed_tools="all",
+            denied_tools=["rm"],
+        )
+        assert state.is_tool_allowed("bash")
+        assert state.is_tool_allowed("write_file")
+
+
 class TestGetMaskingStrategy:
     def test_get_existing(self):
         """get_masking_strategy returns correct instance."""
