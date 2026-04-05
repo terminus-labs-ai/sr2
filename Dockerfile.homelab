@@ -1,0 +1,54 @@
+FROM python:3.12-slim
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ENV AGENT_NAME=edi
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl gnupg git \
+  && mkdir -p /etc/apt/keyrings \
+  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends nodejs \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (for homelab agent)
+ENV PATH="/root/.local/bin:${PATH}"
+RUN curl -fsSL https://claude.ai/install.sh | bash && claude --version
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy project files (sr2 workspace layout)
+COPY pyproject.toml uv.lock* ./
+COPY packages/ packages/
+COPY configs/ configs/
+
+# Copy sr2-pro into workspace as a package
+COPY --from=sr2-pro . packages/sr2-pro/
+
+# Patch: add sr2-pro to workspace
+RUN sed -i '/\[tool\.uv\.sources\]/,/^$/d' packages/sr2-pro/pyproject.toml \
+    && sed -i '/^sr2-runtime/a sr2-pro = { workspace = true }' pyproject.toml \
+    && sed -i 's/^dependencies = \[\]/dependencies = ["sr2-pro"]/' pyproject.toml
+
+# Install all deps (sr2 core + sr2-pro + its deps via workspace)
+RUN uv lock --upgrade 2>/dev/null; uv sync --all-extras
+
+# Create non-root user (claude CLI refuses --dangerously-skip-permissions as root)
+RUN useradd -m -s /bin/bash sr2 \
+    && mkdir -p /home/sr2/.local/bin \
+    && cp /root/.local/bin/claude /home/sr2/.local/bin/claude \
+    && chown -R sr2:sr2 /home/sr2 /app
+
+USER sr2
+ENV HOME=/home/sr2
+ENV PATH="/home/sr2/.local/bin:${PATH}"
+
+EXPOSE 8008
+
+CMD uv run sr2-agent configs/agents/${AGENT_NAME} --http --port ${PORT:-8008}

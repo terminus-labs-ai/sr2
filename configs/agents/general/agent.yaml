@@ -1,0 +1,126 @@
+agent_name: General Agent
+
+extends: ../../defaults.yaml
+
+system_prompt: |
+  You are a general-purpose AI assistant.
+  You help with research, coding, writing, analysis, and conversation.
+  Be concise and helpful.
+
+pipeline:
+  token_budget: 65536
+
+  compaction:
+    rules:
+      - type: tool_output
+        strategy: schema_and_sample
+        max_compacted_tokens: 80
+      - type: file_content
+        strategy: reference
+      - type: confirmation
+        strategy: collapse
+
+  memory:
+    store: postgres
+    extract: true
+    scope:
+      agent_name: general
+      allowed_read:
+        - private
+      allowed_write:
+        - private
+    key_schema:
+      - prefix: "user.preference"
+        description: "User preferences and settings"
+      - prefix: "project"
+        description: "Project details and context"
+      - prefix: "research"
+        description: "Research findings"
+
+  retrieval:
+    strategy: hybrid
+    top_k: 10
+    max_tokens: 4000
+
+  layers:
+    - name: core
+      cache_policy: immutable
+      contents:
+        - key: system_prompt
+          source: config
+          optional: false
+        - key: tools
+          source: config
+          max_tokens: 8000
+
+    - name: session
+      cache_policy: append_only
+      contents:
+        - key: session_history
+          source: session
+          max_tokens: 12000
+          optional: false
+        - key: user_input
+          source: input
+          max_tokens: 2000
+          optional: false
+
+    - name: retrieval
+      cache_policy: refresh_on_topic_shift
+      contents:
+        - key: retrieved_context
+          source: retrieval
+          max_tokens: 4000
+          optional: true
+
+    - name: runtime
+      cache_policy: always_new
+      contents:
+        - key: current_timestamp
+          source: runtime
+
+sessions:
+  main_chat:
+    max_turns: 200
+    idle_timeout_minutes: 120
+  _default:
+    max_turns: 100
+    idle_timeout_minutes: 60
+
+runtime:
+  database:
+    url: "postgresql://sr2_general:t90nMJf5yOlqwF1s6wR22hkiCoqdjnZd@192.168.40.114:5432/sr2_general"
+    pool_min: 2
+    pool_max: 10
+
+  loop:
+    max_iterations: 15
+
+  llm:
+    model:
+      name: openai/claude-sonnet-4-6
+      api_base: https://cliproxyapi.bambs.xyz/v1
+      # api_key passed via ANTHROPIC_API_KEY env var (LiteLLM reads it from env)
+      max_tokens: 4096
+      stream: true
+      model_params:
+        temperature: 0.4
+
+    fast_model:
+      name: ollama/llama3.2:3b
+      api_base: https://ollama.bambs.xyz
+      max_tokens: 1000
+      stream: false
+      model_params:
+        temperature: 0.1
+
+    embedding:
+      name: ollama/qwen3-embedding:4b
+      api_base: https://ollama.bambs.xyz
+
+interfaces:
+  telegram:
+    plugin: telegram
+    session:
+      name: general_telegram_{user_id}
+      lifecycle: persistent

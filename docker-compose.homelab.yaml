@@ -1,0 +1,89 @@
+services:
+  sr2-homelab-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.homelab
+      additional_contexts:
+        sr2-pro: /opt/repositories/sr2-pro
+    container_name: sr2-homelab-agent
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./configs:/app/configs
+      - sr2-homelab-data:/data
+    environment:
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
+      SR2_PRO_LICENSE_KEY: ${SR2_PRO_LICENSE_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_HOMELAB:-}
+      TELEGRAM_USER_IDS: ${TELEGRAM_USER_IDS:-}
+      LITELLM_DROP_PARAMS: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    command: >
+      uv run sr2-agent configs/agents/homelab
+      --http --port 8008
+
+  sr2-general-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.homelab
+      additional_contexts:
+        sr2-pro: /opt/repositories/sr2-pro
+    container_name: sr2-general-agent
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./configs:/app/configs
+      - sr2-general-data:/data
+    environment:
+      OPENAI_API_KEY: ${CLIPROXY_API_KEY}
+      SR2_PRO_LICENSE_KEY: ${SR2_PRO_LICENSE_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_GENERAL:-}
+      TELEGRAM_USER_IDS: ${TELEGRAM_USER_IDS:-}
+      LITELLM_DROP_PARAMS: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    command: >
+      uv run sr2-agent configs/agents/general
+      --http --port 8009
+
+  sr2-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.homelab
+      additional_contexts:
+        sr2-pro: /opt/repositories/sr2-pro
+    container_name: sr2-bridge
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./configs:/app/configs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    command: >
+      uv run sr2-bridge configs/bridges/claude.yaml
+
+volumes:
+  sr2-homelab-data:
+  sr2-general-data:

@@ -1,0 +1,155 @@
+agent_name: Homelab Agent
+
+extends: ../../defaults.yaml
+
+system_prompt: |
+  You are a homelab infrastructure agent with shell access.
+  You manage: Proxmox cluster (pm-01, pm-02), Docker services (docker01),
+  Ansible playbooks, Caddy HA reverse proxy, monitoring stack (Prometheus,
+  Grafana, Loki), and all homelab services on the 192.168.40.0/24 network.
+
+  Guidelines:
+  - Be concise. Prefer short answers unless asked for detail.
+  - Track infrastructure decisions and operational changes in memory.
+  - Reference previous context naturally when relevant.
+  - When running commands, explain what you're doing and why.
+
+pipeline:
+  token_budget: 65536
+
+  compaction:
+    rules:
+      - type: tool_output
+        strategy: schema_and_sample
+        max_compacted_tokens: 80
+        recovery_hint: true
+      - type: file_content
+        strategy: reference
+        include_metadata:
+          - line_count
+          - language
+          - size
+      - type: code_execution
+        strategy: result_summary
+        max_output_lines: 3
+      - type: redundant_fetch
+        strategy: supersede
+      - type: confirmation
+        strategy: collapse
+
+  memory:
+    store: postgres
+    extract: true
+    scope:
+      agent_name: homelab
+      allowed_read:
+        - private
+        - shared
+      allowed_write:
+        - private
+        - shared
+    key_schema:
+      - prefix: "infra"
+        description: "Infrastructure facts, IPs, services, configs"
+      - prefix: "decision"
+        description: "Architecture and operational decisions"
+      - prefix: "incident"
+        description: "Past incidents and resolutions"
+      - prefix: "user.preference"
+        description: "User preferences and settings"
+
+  retrieval:
+    strategy: hybrid
+    top_k: 10
+    max_tokens: 4000
+
+  layers:
+    - name: core
+      cache_policy: immutable
+      contents:
+        - key: system_prompt
+          source: config
+          optional: false
+        - key: tools
+          source: config
+          max_tokens: 8000
+
+    - name: session
+      cache_policy: append_only
+      contents:
+        - key: session_history
+          source: session
+          max_tokens: 12000
+          optional: false
+        - key: user_input
+          source: input
+          max_tokens: 2000
+          optional: false
+
+    - name: retrieval
+      cache_policy: refresh_on_topic_shift
+      contents:
+        - key: retrieved_context
+          source: retrieval
+          max_tokens: 4000
+          optional: true
+
+    - name: runtime
+      cache_policy: always_new
+      contents:
+        - key: current_timestamp
+          source: runtime
+
+sessions:
+  main_chat:
+    max_turns: 200
+    idle_timeout_minutes: 120
+  _default:
+    max_turns: 100
+    idle_timeout_minutes: 60
+
+runtime:
+  bridge:
+    adapter: claude_code
+    claude_code:
+      path: claude
+      allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - Bash
+        - Write
+        - Edit
+        - Agent
+        - WebSearch
+        - WebFetch
+      dangerously_skip_permissions: true
+      timeout_seconds: 300
+
+  database:
+    url: "postgresql://sr2_homelab:b5pspjF64pEXk2155nUoS4_LCVFxN_yW@192.168.40.114:5432/sr2_homelab"
+    pool_min: 2
+    pool_max: 10
+
+  loop:
+    max_iterations: 15
+
+  llm:
+    fast_model:
+      name: ollama/llama3.2:3b
+      api_base: https://ollama.bambs.xyz
+      max_tokens: 1000
+      stream: false
+      model_params:
+        temperature: 0.1
+
+    embedding:
+      name: ollama/qwen3-embedding:4b
+      api_base: https://ollama.bambs.xyz
+
+interfaces:
+  telegram:
+    plugin: telegram
+    session:
+      name: homelab_telegram_{user_id}
+      lifecycle: persistent
