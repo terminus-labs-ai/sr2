@@ -25,7 +25,7 @@ Layer 3: Conversation (append-only) — Session history, compacted/summarized
 ### Key Components
 - **PipelineEngine** (`packages/sr2/src/sr2/pipeline/engine.py`) — Core compilation, token budgets, cache tracking
 - **InterfaceRouter** (`packages/sr2/src/sr2/pipeline/router.py`) — Routes triggers to pipeline configs
-- **ContentResolverRegistry** (`packages/sr2/src/sr2/resolvers/registry.py`) — Pluggable content fetchers (13 built-in)
+- **ContentResolverRegistry** (`packages/sr2/src/sr2/resolvers/registry.py`) — Pluggable content fetchers (15 built-in)
 - **CompactionEngine** (`packages/sr2/src/sr2/compaction/engine.py`) — 5 strategies: schema_and_sample, reference, result_summary, supersede, collapse; optional cost gate (`cost_gate.py`, `pricing.py`) blocks compaction when cache invalidation cost exceeds token savings
 - **SummarizationEngine** (`packages/sr2/src/sr2/summarization/engine.py`) — LLM-powered structured digests
 - **Memory System** (`packages/sr2/src/sr2/memory/`) — Extraction, hybrid retrieval (semantic+keyword), conflict resolution, pluggable store backends via registry
@@ -127,6 +127,16 @@ runtime:
       api_base: http://localhost:9090/v1  # Your proxy endpoint
 ```
 
+## Developer Guides
+
+Read these before making changes:
+
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** — Architecture patterns, module boundaries, extensibility (how to add resolvers, rules, policies, plugins), SOLID principles, dependency rules, naming conventions, anti-patterns
+- **[TESTING.md](TESTING.md)** — Test philosophy (behavior over implementation), mock patterns, async testing, fixture conventions, integration test setup, anti-patterns
+- **[CODE_REVIEW.md](CODE_REVIEW.md)** — Review checklist: architecture, design patterns, KV-cache safety, memory scope isolation, test quality, config conventions
+
+For the core/pro boundary definition (what goes in sr2 vs sr2-pro), see `~/git/sr2-pro/CLAUDE.md`.
+
 ## Code Conventions
 
 - **Python 3.12+**, full type hints on all public signatures
@@ -141,7 +151,7 @@ runtime:
 
 ## Testing
 
-- **1292 tests** across test files in `tests/`
+- **1,487 tests** across test files in `tests/`
 - `pytest-asyncio` in auto mode (fixtures auto-marked)
 - Unit tests cover: pipeline, compaction, summarization, memory, config, resolvers, tools
 - Integration tests in `tests/integration/` require PostgreSQL + sr2-pro
@@ -166,7 +176,7 @@ packages/
   sr2/src/sr2/             # Core library (PyPI: sr2)
     config/                # Pydantic config models, YAML loader
     pipeline/              # Engine, router, conversation manager, prefix tracker
-    resolvers/             # 13 content resolver implementations
+    resolvers/             # 15 content resolver implementations
     cache/                 # 7 cache policy classes
     compaction/            # Rule-based content compaction
     summarization/         # LLM-powered summarization
@@ -207,7 +217,7 @@ docs/                      # MkDocs site (mkdocs serve to preview)
   guide-*.md               # Feature guides (memory, compaction, tools, etc.)
   pro.md                   # SR2 Pro features
 
-tests/                     # 1,292 tests
+tests/                     # 1,487 tests
   sr2/                     # Core library tests
   runtime/                 # Runtime tests
   bridge/                  # Bridge tests
