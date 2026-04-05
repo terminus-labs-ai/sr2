@@ -136,54 +136,32 @@ class ClaudeCodeAdapter:
         system_prompt: str | None,
         messages: list[dict],
     ) -> tuple[str | None, str]:
-        """Serialize SR2's optimized context into system_prompt + prompt strings.
+        """Extract the latest user message as the prompt.
 
-        The system prompt is passed via ``--system-prompt``.  The full
-        conversation history (user + assistant turns) is serialized into
-        the prompt string so Claude Code sees the complete context.
+        SR2's pipeline compiles all context (memories, session summaries,
+        retrieved knowledge, tool schemas) into the system prompt passed
+        via ``--system-prompt``.  The ``-p`` prompt only needs the current
+        user message — SR2 is the sole context provider.
 
         Returns:
             (system_prompt, prompt) tuple ready for ``_build_command``.
         """
-        parts: list[str] = []
-        for msg in messages:
+        last_user_message = ""
+        for msg in reversed(messages):
             role = msg.get("role", "user")
-            content = msg.get("content", "")
-
-            # Handle Anthropic content-block lists
-            if isinstance(content, list):
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        if block.get("type") == "text":
+            if role == "user":
+                content = msg.get("content", "")
+                # Handle Anthropic content-block lists
+                if isinstance(content, list):
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
                             text_parts.append(block.get("text", ""))
-                        elif block.get("type") == "tool_use":
-                            text_parts.append(
-                                f"[Tool call: {block.get('name', '?')}]"
-                            )
-                        elif block.get("type") == "tool_result":
-                            result_content = block.get("content", "")
-                            if isinstance(result_content, list):
-                                result_content = " ".join(
-                                    b.get("text", "")
-                                    for b in result_content
-                                    if isinstance(b, dict)
-                                )
-                            text_parts.append(f"[Tool result: {result_content}]")
-                    else:
-                        text_parts.append(str(block))
-                content = "\n".join(text_parts)
+                    content = "\n".join(text_parts)
+                last_user_message = content
+                break
 
-            if role == "system":
-                # System messages go into the system prompt
-                continue
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-            else:
-                parts.append(f"Human: {content}")
-
-        prompt = "\n\n".join(parts) if parts else ""
-        return system_prompt, prompt
+        return system_prompt, last_user_message
 
     # ------------------------------------------------------------------
     # Execution
