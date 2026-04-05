@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 
 from sr2_bridge.adapters.anthropic import AnthropicAdapter
+from sr2_bridge.adapters.claude_code import ClaudeCodeAdapter
+from sr2_bridge.adapters.claude_code_config import ClaudeCodeAdapterConfig
 from sr2_bridge.config import BridgeConfig
 from sr2_bridge.engine import BridgeEngine
 from sr2_bridge.forwarder import BridgeForwarder
@@ -165,6 +168,14 @@ def create_bridge_app(
     adapter = AnthropicAdapter(tool_type_overrides=bridge_config.tool_type_overrides or None)
     _key_cache = key_cache or APIKeyCache()
 
+    # Claude Code execution adapter (optional)
+    cc_adapter: ClaudeCodeAdapter | None = None
+    if bridge_config.claude_code.enabled:
+        cc_adapter = ClaudeCodeAdapter(
+            ClaudeCodeAdapterConfig(**bridge_config.claude_code.model_dump())
+        )
+        logger.info("Claude Code execution adapter enabled")
+
     # Track startup time for health endpoint
     start_time = time.time()
 
@@ -208,7 +219,50 @@ def create_bridge_app(
             system_injection = None
             optimized_messages = messages
 
-        # Rebuild body with optimized messages
+        # Route to Claude Code adapter if enabled
+        if cc_adapter is not None:
+            # Combine system injection with original system prompt
+            combined_system = system or ""
+            if system_injection:
+                combined_system = f"{system_injection}\n\n{combined_system}" if combined_system else system_injection
+
+            try:
+                loop_result = await cc_adapter.stream_execute(
+                    system_prompt=combined_system or None,
+                    messages=optimized_messages,
+                )
+            except Exception:
+                logger.exception(
+                    "Claude Code execution failed for session %s", session_id
+                )
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "Claude Code execution failed"},
+                )
+
+            # Post-process async
+            if loop_result.response_text:
+                task = asyncio.create_task(
+                    engine.post_process(session, loop_result.response_text)
+                )
+                task.add_done_callback(_log_task_exception)
+
+            # Return as Anthropic Messages API format
+            return JSONResponse(content={
+                "id": f"msg_cc_{session_id}",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": loop_result.response_text}],
+                "model": "claude-code",
+                "stop_reason": "end_turn" if loop_result.stopped_reason == "complete" else "error",
+                "usage": {
+                    "input_tokens": loop_result.total_input_tokens,
+                    "output_tokens": loop_result.total_output_tokens,
+                    "cache_read_input_tokens": loop_result.cached_tokens,
+                },
+            })
+
+        # Rebuild body with optimized messages (upstream forwarding path)
         optimized_body = adapter.rebuild_body(body, optimized_messages, system_injection)
         _log_token_reduction(session_id, messages, optimized_messages)
 

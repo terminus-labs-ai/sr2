@@ -108,65 +108,6 @@ class LLMModelConfig(BaseModel):
     )
 
 
-class ClaudeCodeConfig(BaseModel):
-    """Configuration for Claude Code CLI as LLM provider.
-
-    When enabled, the main agent loop uses Claude Code (``claude -p``)
-    instead of LiteLLM. Claude Code handles its own tool execution (Bash, Edit,
-    Read, MCPs, etc.) internally. SR2 retains ownership of context engineering,
-    sessions, and memory.
-    """
-
-    enabled: bool = Field(
-        default=False,
-        description="Use Claude Code CLI instead of LiteLLM for the main agent loop.",
-    )
-    path: str = Field(
-        default="claude",
-        description="Path to the claude CLI binary.",
-    )
-    allowed_tools: list[str] = Field(
-        default_factory=lambda: ["Read", "Glob", "Grep", "Agent", "WebSearch", "WebFetch"],
-        description="Tools to pre-approve via --allowedTools.",
-    )
-    permission_mode: str | None = Field(
-        default=None,
-        description="Permission mode: default, acceptEdits, bypassPermissions.",
-    )
-    dangerously_skip_permissions: bool = Field(
-        default=False,
-        description="Bypass all permission checks (--dangerously-skip-permissions). "
-        "Recommended only for sandboxed environments with no internet access.",
-    )
-    max_turns: int | None = Field(
-        default=None,
-        description="Max agentic turns per Claude Code invocation.",
-    )
-    max_budget_usd: float | None = Field(
-        default=None,
-        description="Max cost in USD per Claude Code invocation.",
-    )
-    max_concurrent: int = Field(
-        default=3,
-        ge=1,
-        description="Max concurrent Claude Code subprocesses. Prevents resource exhaustion.",
-    )
-    timeout_seconds: int = Field(
-        default=300,
-        ge=10,
-        description="Subprocess timeout in seconds. Process is killed after this duration.",
-    )
-    working_directory: str | None = Field(
-        default=None,
-        description="Working directory for Claude Code subprocess. "
-        "Affects where Bash, Edit, Read tools operate.",
-    )
-    env: dict[str, str] = Field(
-        default_factory=dict,
-        description="Extra environment variables for Claude Code subprocess.",
-    )
-
-
 class RuntimeLLMConfig(BaseModel):
     """LLM model and endpoint settings."""
 
@@ -182,10 +123,23 @@ class RuntimeLLMConfig(BaseModel):
         default_factory=lambda: LLMModelConfig(name="text-embedding-3-small"),
         description="Embedding model for memory retrieval.",
     )
-    claude_code: ClaudeCodeConfig = Field(
-        default_factory=ClaudeCodeConfig,
-        description="Claude Code CLI provider. When enabled, the main agent loop uses "
-        "Claude Code instead of LiteLLM. SR2 context engineering still applies.",
+
+
+class RuntimeBridgeConfig(BaseModel):
+    """Bridge adapter configuration within the runtime.
+
+    When ``adapter`` is set, the agent delegates LLM execution to a bridge
+    adapter instead of using the built-in LLMLoop.  The adapter receives
+    SR2's full compiled context and handles the agentic loop itself.
+    """
+
+    adapter: str | None = Field(
+        default=None,
+        description="Bridge adapter name (e.g. 'claude_code').  None = use built-in LLMLoop.",
+    )
+    claude_code: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Claude Code adapter settings.  Passed to BridgeClaudeCodeConfig.",
     )
 
 
@@ -353,6 +307,11 @@ class RuntimeConfig(BaseModel):
     )
     loop: RuntimeLoopConfig = Field(
         default_factory=RuntimeLoopConfig, description="LLM loop settings."
+    )
+    bridge: RuntimeBridgeConfig = Field(
+        default_factory=RuntimeBridgeConfig,
+        description="Bridge adapter configuration.  When set, delegates LLM execution "
+        "to a bridge adapter instead of the built-in LLMLoop.",
     )
     session: RuntimeSessionConfig = Field(
         default_factory=RuntimeSessionConfig, description="Default session settings."

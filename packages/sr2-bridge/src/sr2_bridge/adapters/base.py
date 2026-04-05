@@ -1,10 +1,11 @@
-"""Protocol definition for bridge adapters."""
+"""Protocol definitions for bridge adapters."""
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
 from sr2.compaction.engine import ConversationTurn
+from sr2_runtime.llm.loop import LoopResult
 
 
 @runtime_checkable
@@ -83,4 +84,34 @@ class BridgeAdapter(Protocol):
         Returns:
             List of wire-format message dicts.
         """
+        ...
+
+
+@runtime_checkable
+class ExecutionAdapter(Protocol):
+    """Adapter that owns the agentic loop (e.g. Claude Code CLI).
+
+    Unlike :class:`BridgeAdapter` which reformats HTTP requests for an
+    upstream API, an ``ExecutionAdapter`` receives the full compiled context
+    and executes the LLM interaction itself, returning a :class:`LoopResult`.
+    """
+
+    async def stream_execute(
+        self,
+        system_prompt: str | None,
+        messages: list[dict],
+    ) -> LoopResult:
+        """Execute with the full SR2-compiled context.
+
+        Args:
+            system_prompt: The compiled system prompt from SR2's pipeline.
+            messages: The optimized conversation messages.
+
+        Returns:
+            A fully populated :class:`LoopResult`.
+        """
+        ...
+
+    async def shutdown(self) -> None:
+        """Clean up adapter resources."""
         ...

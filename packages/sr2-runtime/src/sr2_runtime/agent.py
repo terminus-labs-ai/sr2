@@ -152,14 +152,15 @@ class Agent:
             default_model_config=runtime_conf.llm.model,
         )
 
-        # Claude Code provider (optional — when enabled, bypasses LLMLoop)
-        self._use_claude_code = runtime_conf.llm.claude_code.enabled
-        self._cc_provider = None
-        if self._use_claude_code:
-            from sr2_runtime.llm.claude_code import ClaudeCodeProvider
+        # Bridge adapter (optional — when configured, bypasses LLMLoop)
+        self._bridge_adapter = None
+        if runtime_conf.bridge.adapter == "claude_code":
+            from sr2_bridge.adapters.claude_code import ClaudeCodeAdapter
+            from sr2_bridge.adapters.claude_code_config import ClaudeCodeAdapterConfig
 
-            self._cc_provider = ClaudeCodeProvider(runtime_conf.llm.claude_code)
-            logger.info("Claude Code provider enabled — LLMLoop will be bypassed")
+            cc_config = ClaudeCodeAdapterConfig(**runtime_conf.bridge.claude_code)
+            self._bridge_adapter = ClaudeCodeAdapter(cc_config)
+            logger.info("Claude Code bridge adapter enabled — LLMLoop will be bypassed")
 
         # --- Sessions (from YAML) ---
         session_cfgs = {}
@@ -485,12 +486,12 @@ class Agent:
             except Exception as e:
                 logger.warning(f"Heartbeat scanner failed to stop: {e}")
 
-        # Shut down Claude Code provider (kills active subprocesses)
-        if self._cc_provider:
+        # Shut down bridge adapter (kills active subprocesses)
+        if self._bridge_adapter and hasattr(self._bridge_adapter, "shutdown"):
             try:
-                await self._cc_provider.shutdown()
+                await self._bridge_adapter.shutdown()
             except Exception as e:
-                logger.warning(f"Claude Code provider failed to shut down: {e}")
+                logger.warning(f"Bridge adapter failed to shut down: {e}")
 
         for name, plugin in self._plugins.items():
             try:
@@ -578,16 +579,22 @@ class Agent:
         resolved_model = model_config_override or self._agent_config.runtime.llm.model
         use_streaming = resolved_model.stream and trigger.respond_callback is not None
 
-        if self._use_claude_code and self._cc_provider:
-            # Claude Code path: bypass LLMLoop, use Claude Code CLI
-            system_context = self._build_claude_code_system_context(ctx)
-            stream_content = self._agent_config.runtime.stream_content
-            loop_result = await self._cc_provider.stream_complete(
-                prompt=str(trigger.input_data),
-                system_prompt=system_context,
-                stream_callback=trigger.respond_callback if use_streaming else None,
-                stream_tool_events=stream_content.tool_status if stream_content else True,
+        if self._bridge_adapter is not None:
+            # Bridge adapter path: bypass LLMLoop, delegate to adapter
+            # Pass stream_callback so events stream in real-time to HTTP SSE / Telegram
+            system_prompt = self._extract_system_prompt(ctx)
+            loop_result = await self._bridge_adapter.stream_execute(
+                system_prompt=system_prompt,
+                messages=ctx.messages,
+                stream_callback=trigger.respond_callback,
             )
+            # Emit StreamEndEvent so the SSE formatter sends the final stop chunk
+            if trigger.respond_callback is not None:
+                from sr2_runtime.llm.streaming import StreamEndEvent
+
+                await trigger.respond_callback(
+                    StreamEndEvent(full_text=loop_result.response_text or "")
+                )
         elif use_streaming:
             loop_result = await self._loop.run_streaming(
                 ctx.messages,
@@ -802,18 +809,19 @@ class Agent:
 
     # --- Claude Code helpers ---
 
-    def _build_claude_code_system_context(self, ctx) -> str:
-        """Build a system prompt for Claude Code from SR2's compiled context.
+    @staticmethod
+    def _extract_system_prompt(ctx) -> str | None:
+        """Extract the system prompt from SR2's compiled messages.
 
-        Extracts the system message content from the compiled messages array
-        so that SR2's context engineering (memories, summaries, system prompt)
-        is passed to Claude Code via --system-prompt.
+        Collects all system-role messages from the compiled context so that
+        SR2's context engineering (memories, summaries, system prompt) is
+        passed to the bridge adapter.
         """
         parts = []
         for msg in ctx.messages:
             if msg.get("role") == "system":
                 parts.append(msg.get("content", ""))
-        return "\n\n".join(parts) if parts else ""
+        return "\n\n".join(parts) if parts else None
 
     # --- Internal helpers ---
 

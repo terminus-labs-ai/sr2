@@ -1,11 +1,13 @@
 # Claude Code + OpenAI-compatible proxy (CLIProxyAPI, etc.)
 #
-# Main agent: Claude Code CLI (full tools via --bare)
+# Main agent: Claude Code CLI via bridge adapter
 # Fast model/embeddings: routed through proxy via api_base
 #
 # Any OpenAI-compatible proxy can be used by setting api_base on model configs.
 # This routes summarization, memory extraction, and embedding calls through
-# the proxy while the main agent uses Claude Code CLI.
+# the proxy while the main agent uses Claude Code CLI via bridge adapter.
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN env var (1-year token from `claude setup-token`)
 #
 # Setup:
 #   docker compose -f docker-compose.claude-code.yaml up
@@ -16,10 +18,12 @@ agent_name: Claude Code Agent (Proxy)
 extends: ../claude-code/agent.yaml
 
 runtime:
-  llm:
+  bridge:
+    adapter: claude_code
     claude_code:
-      enabled: true
+      dangerously_skip_permissions: true
 
+  llm:
     # Fast model via proxy (CLIProxyAPI, LiteLLM proxy, etc.)
     fast_model:
       name: claude-haiku-4-5-20251001
@@ -28,7 +32,7 @@ runtime:
       model_params:
         temperature: 0.1
 
-    # Main model also via proxy (fallback when Claude Code unavailable)
+    # Main model also via proxy (fallback when bridge adapter unavailable)
     model:
       name: claude-sonnet-4-20250514
       api_base: ${PROXY_URL}

@@ -138,6 +138,65 @@ class BridgeMemoryConfig(BaseModel):
     )
 
 
+class BridgeClaudeCodeConfig(BaseModel):
+    """Claude Code adapter settings within the bridge config."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable Claude Code CLI as the execution adapter.",
+    )
+    path: str = Field(
+        default="claude",
+        description="Path to the claude CLI binary.",
+    )
+    allowed_tools: list[str] = Field(
+        default_factory=lambda: [
+            "Read", "Glob", "Grep", "Bash", "Write", "Edit",
+            "Agent", "WebSearch", "WebFetch",
+        ],
+        description="Tools to pre-approve via --allowedTools.",
+    )
+    bare: bool = Field(
+        default=False,
+        description="Run with --bare flag.  Blocks OAuth auth.  "
+        "Only enable when using ANTHROPIC_API_KEY.",
+    )
+    dangerously_skip_permissions: bool = Field(
+        default=True,
+        description="Bypass all permission checks.  Required for unattended execution.",
+    )
+    permission_mode: str | None = Field(
+        default=None,
+        description="Permission mode.  Ignored when dangerously_skip_permissions is True.",
+    )
+    max_turns: int | None = Field(
+        default=None,
+        description="Max agentic turns per Claude Code invocation.",
+    )
+    max_budget_usd: float | None = Field(
+        default=None,
+        description="Max cost in USD per Claude Code invocation.",
+    )
+    max_concurrent: int = Field(
+        default=3,
+        ge=1,
+        description="Max concurrent Claude Code subprocesses.",
+    )
+    timeout_seconds: int = Field(
+        default=300,
+        ge=10,
+        description="Subprocess timeout in seconds.",
+    )
+    working_directory: str | None = Field(
+        default=None,
+        description="Working directory for Claude Code subprocess.",
+    )
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra environment variables for Claude Code subprocess.",
+    )
+
+
 class BridgeConfig(BaseModel):
     """Top-level bridge server configuration."""
 
@@ -162,6 +221,11 @@ class BridgeConfig(BaseModel):
     memory: BridgeMemoryConfig = Field(
         default_factory=BridgeMemoryConfig,
         description="Memory extraction and retrieval settings.",
+    )
+    claude_code: BridgeClaudeCodeConfig = Field(
+        default_factory=BridgeClaudeCodeConfig,
+        description="Claude Code CLI execution adapter.  When enabled, the bridge "
+        "spawns claude -p instead of forwarding to an upstream API.",
     )
     tool_type_overrides: dict[str, str] = Field(
         default_factory=dict,

@@ -56,6 +56,18 @@ def _discover_entry_points() -> None:
         except Exception:
             logger.warning("Failed to load store plugin: %s", ep.name, exc_info=True)
 
+    # Fallback: try direct import if entry points aren't available
+    # (uv workspace editable installs don't register entry points)
+    if "postgres" not in _STORE_REGISTRY:
+        try:
+            from sr2_pro.memory import register_stores
+
+            register_stores()
+        except ImportError:
+            pass
+        except Exception:
+            logger.warning("Failed to load sr2-pro postgres store via fallback", exc_info=True)
+
 
 def _reset_registry() -> None:
     """Reset registry state. For testing only."""

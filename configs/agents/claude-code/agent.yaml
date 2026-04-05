@@ -78,20 +78,24 @@ sessions:
     idle_timeout_minutes: 60
 
 runtime:
-  llm:
+  bridge:
+    adapter: claude_code
     claude_code:
-      enabled: true
       path: claude
       allowed_tools:
         - Read
         - Glob
         - Grep
+        - Bash
+        - Write
+        - Edit
         - Agent
         - WebSearch
         - WebFetch
-      permission_mode: default
-      # dangerously_skip_permissions: true  # YOLO mode — no approval prompts
+      dangerously_skip_permissions: true
+      timeout_seconds: 300
 
+  llm:
     # Fast model for SR2 internal tasks (summarization, memory extraction).
     fast_model:
       name: claude-haiku-4-5-20251001
@@ -99,7 +103,7 @@ runtime:
       model_params:
         temperature: 0.1
 
-    # Fallback model (used if Claude Code is unavailable)
+    # Fallback model (used if bridge adapter is unavailable)
     model:
       name: claude-sonnet-4-20250514
       stream: true
