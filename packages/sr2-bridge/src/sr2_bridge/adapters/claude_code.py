@@ -261,6 +261,14 @@ class ClaudeCodeAdapter:
                     response_text=f"Error: Claude Code timed out after {self._timeout} seconds.",
                     stopped_reason="error",
                 )
+            except asyncio.CancelledError:
+                logger.info(
+                    "Claude Code subprocess cancelled (client disconnect), killing PID %s",
+                    proc.pid,
+                )
+                proc.kill()
+                await proc.wait()
+                raise
 
             await proc.wait()
 

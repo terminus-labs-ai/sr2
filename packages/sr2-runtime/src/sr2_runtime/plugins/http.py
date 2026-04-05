@@ -62,6 +62,21 @@ class HTTPPlugin:
         lifecycle = self._session_config.get("lifecycle", "persistent")
         return session_name, lifecycle
 
+    async def _run_with_disconnect_guard(self, request, coro):
+        """Run a coroutine, cancelling it if the HTTP client disconnects."""
+        task = asyncio.create_task(coro)
+        while not task.done():
+            if await request.is_disconnected():
+                logger.info("HTTP client disconnected, cancelling agent task")
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                return None
+            await asyncio.sleep(0.5)
+        return task.result()
+
     def get_routes(self):
         """Return FastAPI route handlers for the Agent to mount."""
         from fastapi import Request
@@ -92,7 +107,12 @@ class HTTPPlugin:
                 input_data=message,
                 metadata={"session_id": session_id},
             )
-            response = await self._callback(trigger)
+            response = await self._run_with_disconnect_guard(
+                request, self._callback(trigger)
+            )
+            if response is None:
+                from fastapi.responses import Response
+                return Response(status_code=499)
             return JSONResponse({"response": response})
 
         async def openai_chat(request: Request):
@@ -134,7 +154,12 @@ class HTTPPlugin:
                 input_data=user_message,
                 metadata={"session_id": session_id},
             )
-            response = await self._callback(trigger)
+            response = await self._run_with_disconnect_guard(
+                request, self._callback(trigger)
+            )
+            if response is None:
+                from fastapi.responses import Response
+                return Response(status_code=499)
             return JSONResponse(
                 {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",

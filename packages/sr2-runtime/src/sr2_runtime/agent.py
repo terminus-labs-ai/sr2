@@ -595,11 +595,18 @@ class Agent:
             # Bridge adapter path: bypass LLMLoop, delegate to adapter
             # Pass stream_callback so events stream in real-time to HTTP SSE / Telegram
             system_prompt = self._extract_system_prompt(ctx)
-            loop_result = await self._bridge_adapter.stream_execute(
-                system_prompt=system_prompt,
-                messages=ctx.messages,
-                stream_callback=trigger.respond_callback,
-            )
+            try:
+                loop_result = await self._bridge_adapter.stream_execute(
+                    system_prompt=system_prompt,
+                    messages=ctx.messages,
+                    stream_callback=trigger.respond_callback,
+                )
+            except asyncio.CancelledError:
+                logger.info(
+                    "Trigger cancelled for session %s (client disconnect)",
+                    trigger.session_name,
+                )
+                return ""
             # Emit StreamEndEvent so the SSE formatter sends the final stop chunk
             if trigger.respond_callback is not None:
                 from sr2_runtime.llm.streaming import StreamEndEvent

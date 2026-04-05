@@ -227,10 +227,29 @@ def create_bridge_app(
                 combined_system = f"{system_injection}\n\n{combined_system}" if combined_system else system_injection
 
             try:
-                loop_result = await cc_adapter.stream_execute(
-                    system_prompt=combined_system or None,
-                    messages=optimized_messages,
+                execute_task = asyncio.create_task(
+                    cc_adapter.stream_execute(
+                        system_prompt=combined_system or None,
+                        messages=optimized_messages,
+                    )
                 )
+
+                # Poll for client disconnect while Claude Code runs
+                while not execute_task.done():
+                    if await request.is_disconnected():
+                        logger.info(
+                            "Session %s: client disconnected, cancelling Claude Code",
+                            session_id,
+                        )
+                        execute_task.cancel()
+                        try:
+                            await execute_task
+                        except asyncio.CancelledError:
+                            pass
+                        return Response(status_code=499)
+                    await asyncio.sleep(0.5)
+
+                loop_result = execute_task.result()
             except Exception:
                 logger.exception(
                     "Claude Code execution failed for session %s", session_id
