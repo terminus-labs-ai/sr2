@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sr2_runtime.config import ClaudeCodeConfig
-from sr2_runtime.llm.claude_code import ClaudeCodeProvider
+from sr2_bridge.adapters.claude_code import ClaudeCodeAdapter
+from sr2_bridge.adapters.claude_code_config import ClaudeCodeAdapterConfig
 from sr2_runtime.llm.streaming import (
     StreamEndEvent,
     TextDeltaEvent,
@@ -17,17 +17,23 @@ from sr2_runtime.llm.streaming import (
     ToolStartEvent,
 )
 
+# Aliases for minimal diff — the refactor moved ClaudeCodeProvider to
+# ClaudeCodeAdapter and ClaudeCodeConfig to ClaudeCodeAdapterConfig.
+ClaudeCodeConfig = ClaudeCodeAdapterConfig
+ClaudeCodeProvider = ClaudeCodeAdapter
+
 
 def _default_config(**overrides) -> ClaudeCodeConfig:
     """Create a config with defaults, patching path validation."""
     defaults = {
-        "enabled": True,
         "path": "/usr/bin/true",  # Exists on all Linux
         "allowed_tools": ["Read", "Glob"],
         "timeout_seconds": 30,
         "max_concurrent": 2,
     }
     defaults.update(overrides)
+    # Remove fields not in ClaudeCodeAdapterConfig
+    defaults.pop("enabled", None)
     return ClaudeCodeConfig(**defaults)
 
 
@@ -57,7 +63,6 @@ def mock_subprocess():
 
 def test_config_defaults():
     config = ClaudeCodeConfig()
-    assert config.enabled is False
     assert config.path == "claude"
     assert "Read" in config.allowed_tools
     assert config.max_concurrent == 3
@@ -68,7 +73,6 @@ def test_config_defaults():
 
 def test_config_custom_values():
     config = ClaudeCodeConfig(
-        enabled=True,
         path="/opt/bin/claude",
         allowed_tools=["Bash", "Edit"],
         permission_mode="acceptEdits",
@@ -79,7 +83,6 @@ def test_config_custom_values():
         working_directory="/home/workspace",
         env={"FOO": "bar"},
     )
-    assert config.enabled is True
     assert config.max_concurrent == 5
     assert config.working_directory == "/home/workspace"
     assert config.env == {"FOO": "bar"}
@@ -89,7 +92,7 @@ def test_config_custom_values():
 
 
 def test_cli_not_installed():
-    config = ClaudeCodeConfig(enabled=True, path="/nonexistent/claude-fake-path")
+    config = ClaudeCodeConfig(path="/nonexistent/claude-fake-path")
     with pytest.raises(FileNotFoundError, match="Claude Code CLI not found"):
         ClaudeCodeProvider(config)
 
@@ -108,6 +111,7 @@ def test_provider_init_success(mock_which):
 def test_builds_command(mock_which):
     config = _default_config(
         allowed_tools=["Read", "Glob", "Grep"],
+        dangerously_skip_permissions=False,
         permission_mode="acceptEdits",
         max_turns=10,
         max_budget_usd=2.5,
@@ -137,6 +141,7 @@ def test_builds_command(mock_which):
 def test_builds_command_minimal(mock_which):
     config = _default_config(
         allowed_tools=[],
+        dangerously_skip_permissions=False,
         permission_mode=None,
         max_turns=None,
         max_budget_usd=None,
@@ -181,7 +186,7 @@ def test_builds_subprocess_kwargs_with_cwd(mock_which):
 
 
 async def _run_with_stream_lines(provider, lines: bytes, stream_callback=None):
-    """Helper: mock subprocess with given stdout lines and run complete()."""
+    """Helper: mock subprocess with given stdout lines and run stream_execute()."""
 
     async def _fake_create_subprocess(*args, **kwargs):
         proc = AsyncMock()
@@ -203,8 +208,9 @@ async def _run_with_stream_lines(provider, lines: bytes, stream_callback=None):
         return proc
 
     with patch("asyncio.create_subprocess_exec", side_effect=_fake_create_subprocess):
-        return await provider.stream_complete(
-            prompt="test",
+        return await provider.stream_execute(
+            system_prompt="test system",
+            messages=[{"role": "user", "content": "test"}],
             stream_callback=stream_callback,
         )
 
@@ -242,8 +248,8 @@ async def test_stream_parsing_text(mock_which):
 
     text_events = [e for e in events if isinstance(e, TextDeltaEvent)]
     assert len(text_events) >= 1
-    end_events = [e for e in events if isinstance(e, StreamEndEvent)]
-    assert len(end_events) == 1
+    # StreamEndEvent is emitted by the Agent after stream_execute returns,
+    # not by the adapter itself.
 
 
 @patch("shutil.which", return_value="/usr/local/bin/claude")
@@ -340,7 +346,7 @@ async def test_nonzero_exit(mock_which):
         return proc
 
     with patch("asyncio.create_subprocess_exec", side_effect=_fake_create_subprocess):
-        result = await provider.stream_complete(prompt="test")
+        result = await provider.stream_execute(system_prompt=None, messages=[{"role": "user", "content": "test"}])
 
     assert result.stopped_reason == "error"
     assert "authentication failed" in result.response_text
@@ -369,7 +375,7 @@ async def test_subprocess_timeout(mock_which):
         return proc
 
     with patch("asyncio.create_subprocess_exec", side_effect=_fake_create_subprocess):
-        result = await provider.stream_complete(prompt="test")
+        result = await provider.stream_execute(system_prompt=None, messages=[{"role": "user", "content": "test"}])
 
     assert result.stopped_reason == "error"
     assert "timed out" in result.response_text
@@ -420,8 +426,8 @@ async def test_semaphore_limits_concurrent(mock_which):
 
     with patch("asyncio.create_subprocess_exec", side_effect=_fake_create_subprocess):
         results = await asyncio.gather(
-            provider.stream_complete(prompt="req1"),
-            provider.stream_complete(prompt="req2"),
+            provider.stream_execute(system_prompt=None, messages=[{"role": "user", "content": "req1"}]),
+            provider.stream_execute(system_prompt=None, messages=[{"role": "user", "content": "req2"}]),
         )
 
     assert len(results) == 2

@@ -126,8 +126,15 @@ runtime:
       dangerously_skip_permissions: true
       timeout_seconds: 300
 
+  media:
+    enabled: true
+    stt:
+      provider: openai_compatible
+      api_base: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
+      model: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
+
   database:
-    url: "postgresql://sr2_homelab:b5pspjF64pEXk2155nUoS4_LCVFxN_yW@192.168.40.114:5432/sr2_homelab"
+    url: ${DATABASE_URL_HOMELAB:-postgresql://sr2_homelab:b5pspjF64pEXk2155nUoS4_LCVFxN_yW@192.168.40.114:5432/sr2_homelab}
     pool_min: 2
     pool_max: 10
 

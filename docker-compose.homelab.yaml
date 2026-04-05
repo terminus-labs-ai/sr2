@@ -16,6 +16,9 @@ services:
       SR2_PRO_LICENSE_KEY: ${SR2_PRO_LICENSE_KEY}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_HOMELAB:-}
       TELEGRAM_USER_IDS: ${TELEGRAM_USER_IDS:-}
+      SR2_STT_API_BASE: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
+      SR2_STT_MODEL: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
+      DATABASE_URL_HOMELAB: ${DATABASE_URL_HOMELAB:-}
       LITELLM_DROP_PARAMS: "true"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
@@ -47,6 +50,9 @@ services:
       SR2_PRO_LICENSE_KEY: ${SR2_PRO_LICENSE_KEY}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_GENERAL:-}
       TELEGRAM_USER_IDS: ${TELEGRAM_USER_IDS:-}
+      SR2_STT_API_BASE: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
+      SR2_STT_MODEL: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
+      DATABASE_URL_GENERAL: ${DATABASE_URL_GENERAL:-}
       LITELLM_DROP_PARAMS: "true"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
@@ -83,6 +89,20 @@ services:
           memory: 1G
     command: >
       uv run sr2-bridge configs/bridges/claude.yaml
+
+  sr2-whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    container_name: sr2-whisper
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      WHISPER__MODEL: Systran/faster-whisper-small
+      WHISPER__DEVICE: cpu
+      UVICORN_PORT: "8787"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
 volumes:
   sr2-homelab-data:

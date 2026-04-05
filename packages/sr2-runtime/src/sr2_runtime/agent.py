@@ -193,9 +193,11 @@ class Agent:
             plugin_name = iface_config.plugin
             plugin_cls = self._plugin_registry.get(plugin_name)
             # Pass as dict for plugin compatibility
+            plugin_config = iface_config.model_dump()
+            plugin_config["_media"] = runtime_conf.media.model_dump()
             plugin = plugin_cls(
                 interface_name=iface_name,
-                config=iface_config.model_dump(),
+                config=plugin_config,
                 agent_callback=self._handle_trigger,
             )
             self._plugins[iface_name] = plugin
@@ -569,6 +571,18 @@ class Agent:
             system_prompt=self._agent_config.system_prompt,
         )
 
+        # Inject multimodal content blocks (e.g. images) into the current user message.
+        # The session stores a text placeholder; only the live LLM request gets image data.
+        media_content = (trigger.metadata or {}).get("media_content")
+        if media_content:
+            for msg in reversed(ctx.messages):
+                if msg["role"] == "user":
+                    msg["content"] = [
+                        {"type": "text", "text": msg["content"]},
+                        *media_content,
+                    ]
+                    break
+
         # Resolve per-interface model override
         model_config_override = None
         if ctx.model_override:
@@ -583,11 +597,18 @@ class Agent:
             # Bridge adapter path: bypass LLMLoop, delegate to adapter
             # Pass stream_callback so events stream in real-time to HTTP SSE / Telegram
             system_prompt = self._extract_system_prompt(ctx)
-            loop_result = await self._bridge_adapter.stream_execute(
-                system_prompt=system_prompt,
-                messages=ctx.messages,
-                stream_callback=trigger.respond_callback,
-            )
+            try:
+                loop_result = await self._bridge_adapter.stream_execute(
+                    system_prompt=system_prompt,
+                    messages=ctx.messages,
+                    stream_callback=trigger.respond_callback,
+                )
+            except asyncio.CancelledError:
+                logger.info(
+                    "Trigger cancelled for session %s (client disconnect)",
+                    trigger.session_name,
+                )
+                return ""
             # Emit StreamEndEvent so the SSE formatter sends the final stop chunk
             if trigger.respond_callback is not None:
                 from sr2_runtime.llm.streaming import StreamEndEvent

@@ -143,6 +143,48 @@ class RuntimeBridgeConfig(BaseModel):
     )
 
 
+class STTProviderConfig(BaseModel):
+    """Speech-to-text provider configuration.
+
+    Uses an OpenAI-compatible STT API by default, which covers Whisper,
+    Groq Whisper, Azure Speech, and any provider exposing a
+    ``/v1/audio/transcriptions`` endpoint.
+    """
+
+    provider: str = Field(
+        default="openai_compatible",
+        description="STT provider type. 'openai_compatible' works with any "
+        "OpenAI-compatible transcription API (Whisper, Groq, Deepgram, etc.).",
+    )
+    api_base: str | None = Field(
+        default=None,
+        description="STT API base URL. Supports ${VAR} env var substitution.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="STT model identifier (e.g. 'Systran/faster-whisper-small', 'whisper-1').",
+    )
+
+
+class MediaConfig(BaseModel):
+    """Multimedia processing configuration.
+
+    Controls whether the agent accepts photos, documents, and voice/audio
+    messages.  When enabled, the Telegram plugin (and future multimedia-capable
+    interfaces) will process incoming media via sr2-pro's ``MediaProcessor``.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable multimedia message processing (photos, documents, "
+        "voice/audio). Requires sr2-pro.",
+    )
+    stt: STTProviderConfig = Field(
+        default_factory=STTProviderConfig,
+        description="Speech-to-text provider for voice and audio messages.",
+    )
+
+
 class RuntimeLoopConfig(BaseModel):
     """LLM loop settings."""
 
@@ -315,6 +357,10 @@ class RuntimeConfig(BaseModel):
     )
     session: RuntimeSessionConfig = Field(
         default_factory=RuntimeSessionConfig, description="Default session settings."
+    )
+    media: MediaConfig = Field(
+        default_factory=MediaConfig,
+        description="Multimedia processing (photos, documents, voice/audio). Requires sr2-pro.",
     )
     stream_content: StreamContentConfig = Field(
         default_factory=StreamContentConfig,
