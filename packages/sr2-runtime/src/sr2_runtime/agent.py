@@ -569,6 +569,18 @@ class Agent:
             system_prompt=self._agent_config.system_prompt,
         )
 
+        # Inject multimodal content blocks (e.g. images) into the current user message.
+        # The session stores a text placeholder; only the live LLM request gets image data.
+        media_content = (trigger.metadata or {}).get("media_content")
+        if media_content:
+            for msg in reversed(ctx.messages):
+                if msg["role"] == "user":
+                    msg["content"] = [
+                        {"type": "text", "text": msg["content"]},
+                        *media_content,
+                    ]
+                    break
+
         # Resolve per-interface model override
         model_config_override = None
         if ctx.model_override:

@@ -413,6 +413,10 @@ class TelegramPlugin:
         self._app.add_handler(CommandHandler("newsession", self._cmd_newsession))
         self._app.add_handler(CommandHandler("resume", self._cmd_resume))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_message))
+        # Multimedia handlers (processing gated on sr2-pro at runtime)
+        self._app.add_handler(MessageHandler(filters.PHOTO, self._on_media))
+        self._app.add_handler(MessageHandler(filters.Document.ALL, self._on_media))
+        self._app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self._on_media))
 
         await self._app.initialize()
         await self._app.start()
@@ -510,6 +514,112 @@ class TelegramPlugin:
 
         logger.info(f"Telegram flush_final: {response}")
         # Fallback: if streaming wasn't used, send response as chunked messages
+        if not stream_state.was_used and response:
+            await self._safe_reply(update.message, response)
+
+    async def _on_media(self, update, context) -> None:
+        """Handle incoming Telegram photo, document, or audio message."""
+        if not update.message:
+            return
+        user_id = update.message.from_user.id
+        logger.info(f"Telegram media received from {user_id}")
+
+        if self._allowed_users and user_id not in self._allowed_users:
+            await update.message.reply_text("Access denied.")
+            return
+
+        # Gate on sr2-pro
+        try:
+            from sr2_pro.media import MediaProcessor
+        except ImportError:
+            await update.message.reply_text(
+                "Multimedia messages require SR2 Pro. Text messages work normally."
+            )
+            return
+
+        await update.message.chat.send_action("typing")
+        await update.message.reply_text("Processing media...")
+
+        caption = update.message.caption
+        processor = MediaProcessor()
+
+        try:
+            if update.message.photo:
+                photo = update.message.photo[-1]  # largest resolution
+                file = await photo.get_file()
+                file_bytes = bytes(await file.download_as_bytearray())
+                result = await processor.process_photo(file_bytes, caption=caption)
+
+            elif update.message.document:
+                doc = update.message.document
+                file = await doc.get_file()
+                file_bytes = bytes(await file.download_as_bytearray())
+                result = await processor.process_document(
+                    file_bytes,
+                    filename=doc.file_name or "unknown",
+                    mime_type=doc.mime_type,
+                    caption=caption,
+                )
+
+            elif update.message.voice:
+                voice = update.message.voice
+                file = await voice.get_file()
+                file_bytes = bytes(await file.download_as_bytearray())
+                result = await processor.process_voice(
+                    file_bytes,
+                    mime_type=voice.mime_type or "audio/ogg",
+                    duration=voice.duration,
+                )
+
+            elif update.message.audio:
+                audio = update.message.audio
+                file = await audio.get_file()
+                file_bytes = bytes(await file.download_as_bytearray())
+                result = await processor.process_voice(
+                    file_bytes,
+                    mime_type=audio.mime_type or "audio/mpeg",
+                    duration=audio.duration,
+                )
+
+            else:
+                await self._safe_reply(update.message, "Unsupported media type.")
+                return
+        except Exception as e:
+            logger.exception(f"Media processing error: {e}")
+            await self._safe_reply(update.message, f"Failed to process media: {e}")
+            return
+
+        session_name = self._session_config.get("name", f"telegram_{user_id}")
+        lifecycle = self._session_config.get("lifecycle", "persistent")
+
+        metadata = {"user_id": user_id, "chat_id": update.message.chat.id}
+        if result.llm_content_blocks:
+            metadata["media_content"] = result.llm_content_blocks
+
+        stream_state = _TelegramStreamState(message=update.message)
+
+        trigger = TriggerContext(
+            interface_name=self._name,
+            plugin_name="telegram",
+            session_name=session_name,
+            session_lifecycle=lifecycle,
+            input_data=result.text_for_session,
+            metadata=metadata,
+            respond_callback=stream_state.handle_event,
+        )
+
+        logger.info("Telegram media TriggerContext sent, waiting...")
+        response = ""
+        try:
+            response = await self._callback(trigger)
+        except Exception as e:
+            logger.exception(f"Telegram media trigger error: {e}")
+            await self._safe_reply(update.message, f"An error occurred: {e}")
+            return
+
+        logger.info(f"Telegram media trigger response: {response}")
+        await stream_state.flush_final()
+
         if not stream_state.was_used and response:
             await self._safe_reply(update.message, response)
 
