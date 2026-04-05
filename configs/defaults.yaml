@@ -321,39 +321,20 @@ runtime:
       # model_params:
 
 
-    # Claude Code CLI provider. When enabled, the main agent loop uses Claude
-    # Code instead of LiteLLM. SR2 context engineering still applies.
-    claude_code:
-      # Use Claude Code CLI instead of LiteLLM for the main agent loop.
-      enabled: false
-      # Path to the claude CLI binary.
-      path: claude
-      # Tools to pre-approve via --allowedTools.
-      allowed_tools: [Read, Glob, Grep, Agent, WebSearch, WebFetch]
-      # Permission mode: default, acceptEdits, bypassPermissions.
-      permission_mode: null
-      # Bypass all permission checks. Only for sandboxed environments.
-      dangerously_skip_permissions: false
-      # Max agentic turns per Claude Code invocation.
-      max_turns: null
-      # Max cost in USD per Claude Code invocation.
-      max_budget_usd: null
-      # Max concurrent Claude Code subprocesses. Prevents resource exhaustion.
-      max_concurrent: 3
-      # Subprocess timeout in seconds. Process is killed after this duration.
-      timeout_seconds: 300
-      # Working directory for Claude Code subprocess. Affects where Bash, Edit,
-      # Read tools operate.
-      working_directory: null
-      # Extra environment variables for Claude Code subprocess.
-      # env:
-      #   <name>: {}
-
-
 
   loop:
     # Max tool-call loop iterations before stopping.
     max_iterations: 25
+
+  # Bridge adapter configuration. When set, delegates LLM execution to a bridge
+  # adapter instead of the built-in LLMLoop.
+  bridge:
+    # Bridge adapter name (e.g. 'claude_code'). None = use built-in LLMLoop.
+    adapter: null
+    # Claude Code adapter settings. Passed to BridgeClaudeCodeConfig.
+    # claude_code:
+    #   <name>: {}
+
 
   # Default session settings.
   session:
@@ -361,6 +342,22 @@ runtime:
     max_turns: 200
     # Default idle timeout in minutes before session cleanup.
     idle_timeout_minutes: 60
+
+  # Multimedia processing (photos, documents, voice/audio). Requires sr2-pro.
+  media:
+    # Enable multimedia message processing (photos, documents, voice/audio).
+    # Requires sr2-pro.
+    enabled: false
+    # Speech-to-text provider for voice and audio messages.
+    stt:
+      # STT provider type. 'openai_compatible' works with any OpenAI-compatible
+      # transcription API (Whisper, Groq, Deepgram, etc.).
+      provider: openai_compatible
+      # STT API base URL. Supports ${VAR} env var substitution.
+      api_base: null
+      # STT model identifier (e.g. 'Systran/faster-whisper-small', 'whisper-1').
+      model: null
+
 
   stream_content:
     # Stream tool invocation status.

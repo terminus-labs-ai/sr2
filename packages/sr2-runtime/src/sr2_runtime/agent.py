@@ -193,9 +193,11 @@ class Agent:
             plugin_name = iface_config.plugin
             plugin_cls = self._plugin_registry.get(plugin_name)
             # Pass as dict for plugin compatibility
+            plugin_config = iface_config.model_dump()
+            plugin_config["_media"] = runtime_conf.media.model_dump()
             plugin = plugin_cls(
                 interface_name=iface_name,
-                config=iface_config.model_dump(),
+                config=plugin_config,
                 agent_callback=self._handle_trigger,
             )
             self._plugins[iface_name] = plugin

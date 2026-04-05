@@ -151,8 +151,15 @@ class BridgeClaudeCodeConfig(BaseModel):
     )
     allowed_tools: list[str] = Field(
         default_factory=lambda: [
-            "Read", "Glob", "Grep", "Bash", "Write", "Edit",
-            "Agent", "WebSearch", "WebFetch",
+            "Read",
+            "Glob",
+            "Grep",
+            "Bash",
+            "Write",
+            "Edit",
+            "Agent",
+            "WebSearch",
+            "WebFetch",
         ],
         description="Tools to pre-approve via --allowedTools.",
     )

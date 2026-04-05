@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 
@@ -21,6 +20,8 @@ from sr2_bridge.llm import APIKeyCache
 from sr2_bridge.session_tracker import BridgeSession, SessionTracker
 
 logger = logging.getLogger(__name__)
+
+_DISCONNECT_POLL_INTERVAL_S = 0.5
 
 # Models considered "fast/small" — if the incoming request uses one of these,
 # the bridge rewrites to forwarding.fast_model (or forwarding.model as fallback).
@@ -224,7 +225,11 @@ def create_bridge_app(
             # Combine system injection with original system prompt
             combined_system = system or ""
             if system_injection:
-                combined_system = f"{system_injection}\n\n{combined_system}" if combined_system else system_injection
+                combined_system = (
+                    f"{system_injection}\n\n{combined_system}"
+                    if combined_system
+                    else system_injection
+                )
 
             try:
                 execute_task = asyncio.create_task(
@@ -247,13 +252,11 @@ def create_bridge_app(
                         except asyncio.CancelledError:
                             pass
                         return Response(status_code=499)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(_DISCONNECT_POLL_INTERVAL_S)
 
                 loop_result = execute_task.result()
             except Exception:
-                logger.exception(
-                    "Claude Code execution failed for session %s", session_id
-                )
+                logger.exception("Claude Code execution failed for session %s", session_id)
                 return JSONResponse(
                     status_code=500,
                     content={"error": "Claude Code execution failed"},
@@ -261,25 +264,27 @@ def create_bridge_app(
 
             # Post-process async
             if loop_result.response_text:
-                task = asyncio.create_task(
-                    engine.post_process(session, loop_result.response_text)
-                )
+                task = asyncio.create_task(engine.post_process(session, loop_result.response_text))
                 task.add_done_callback(_log_task_exception)
 
             # Return as Anthropic Messages API format
-            return JSONResponse(content={
-                "id": f"msg_cc_{session_id}",
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "text", "text": loop_result.response_text}],
-                "model": "claude-code",
-                "stop_reason": "end_turn" if loop_result.stopped_reason == "complete" else "error",
-                "usage": {
-                    "input_tokens": loop_result.total_input_tokens,
-                    "output_tokens": loop_result.total_output_tokens,
-                    "cache_read_input_tokens": loop_result.cached_tokens,
-                },
-            })
+            return JSONResponse(
+                content={
+                    "id": f"msg_cc_{session_id}",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": loop_result.response_text}],
+                    "model": "claude-code",
+                    "stop_reason": "end_turn"
+                    if loop_result.stopped_reason == "complete"
+                    else "error",
+                    "usage": {
+                        "input_tokens": loop_result.total_input_tokens,
+                        "output_tokens": loop_result.total_output_tokens,
+                        "cache_read_input_tokens": loop_result.cached_tokens,
+                    },
+                }
+            )
 
         # Rebuild body with optimized messages (upstream forwarding path)
         optimized_body = adapter.rebuild_body(body, optimized_messages, system_injection)

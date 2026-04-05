@@ -5,6 +5,8 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Coroutine
+from typing import Any, TypeVar
 
 from sr2_runtime.llm.streaming import (
     StreamEndEvent,
@@ -17,6 +19,10 @@ from sr2_runtime.llm.streaming import (
 from sr2_runtime.plugins.base import TriggerContext
 
 logger = logging.getLogger(__name__)
+
+_DISCONNECT_POLL_INTERVAL_S = 0.5
+
+_T = TypeVar("_T")
 
 
 class HTTPPlugin:
@@ -62,7 +68,9 @@ class HTTPPlugin:
         lifecycle = self._session_config.get("lifecycle", "persistent")
         return session_name, lifecycle
 
-    async def _run_with_disconnect_guard(self, request, coro):
+    async def _run_with_disconnect_guard(
+        self, request: Any, coro: "Coroutine[Any, Any, _T]"
+    ) -> "_T | None":
         """Run a coroutine, cancelling it if the HTTP client disconnects."""
         task = asyncio.create_task(coro)
         while not task.done():
@@ -74,7 +82,7 @@ class HTTPPlugin:
                 except asyncio.CancelledError:
                     pass
                 return None
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(_DISCONNECT_POLL_INTERVAL_S)
         return task.result()
 
     def get_routes(self):
@@ -107,11 +115,10 @@ class HTTPPlugin:
                 input_data=message,
                 metadata={"session_id": session_id},
             )
-            response = await self._run_with_disconnect_guard(
-                request, self._callback(trigger)
-            )
+            response = await self._run_with_disconnect_guard(request, self._callback(trigger))
             if response is None:
                 from fastapi.responses import Response
+
                 return Response(status_code=499)
             return JSONResponse({"response": response})
 
@@ -154,11 +161,10 @@ class HTTPPlugin:
                 input_data=user_message,
                 metadata={"session_id": session_id},
             )
-            response = await self._run_with_disconnect_guard(
-                request, self._callback(trigger)
-            )
+            response = await self._run_with_disconnect_guard(request, self._callback(trigger))
             if response is None:
                 from fastapi.responses import Response
+
                 return Response(status_code=499)
             return JSONResponse(
                 {
