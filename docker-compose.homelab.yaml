@@ -17,6 +17,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_HOMELAB:-}
       TELEGRAM_USER_IDS: ${TELEGRAM_USER_IDS:-}
       SR2_STT_API_BASE: http://localhost:8787/v1
+      SR2_STT_MODEL: Systran/faster-whisper-small
       LITELLM_DROP_PARAMS: "true"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
@@ -49,6 +50,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_GENERAL:-}
       TELEGRAM_USER_IDS: ${TELEGRAM_USER_IDS:-}
       SR2_STT_API_BASE: http://localhost:8787/v1
+      SR2_STT_MODEL: Systran/faster-whisper-small
       LITELLM_DROP_PARAMS: "true"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
@@ -92,13 +94,13 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      WHISPER__MODEL: Systran/faster-whisper-large-v3
+      WHISPER__MODEL: Systran/faster-whisper-small
       WHISPER__DEVICE: cpu
       UVICORN_PORT: "8787"
     deploy:
       resources:
         limits:
-          memory: 4G
+          memory: 2G
 
 volumes:
   sr2-homelab-data:
