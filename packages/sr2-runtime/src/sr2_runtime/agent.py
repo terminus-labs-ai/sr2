@@ -603,11 +603,17 @@ class Agent:
             # Bridge adapter path: bypass LLMLoop, delegate to adapter
             # Pass stream_callback so events stream in real-time to HTTP SSE / Telegram
             system_prompt = self._extract_system_prompt(ctx)
+
+            # Bridge adapters emit plain dicts to avoid cross-package imports.
+            # Wrap the callback to convert them to StreamEvent dataclasses
+            # that interface plugins (HTTP SSE, Telegram) expect.
+            bridge_callback = self._wrap_bridge_callback(trigger.respond_callback)
+
             try:
                 loop_result = await self._bridge_adapter.stream_execute(
                     system_prompt=system_prompt,
                     messages=ctx.messages,
-                    stream_callback=trigger.respond_callback,
+                    stream_callback=bridge_callback,
                 )
             except asyncio.CancelledError:
                 logger.info(
@@ -849,6 +855,50 @@ class Agent:
             if msg.get("role") == "system":
                 parts.append(msg.get("content", ""))
         return "\n\n".join(parts) if parts else None
+
+    @staticmethod
+    def _wrap_bridge_callback(callback):
+        """Wrap a stream callback to translate plain dicts to StreamEvent objects.
+
+        Bridge adapters emit plain dicts (e.g. ``{"type": "text_delta", ...}``)
+        to avoid importing sr2-runtime types.  Interface plugins expect typed
+        ``StreamEvent`` dataclasses.  This wrapper bridges the gap.
+        """
+        if callback is None:
+            return None
+
+        from sr2_runtime.llm.streaming import (
+            TextDeltaEvent,
+            ToolResultEvent,
+            ToolStartEvent,
+        )
+
+        async def _wrapped(event):
+            if isinstance(event, dict):
+                etype = event.get("type")
+                if etype == "text_delta":
+                    await callback(TextDeltaEvent(content=event.get("content", "")))
+                elif etype == "tool_start":
+                    await callback(
+                        ToolStartEvent(
+                            tool_name=event.get("tool_name", ""),
+                            tool_call_id=event.get("tool_call_id", ""),
+                            arguments=event.get("arguments", {}),
+                        )
+                    )
+                elif etype == "tool_result":
+                    await callback(
+                        ToolResultEvent(
+                            tool_name=event.get("tool_name", ""),
+                            tool_call_id=event.get("tool_call_id", ""),
+                            result=event.get("result", ""),
+                            success=event.get("success", True),
+                        )
+                    )
+            else:
+                await callback(event)
+
+        return _wrapped
 
     # --- Internal helpers ---
 
