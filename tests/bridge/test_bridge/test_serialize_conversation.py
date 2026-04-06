@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from sr2_bridge.adapters.claude_code import ClaudeCodeAdapter
 

@@ -415,12 +415,24 @@ class TelegramPlugin:
         self._app.add_handler(CommandHandler("newsession", self._cmd_newsession))
         self._app.add_handler(CommandHandler("resume", self._cmd_resume))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_message))
-        # Multimedia handlers — only registered when media feature is enabled
-        if self._media_config.get("enabled", False):
+        # Multimedia handlers — registered per-type when enabled.
+        # All media features require sr2-pro's MediaProcessor.
+        _media_types_enabled = []
+        if self._media_config.get("photo", {}).get("enabled", False):
             self._app.add_handler(MessageHandler(filters.PHOTO, self._on_media))
+            _media_types_enabled.append("photo")
+        if self._media_config.get("document", {}).get("enabled", False):
             self._app.add_handler(MessageHandler(filters.Document.ALL, self._on_media))
+            _media_types_enabled.append("document")
+        if self._media_config.get("voice", {}).get("enabled", False):
             self._app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self._on_media))
-            logger.info("Telegram plugin '%s': multimedia handlers registered", self._name)
+            _media_types_enabled.append("voice")
+        if _media_types_enabled:
+            logger.info(
+                "Telegram plugin '%s': media handlers registered: %s",
+                self._name,
+                ", ".join(_media_types_enabled),
+            )
 
         await self._app.initialize()
         await self._app.start()
@@ -522,14 +534,18 @@ class TelegramPlugin:
             await self._safe_reply(update.message, response)
 
     def _get_media_processor(self):
-        """Return a cached MediaProcessor instance, creating it on first use."""
+        """Return a cached MediaProcessor instance, creating it on first use.
+
+        Requires sr2-pro.  Returns ``None`` if the package is not installed.
+        """
         if self._media_processor is None:
             try:
                 from sr2_pro.media import MediaProcessor
             except ImportError:
                 return None
 
-            stt_config = self._media_config.get("stt", {})
+            voice_cfg = self._media_config.get("voice", {})
+            stt_config = voice_cfg.get("stt", {})
             self._media_processor = MediaProcessor(
                 stt_provider=stt_config.get("provider", "openai_compatible"),
                 stt_api_base=stt_config.get("api_base"),

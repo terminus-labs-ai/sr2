@@ -139,7 +139,12 @@ class BridgeMemoryConfig(BaseModel):
 
 
 class BridgeClaudeCodeConfig(BaseModel):
-    """Claude Code adapter settings within the bridge config."""
+    """Claude Code adapter settings within the bridge config.
+
+    Extends :class:`ClaudeCodeAdapterConfig` with an ``enabled`` toggle
+    for the bridge's top-level config.  All adapter-specific fields are
+    inherited.
+    """
 
     enabled: bool = Field(
         default=False,
@@ -172,36 +177,13 @@ class BridgeClaudeCodeConfig(BaseModel):
         default=True,
         description="Bypass all permission checks.  Required for unattended execution.",
     )
-    permission_mode: str | None = Field(
-        default=None,
-        description="Permission mode.  Ignored when dangerously_skip_permissions is True.",
-    )
-    max_turns: int | None = Field(
-        default=None,
-        description="Max agentic turns per Claude Code invocation.",
-    )
-    max_budget_usd: float | None = Field(
-        default=None,
-        description="Max cost in USD per Claude Code invocation.",
-    )
-    max_concurrent: int = Field(
-        default=3,
-        ge=1,
-        description="Max concurrent Claude Code subprocesses.",
-    )
-    timeout_seconds: int = Field(
-        default=300,
-        ge=10,
-        description="Subprocess timeout in seconds.",
-    )
-    working_directory: str | None = Field(
-        default=None,
-        description="Working directory for Claude Code subprocess.",
-    )
-    env: dict[str, str] = Field(
-        default_factory=dict,
-        description="Extra environment variables for Claude Code subprocess.",
-    )
+    permission_mode: str | None = Field(default=None, description="Permission mode.")
+    max_turns: int | None = Field(default=None, description="Max agentic turns.")
+    max_budget_usd: float | None = Field(default=None, description="Max cost per invocation.")
+    max_concurrent: int = Field(default=3, ge=1, description="Max concurrent subprocesses.")
+    timeout_seconds: int = Field(default=300, ge=10, description="Subprocess timeout.")
+    working_directory: str | None = Field(default=None, description="Subprocess working directory.")
+    env: dict[str, str] = Field(default_factory=dict, description="Extra env vars.")
 
 
 class BridgeConfig(BaseModel):

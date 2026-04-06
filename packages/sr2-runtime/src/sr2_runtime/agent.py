@@ -152,15 +152,22 @@ class Agent:
             default_model_config=runtime_conf.llm.model,
         )
 
-        # Bridge adapter (optional — when configured, bypasses LLMLoop)
+        # Bridge adapter (optional — when configured, bypasses LLMLoop).
+        # NOTE: Intentional lazy cross-package import. sr2-bridge is an optional
+        # dependency; this import only fires when bridge.adapter is configured.
+        # TODO: Replace with entry-point discovery for v2.
         self._bridge_adapter = None
-        if runtime_conf.bridge.adapter == "claude_code":
-            from sr2_bridge.adapters.claude_code import ClaudeCodeAdapter
-            from sr2_bridge.adapters.claude_code_config import ClaudeCodeAdapterConfig
+        if runtime_conf.bridge.adapter:
+            from sr2_bridge.adapters import get_execution_adapter
 
-            cc_config = ClaudeCodeAdapterConfig(**runtime_conf.bridge.claude_code)
-            self._bridge_adapter = ClaudeCodeAdapter(cc_config)
-            logger.info("Claude Code bridge adapter enabled — LLMLoop will be bypassed")
+            self._bridge_adapter = get_execution_adapter(
+                runtime_conf.bridge.adapter,
+                runtime_conf.bridge.claude_code,
+            )
+            logger.info(
+                "Bridge adapter '%s' enabled — LLMLoop will be bypassed",
+                runtime_conf.bridge.adapter,
+            )
 
         # --- Sessions (from YAML) ---
         session_cfgs = {}

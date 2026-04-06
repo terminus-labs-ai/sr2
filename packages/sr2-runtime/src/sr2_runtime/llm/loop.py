@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from sr2.models.loop_result import LoopResult, ToolCallRecord  # noqa: F401
 from sr2_runtime.llm.client import LLMClient
 from sr2_runtime.llm.context_bridge import ContextBridge
 from sr2_runtime.llm.loop_detector import detect_loop
@@ -26,43 +26,6 @@ if TYPE_CHECKING:
     from sr2.tools.state_machine import ToolStateMachine
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ToolCallRecord:
-    """Record of a single tool call during the loop."""
-
-    tool_name: str
-    arguments: dict
-    result: str
-    duration_ms: float
-    success: bool
-    error: str | None = None
-    call_id: str = ""
-    iteration: int = 0  # Which loop iteration this call belongs to
-
-
-@dataclass
-class LoopResult:
-    """Result of a full LLM loop execution."""
-
-    response_text: str
-    tool_calls: list[ToolCallRecord] = field(default_factory=list)
-    iterations: int = 0
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    cached_tokens: int = 0
-    stopped_reason: str = "complete"  # complete | max_iterations | error
-
-    @property
-    def total_tokens(self) -> int:
-        return self.total_input_tokens + self.total_output_tokens
-
-    @property
-    def cache_hit_rate(self) -> float:
-        if self.total_input_tokens == 0:
-            return 0.0
-        return self.cached_tokens / self.total_input_tokens
 
 
 class LLMLoop:

@@ -331,7 +331,8 @@ runtime:
   bridge:
     # Bridge adapter name (e.g. 'claude_code'). None = use built-in LLMLoop.
     adapter: null
-    # Claude Code adapter settings. Passed to BridgeClaudeCodeConfig.
+    # Claude Code adapter settings. Validated by the adapter's config model at
+    # instantiation time via the adapter registry.
     # claude_code:
     #   <name>: {}
 
@@ -345,18 +346,31 @@ runtime:
 
   # Multimedia processing (photos, documents, voice/audio). Requires sr2-pro.
   media:
-    # Enable multimedia message processing (photos, documents, voice/audio).
-    # Requires sr2-pro.
-    enabled: false
-    # Speech-to-text provider for voice and audio messages.
-    stt:
-      # STT provider type. 'openai_compatible' works with any OpenAI-compatible
-      # transcription API (Whisper, Groq, Deepgram, etc.).
-      provider: openai_compatible
-      # STT API base URL. Supports ${VAR} env var substitution.
-      api_base: null
-      # STT model identifier (e.g. 'Systran/faster-whisper-small', 'whisper-1').
-      model: null
+    # Voice and audio message processing config.
+    voice:
+      # Accept and transcribe voice/audio messages. Requires sr2-pro.
+      enabled: false
+      # Speech-to-text provider for voice and audio messages.
+      stt:
+        # STT provider type. 'openai_compatible' works with any
+        # OpenAI-compatible transcription API (Whisper, Groq, Deepgram, etc.).
+        provider: openai_compatible
+        # STT API base URL. Supports ${VAR} env var substitution.
+        api_base: null
+        # STT model identifier (e.g. 'Systran/faster-whisper-small',
+        # 'whisper-1').
+        model: null
+
+
+    # Photo message processing config.
+    photo:
+      # Accept and process photo messages. Requires sr2-pro.
+      enabled: false
+
+    # Document attachment processing config.
+    document:
+      # Accept and process document attachments. Requires sr2-pro.
+      enabled: false
 
 
   stream_content:
