@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
 from sr2.compaction.engine import ConversationTurn
-from sr2_runtime.llm.loop import LoopResult
+from sr2.models.loop_result import LoopResult
+
+#: Callback type for streaming events to the interface (HTTP SSE, Telegram, etc.).
+#: The callable receives a dict event and returns an awaitable.
+StreamCallback = Callable[[dict], Awaitable[None]] | None
 
 
 @runtime_checkable
@@ -100,12 +105,15 @@ class ExecutionAdapter(Protocol):
         self,
         system_prompt: str | None,
         messages: list[dict],
+        stream_callback: StreamCallback = None,
     ) -> LoopResult:
         """Execute with the full SR2-compiled context.
 
         Args:
             system_prompt: The compiled system prompt from SR2's pipeline.
             messages: The optimized conversation messages.
+            stream_callback: Optional callback for streaming events to the
+                interface (HTTP SSE, Telegram, etc.).
 
         Returns:
             A fully populated :class:`LoopResult`.

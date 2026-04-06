@@ -139,7 +139,8 @@ class RuntimeBridgeConfig(BaseModel):
     )
     claude_code: dict[str, Any] = Field(
         default_factory=dict,
-        description="Claude Code adapter settings.  Passed to BridgeClaudeCodeConfig.",
+        description="Claude Code adapter settings.  Validated by the adapter's config model "
+        "at instantiation time via the adapter registry.",
     )
 
 
@@ -166,22 +167,57 @@ class STTProviderConfig(BaseModel):
     )
 
 
-class MediaConfig(BaseModel):
-    """Multimedia processing configuration.
-
-    Controls whether the agent accepts photos, documents, and voice/audio
-    messages.  When enabled, the Telegram plugin (and future multimedia-capable
-    interfaces) will process incoming media via sr2-pro's ``MediaProcessor``.
-    """
+class VoiceMediaConfig(BaseModel):
+    """Voice and audio message processing.  Requires sr2-pro + an STT provider."""
 
     enabled: bool = Field(
         default=False,
-        description="Enable multimedia message processing (photos, documents, "
-        "voice/audio). Requires sr2-pro.",
+        description="Accept and transcribe voice/audio messages.  Requires sr2-pro.",
     )
     stt: STTProviderConfig = Field(
         default_factory=STTProviderConfig,
         description="Speech-to-text provider for voice and audio messages.",
+    )
+
+
+class PhotoMediaConfig(BaseModel):
+    """Photo message processing.  Requires sr2-pro + a vision-capable LLM."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Accept and process photo messages.  Requires sr2-pro.",
+    )
+
+
+class DocumentMediaConfig(BaseModel):
+    """Document attachment processing.  Requires sr2-pro."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Accept and process document attachments.  Requires sr2-pro.",
+    )
+
+
+class MediaConfig(BaseModel):
+    """Per-media-type processing toggles.
+
+    Each media type can be independently enabled or disabled.  All media
+    features require sr2-pro's ``MediaProcessor``.  When a type is disabled,
+    the corresponding Telegram handler is not registered and incoming
+    messages of that type are silently ignored.
+    """
+
+    voice: VoiceMediaConfig = Field(
+        default_factory=VoiceMediaConfig,
+        description="Voice and audio message processing config.",
+    )
+    photo: PhotoMediaConfig = Field(
+        default_factory=PhotoMediaConfig,
+        description="Photo message processing config.",
+    )
+    document: DocumentMediaConfig = Field(
+        default_factory=DocumentMediaConfig,
+        description="Document attachment processing config.",
     )
 
 

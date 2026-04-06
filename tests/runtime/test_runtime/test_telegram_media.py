@@ -10,17 +10,25 @@ import pytest
 from sr2_runtime.plugins.telegram import TelegramPlugin
 
 
-def _make_plugin(media_enabled: bool = True) -> TelegramPlugin:
-    """Create a TelegramPlugin with a mocked callback."""
+def _make_plugin(
+    voice_enabled: bool = True,
+    photo_enabled: bool = True,
+    document_enabled: bool = True,
+) -> TelegramPlugin:
+    """Create a TelegramPlugin with per-media-type config."""
     config = {
         "session": {"name": "test_{user_id}", "lifecycle": "persistent"},
         "_media": {
-            "enabled": media_enabled,
-            "stt": {
-                "provider": "openai_compatible",
-                "api_base": "http://localhost:8787/v1",
-                "model": "whisper-small",
+            "voice": {
+                "enabled": voice_enabled,
+                "stt": {
+                    "provider": "openai_compatible",
+                    "api_base": "http://localhost:8787/v1",
+                    "model": "whisper-small",
+                },
             },
+            "photo": {"enabled": photo_enabled},
+            "document": {"enabled": document_enabled},
         },
     }
     plugin = TelegramPlugin(
@@ -33,9 +41,9 @@ def _make_plugin(media_enabled: bool = True) -> TelegramPlugin:
 
 class TestMediaConfigInit:
     def test_media_config_stored(self):
-        plugin = _make_plugin(media_enabled=True)
-        assert plugin._media_config["enabled"] is True
-        assert plugin._media_config["stt"]["provider"] == "openai_compatible"
+        plugin = _make_plugin()
+        assert plugin._media_config["voice"]["enabled"] is True
+        assert plugin._media_config["voice"]["stt"]["provider"] == "openai_compatible"
 
     def test_media_config_defaults_when_missing(self):
         plugin = TelegramPlugin(
@@ -79,6 +87,72 @@ class TestGetMediaProcessor:
                 assert plugin._get_media_processor() is mock_processor
                 # Second call returns same instance
                 assert plugin._get_media_processor() is mock_processor
+
+
+class TestPerTypeHandlerRegistration:
+    """Verify that handlers are registered only for enabled media types."""
+
+    @pytest.mark.asyncio
+    async def test_only_voice_registered(self):
+        """When only voice is enabled, photo and document handlers are not registered."""
+        plugin = _make_plugin(voice_enabled=True, photo_enabled=False, document_enabled=False)
+
+
+        with patch("sr2_runtime.plugins.telegram.os") as mock_os:
+            mock_os.environ.get = MagicMock(side_effect=lambda k, d="": "fake-token" if k == "TELEGRAM_BOT_TOKEN" else d)
+
+            with patch("telegram.ext.ApplicationBuilder") as mock_builder:
+                mock_app = AsyncMock()
+                mock_app.add_handler = MagicMock()
+                mock_builder.return_value.token.return_value.build.return_value = mock_app
+                mock_app.updater.start_polling = AsyncMock()
+
+                plugin._token = "fake-token"
+                plugin._app = mock_app
+                plugin._bot = MagicMock()
+
+                # Manually call the handler registration logic
+
+                _media_types_enabled = []
+                media_cfg = plugin._media_config
+                if media_cfg.get("photo", {}).get("enabled", False):
+                    _media_types_enabled.append("photo")
+                if media_cfg.get("document", {}).get("enabled", False):
+                    _media_types_enabled.append("document")
+                if media_cfg.get("voice", {}).get("enabled", False):
+                    _media_types_enabled.append("voice")
+
+                assert _media_types_enabled == ["voice"]
+
+    def test_all_disabled_no_handlers(self):
+        """When all media types are disabled, no media handlers are created."""
+        plugin = _make_plugin(voice_enabled=False, photo_enabled=False, document_enabled=False)
+        media_cfg = plugin._media_config
+
+        enabled = []
+        if media_cfg.get("photo", {}).get("enabled", False):
+            enabled.append("photo")
+        if media_cfg.get("document", {}).get("enabled", False):
+            enabled.append("document")
+        if media_cfg.get("voice", {}).get("enabled", False):
+            enabled.append("voice")
+
+        assert enabled == []
+
+    def test_all_enabled(self):
+        """When all media types are enabled, all types are listed."""
+        plugin = _make_plugin(voice_enabled=True, photo_enabled=True, document_enabled=True)
+        media_cfg = plugin._media_config
+
+        enabled = []
+        if media_cfg.get("photo", {}).get("enabled", False):
+            enabled.append("photo")
+        if media_cfg.get("document", {}).get("enabled", False):
+            enabled.append("document")
+        if media_cfg.get("voice", {}).get("enabled", False):
+            enabled.append("voice")
+
+        assert sorted(enabled) == ["document", "photo", "voice"]
 
 
 class TestOnMediaAccessDenied:

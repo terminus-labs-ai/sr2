@@ -10,12 +10,6 @@ import pytest
 
 from sr2_bridge.adapters.claude_code import ClaudeCodeAdapter
 from sr2_bridge.adapters.claude_code_config import ClaudeCodeAdapterConfig
-from sr2_runtime.llm.streaming import (
-    StreamEndEvent,
-    TextDeltaEvent,
-    ToolResultEvent,
-    ToolStartEvent,
-)
 
 # Aliases for minimal diff — the refactor moved ClaudeCodeProvider to
 # ClaudeCodeAdapter and ClaudeCodeConfig to ClaudeCodeAdapterConfig.
@@ -246,7 +240,7 @@ async def test_stream_parsing_text(mock_which):
     assert result.total_output_tokens == 50
     assert result.stopped_reason == "complete"
 
-    text_events = [e for e in events if isinstance(e, TextDeltaEvent)]
+    text_events = [e for e in events if isinstance(e, dict) and e.get("type") == "text_delta"]
     assert len(text_events) >= 1
     # StreamEndEvent is emitted by the Agent after stream_execute returns,
     # not by the adapter itself.
@@ -302,12 +296,12 @@ async def test_stream_parsing_tool_events(mock_which):
     assert result.tool_calls[0].tool_name == "Read"
     assert result.tool_calls[0].success is True
 
-    tool_starts = [e for e in events if isinstance(e, ToolStartEvent)]
-    tool_results = [e for e in events if isinstance(e, ToolResultEvent)]
+    tool_starts = [e for e in events if isinstance(e, dict) and e.get("type") == "tool_start"]
+    tool_results = [e for e in events if isinstance(e, dict) and e.get("type") == "tool_result"]
     assert len(tool_starts) == 1
-    assert tool_starts[0].tool_name == "Read"
+    assert tool_starts[0]["tool_name"] == "Read"
     assert len(tool_results) == 1
-    assert tool_results[0].success is True
+    assert tool_results[0]["success"] is True
 
 
 @patch("shutil.which", return_value="/usr/local/bin/claude")

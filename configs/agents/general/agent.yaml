@@ -89,14 +89,19 @@ sessions:
 
 runtime:
   media:
-    enabled: true
-    stt:
-      provider: openai_compatible
-      api_base: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
-      model: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
+    voice:
+      enabled: true
+      stt:
+        provider: openai_compatible
+        api_base: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
+        model: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
+    photo:
+      enabled: true
+    document:
+      enabled: true
 
   database:
-    url: ${DATABASE_URL_GENERAL:-postgresql://sr2_general:t90nMJf5yOlqwF1s6wR22hkiCoqdjnZd@192.168.40.114:5432/sr2_general}
+    url: ${DATABASE_URL_GENERAL}
     pool_min: 2
     pool_max: 10
 

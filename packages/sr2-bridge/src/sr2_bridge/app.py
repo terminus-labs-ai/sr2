@@ -9,9 +9,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 
-from sr2_bridge.adapters.anthropic import AnthropicAdapter
-from sr2_bridge.adapters.claude_code import ClaudeCodeAdapter
-from sr2_bridge.adapters.claude_code_config import ClaudeCodeAdapterConfig
+from sr2_bridge.adapters import AnthropicAdapter, ExecutionAdapter
 from sr2_bridge.config import BridgeConfig
 from sr2_bridge.engine import BridgeEngine
 from sr2_bridge.forwarder import BridgeForwarder
@@ -170,10 +168,13 @@ def create_bridge_app(
     _key_cache = key_cache or APIKeyCache()
 
     # Claude Code execution adapter (optional)
-    cc_adapter: ClaudeCodeAdapter | None = None
+    cc_adapter: ExecutionAdapter | None = None
     if bridge_config.claude_code.enabled:
-        cc_adapter = ClaudeCodeAdapter(
-            ClaudeCodeAdapterConfig(**bridge_config.claude_code.model_dump())
+        from sr2_bridge.adapters import get_execution_adapter
+
+        cc_adapter = get_execution_adapter(
+            "claude_code",
+            bridge_config.claude_code.model_dump(),
         )
         logger.info("Claude Code execution adapter enabled")
 

@@ -21,14 +21,22 @@ import os
 import shutil
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sr2_bridge.adapters.claude_code_config import ClaudeCodeAdapterConfig
 
-from sr2_runtime.llm.loop import LoopResult, ToolCallRecord
+from sr2_bridge.adapters.base import StreamCallback
+from sr2.models.loop_result import LoopResult, ToolCallRecord
 
 logger = logging.getLogger(__name__)
+
+# Truncation limits for stored / logged strings
+_STDERR_LOG_MAX = 500
+_STDERR_FULL_MAX = 1000
+_TOOL_RESULT_MAX = 5000
+_TOOL_ERROR_MAX = 1000
+_TOOL_RESULT_EMIT_MAX = 500
 
 
 @dataclass
@@ -114,7 +122,7 @@ class ClaudeCodeAdapter:
 
         return cmd
 
-    def _build_subprocess_kwargs(self) -> dict:
+    def _build_subprocess_kwargs(self) -> dict[str, Any]:
         """Build kwargs for :func:`asyncio.create_subprocess_exec`."""
         kwargs: dict = {
             "stdout": asyncio.subprocess.PIPE,
@@ -187,7 +195,7 @@ class ClaudeCodeAdapter:
         self,
         system_prompt: str | None,
         messages: list[dict],
-        stream_callback=None,
+        stream_callback: StreamCallback = None,
     ) -> LoopResult:
         """Execute Claude Code with the full SR2-compiled context.
 
@@ -216,7 +224,7 @@ class ClaudeCodeAdapter:
         self,
         prompt: str,
         system_prompt: str | None,
-        stream_callback=None,
+        stream_callback: StreamCallback = None,
     ) -> LoopResult:
         """Spawn and manage a single ``claude`` subprocess."""
         cmd = self._build_command(prompt, system_prompt)
@@ -251,7 +259,7 @@ class ClaudeCodeAdapter:
                 if stderr_out:
                     logger.warning(
                         "Claude Code stderr on timeout: %s",
-                        stderr_out.decode()[:500],
+                        stderr_out.decode()[:_STDERR_LOG_MAX],
                     )
                 return LoopResult(
                     response_text=f"Error: Claude Code timed out after {self._timeout} seconds.",
@@ -270,7 +278,7 @@ class ClaudeCodeAdapter:
 
             if proc.returncode != 0:
                 stderr_out = await proc.stderr.read()
-                stderr_text = stderr_out.decode(errors="replace")[:1000] if stderr_out else ""
+                stderr_text = stderr_out.decode(errors="replace")[:_STDERR_FULL_MAX] if stderr_out else ""
                 logger.error(
                     "Claude Code exited with code %d: %s",
                     proc.returncode,
@@ -289,7 +297,7 @@ class ClaudeCodeAdapter:
             if stderr_out:
                 stderr_text = stderr_out.decode(errors="replace").strip()
                 if stderr_text:
-                    logger.debug("Claude Code stderr: %s", stderr_text[:500])
+                    logger.debug("Claude Code stderr: %s", stderr_text[:_STDERR_LOG_MAX])
 
         finally:
             if proc in self._active_processes:
@@ -323,7 +331,7 @@ class ClaudeCodeAdapter:
         self,
         proc: asyncio.subprocess.Process,
         acc: _StreamResult,
-        stream_callback=None,
+        stream_callback: StreamCallback = None,
     ) -> None:
         """Read and parse ``stream-json`` lines from stdout.
 
@@ -334,20 +342,14 @@ class ClaudeCodeAdapter:
         in real-time so callers (HTTP SSE, Telegram) can display progress
         as Claude Code works through its agentic loop.
         """
-        from sr2_runtime.llm.streaming import (
-            TextDeltaEvent,
-            ToolStartEvent,
-            ToolResultEvent,
-        )
-
         assert proc.stdout is not None
 
-        async def _emit(event):
+        async def _emit(event: dict) -> None:
             if stream_callback is not None:
                 try:
                     await stream_callback(event)
                 except Exception:
-                    logger.debug("Stream callback error (non-fatal)", exc_info=True)
+                    logger.warning("Stream callback error", exc_info=True)
 
         async for raw_line in proc.stdout:
             line = raw_line.decode(errors="replace").strip()
@@ -382,7 +384,7 @@ class ClaudeCodeAdapter:
                             if text != prev:
                                 delta = text[len(prev) :] if text.startswith(prev) else text
                                 if delta:
-                                    await _emit(TextDeltaEvent(content=delta))
+                                    await _emit({"type": "text_delta", "content": delta})
                                     acc.last_emitted_text = text
                     elif block.get("type") == "tool_use":
                         tool_id = block.get("id", "")
@@ -394,13 +396,12 @@ class ClaudeCodeAdapter:
                             "start_time": time.perf_counter(),
                             "iteration": acc.current_iteration,
                         }
-                        await _emit(
-                            ToolStartEvent(
-                                tool_name=tool_name,
-                                tool_call_id=tool_id,
-                                arguments=tool_input,
-                            )
-                        )
+                        await _emit({
+                            "type": "tool_start",
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_id,
+                            "arguments": tool_input,
+                        })
                 continue
 
             # Tool result
@@ -422,21 +423,24 @@ class ClaudeCodeAdapter:
                         ToolCallRecord(
                             tool_name=pending["name"],
                             arguments=pending["arguments"],
-                            result=str(content)[:5000],
+                            result=str(content)[:_TOOL_RESULT_MAX],
                             duration_ms=duration,
                             success=not is_error,
-                            error=str(content)[:1000] if is_error else None,
+                            error=str(content)[:_TOOL_ERROR_MAX] if is_error else None,
                             call_id=tool_id,
                             iteration=pending["iteration"],
                         )
                     )
-                    await _emit(
-                        ToolResultEvent(
-                            tool_name=pending["name"],
-                            tool_call_id=tool_id,
-                            result=str(content)[:500],
-                            success=not is_error,
-                        )
+                    await _emit({
+                        "type": "tool_result",
+                        "tool_name": pending["name"],
+                        "tool_call_id": tool_id,
+                        "result": str(content)[:_TOOL_RESULT_EMIT_MAX],
+                        "success": not is_error,
+                    })
+                else:
+                    logger.warning(
+                        "Orphaned tool result for unknown tool_id=%s", tool_id
                     )
                 continue
 
