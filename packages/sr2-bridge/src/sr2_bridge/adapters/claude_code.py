@@ -278,7 +278,9 @@ class ClaudeCodeAdapter:
 
             if proc.returncode != 0:
                 stderr_out = await proc.stderr.read()
-                stderr_text = stderr_out.decode(errors="replace")[:_STDERR_FULL_MAX] if stderr_out else ""
+                stderr_text = (
+                    stderr_out.decode(errors="replace")[:_STDERR_FULL_MAX] if stderr_out else ""
+                )
                 logger.error(
                     "Claude Code exited with code %d: %s",
                     proc.returncode,
@@ -396,12 +398,14 @@ class ClaudeCodeAdapter:
                             "start_time": time.perf_counter(),
                             "iteration": acc.current_iteration,
                         }
-                        await _emit({
-                            "type": "tool_start",
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_id,
-                            "arguments": tool_input,
-                        })
+                        await _emit(
+                            {
+                                "type": "tool_start",
+                                "tool_name": tool_name,
+                                "tool_call_id": tool_id,
+                                "arguments": tool_input,
+                            }
+                        )
                 continue
 
             # Tool result
@@ -431,17 +435,17 @@ class ClaudeCodeAdapter:
                             iteration=pending["iteration"],
                         )
                     )
-                    await _emit({
-                        "type": "tool_result",
-                        "tool_name": pending["name"],
-                        "tool_call_id": tool_id,
-                        "result": str(content)[:_TOOL_RESULT_EMIT_MAX],
-                        "success": not is_error,
-                    })
-                else:
-                    logger.warning(
-                        "Orphaned tool result for unknown tool_id=%s", tool_id
+                    await _emit(
+                        {
+                            "type": "tool_result",
+                            "tool_name": pending["name"],
+                            "tool_call_id": tool_id,
+                            "result": str(content)[:_TOOL_RESULT_EMIT_MAX],
+                            "success": not is_error,
+                        }
                     )
+                else:
+                    logger.warning("Orphaned tool result for unknown tool_id=%s", tool_id)
                 continue
 
             # Result event — final summary with token counts
