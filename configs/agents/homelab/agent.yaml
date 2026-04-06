@@ -126,18 +126,6 @@ runtime:
       dangerously_skip_permissions: true
       timeout_seconds: 300
 
-  media:
-    voice:
-      enabled: true
-      stt:
-        provider: openai_compatible
-        api_base: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
-        model: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
-    photo:
-      enabled: true
-    document:
-      enabled: true
-
   database:
     url: ${DATABASE_URL_HOMELAB}
     pool_min: 2
@@ -162,6 +150,17 @@ runtime:
 interfaces:
   telegram:
     plugin: telegram
+    media:
+      voice:
+        enabled: true
+        stt:
+          provider: openai_compatible
+          api_base: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
+          model: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
+      photo:
+        enabled: true
+      document:
+        enabled: true
     session:
       name: homelab_telegram_{user_id}
       lifecycle: persistent

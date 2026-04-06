@@ -88,18 +88,6 @@ sessions:
     idle_timeout_minutes: 60
 
 runtime:
-  media:
-    voice:
-      enabled: true
-      stt:
-        provider: openai_compatible
-        api_base: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
-        model: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
-    photo:
-      enabled: true
-    document:
-      enabled: true
-
   database:
     url: ${DATABASE_URL_GENERAL}
     pool_min: 2
@@ -133,6 +121,17 @@ runtime:
 interfaces:
   telegram:
     plugin: telegram
+    media:
+      voice:
+        enabled: true
+        stt:
+          provider: openai_compatible
+          api_base: ${SR2_STT_API_BASE:-http://localhost:8787/v1}
+          model: ${SR2_STT_MODEL:-Systran/faster-whisper-small}
+      photo:
+        enabled: true
+      document:
+        enabled: true
     session:
       name: general_telegram_{user_id}
       lifecycle: persistent
