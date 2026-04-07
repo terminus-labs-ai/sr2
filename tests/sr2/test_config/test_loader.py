@@ -1,7 +1,9 @@
+import os
+
 import pytest
 import yaml
 
-from sr2.config.loader import ConfigLoader
+from sr2.config.loader import ConfigLoader, _expand_env
 from sr2.config.models import PipelineConfig
 
 
@@ -397,3 +399,130 @@ class TestRuntimeLLMExtraction:
         config = loader.load(str(config_file))
 
         assert config.llm.model is None
+
+
+class TestExpandEnvFunction:
+    """Unit tests for _expand_env string expansion."""
+
+    def test_simple_var(self, monkeypatch):
+        monkeypatch.setenv("SR2_TEST_VAR", "hello")
+        assert _expand_env("${SR2_TEST_VAR}") == "hello"
+
+    def test_var_with_surrounding_text(self, monkeypatch):
+        monkeypatch.setenv("SR2_TEST_AGENT", "nightshift")
+        assert _expand_env("claude-${SR2_TEST_AGENT}") == "claude-nightshift"
+
+    def test_default_value_when_unset(self, monkeypatch):
+        monkeypatch.delenv("SR2_UNSET_VAR", raising=False)
+        assert _expand_env("${SR2_UNSET_VAR:-fallback}") == "fallback"
+
+    def test_default_ignored_when_var_set(self, monkeypatch):
+        monkeypatch.setenv("SR2_SET_VAR", "real")
+        assert _expand_env("${SR2_SET_VAR:-fallback}") == "real"
+
+    def test_empty_default(self, monkeypatch):
+        monkeypatch.delenv("SR2_UNSET_VAR", raising=False)
+        assert _expand_env("${SR2_UNSET_VAR:-}") == ""
+
+    def test_unresolved_var_left_as_is(self, monkeypatch):
+        monkeypatch.delenv("SR2_MISSING", raising=False)
+        assert _expand_env("${SR2_MISSING}") == "${SR2_MISSING}"
+
+    def test_multiple_vars(self, monkeypatch):
+        monkeypatch.setenv("SR2_A", "one")
+        monkeypatch.setenv("SR2_B", "two")
+        assert _expand_env("${SR2_A}-${SR2_B}") == "one-two"
+
+    def test_no_vars_passthrough(self):
+        assert _expand_env("plain string") == "plain string"
+
+
+class TestEnvVarInterpolation:
+    """Integration tests for env var expansion in ConfigLoader."""
+
+    def test_env_vars_expanded_in_loaded_config(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_AGENT_NAME", "nightshift")
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "pipeline": {
+                        "memory": {
+                            "scope": {
+                                "agent_name": "claude-${CLAUDE_AGENT_NAME}",
+                            }
+                        }
+                    }
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+        assert config.memory.scope.agent_name == "claude-nightshift"
+
+    def test_env_vars_in_lists(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SR2_SCOPE", "project")
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "pipeline": {
+                        "memory": {
+                            "scope": {
+                                "allowed_read": ["${SR2_SCOPE}"],
+                            }
+                        }
+                    }
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+        assert config.memory.scope.allowed_read == ["project"]
+
+    def test_default_value_in_config(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLAUDE_AGENT_NAME", raising=False)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump({"system_prompt": "Agent: ${CLAUDE_AGENT_NAME:-default-agent}"})
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+        assert config.system_prompt == "Agent: default-agent"
+
+    def test_env_vars_expanded_in_parent_config(self, tmp_path, monkeypatch):
+        """Env vars in parent configs are expanded before merge."""
+        monkeypatch.setenv("SR2_BASE_BUDGET", "32000")
+        parent = tmp_path / "base.yaml"
+        parent.write_text(yaml.dump({"system_prompt": "budget=${SR2_BASE_BUDGET}"}))
+
+        child = tmp_path / "child.yaml"
+        child.write_text(yaml.dump({"extends": "base.yaml", "pipeline": {"token_budget": 16000}}))
+
+        loader = ConfigLoader()
+        config = loader.load(str(child))
+        assert config.system_prompt == "budget=32000"
+        assert config.token_budget == 16000
+
+    def test_non_string_values_untouched(self, tmp_path):
+        """Integers, booleans, etc. pass through without modification."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "pipeline": {
+                        "token_budget": 65536,
+                        "compaction": {"enabled": True, "raw_window": 10},
+                    }
+                }
+            )
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+        assert config.token_budget == 65536
+        assert config.compaction.enabled is True
+        assert config.compaction.raw_window == 10

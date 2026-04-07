@@ -1,13 +1,33 @@
 import logging
+import os
+import re
 import yaml
 from pathlib import Path
 from sr2.config.models import PipelineConfig, LLMModelOverride
 
 logger = logging.getLogger(__name__)
 
+# Matches ${VAR} and ${VAR:-default}
+_ENV_VAR_PATTERN = re.compile(r"\$\{([^}:]+?)(?::-(.*?))?\}")
 
 # Fields from LLMModelOverride that we allow through from sr2_runtime.llm
 _LLM_OVERRIDE_FIELDS = set(LLMModelOverride.model_fields.keys())
+
+
+def _expand_env(value: str) -> str:
+    """Expand ${VAR} and ${VAR:-default} patterns in a string using os.environ."""
+
+    def _replace(match: re.Match) -> str:
+        var_name = match.group(1)
+        default = match.group(2)
+        env_value = os.environ.get(var_name)
+        if env_value is not None:
+            return env_value
+        if default is not None:
+            return default
+        return match.group(0)  # Leave unresolved vars as-is
+
+    return _ENV_VAR_PATTERN.sub(_replace, value)
 
 
 class ConfigLoader:
@@ -87,6 +107,8 @@ class ConfigLoader:
         with open(path) as f:
             config = yaml.safe_load(f) or {}
 
+        config = self.expand_env_vars(config)
+
         extends = config.get("extends")
         if extends is None:
             return config
@@ -113,6 +135,16 @@ class ConfigLoader:
     def load_from_dict(self, config: dict) -> PipelineConfig:
         """Load from a dict (for testing). No inheritance resolution."""
         return PipelineConfig(**config)
+
+    def expand_env_vars(self, data: object) -> object:
+        """Recursively expand ${VAR} and ${VAR:-default} in string values."""
+        if isinstance(data, str):
+            return _expand_env(data)
+        if isinstance(data, dict):
+            return {k: self.expand_env_vars(v) for k, v in data.items()}
+        if isinstance(data, list):
+            return [self.expand_env_vars(item) for item in data]
+        return data
 
     def merge(self, base: dict, override: dict) -> dict:
         """Deep merge override into base.
