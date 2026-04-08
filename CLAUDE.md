@@ -79,9 +79,52 @@ sr2-bridge bridge.yaml --port 9200   # custom config
 sr2-agent configs/agents/edi --single-shot task_runner "implement auth"
 echo "long prompt" | sr2-agent configs/agents/edi --single-shot task_runner
 
+# Run with Claude Code provider (uses claude CLI for tool execution)
+sr2-agent configs/agents/claude-code --http --port 8741
+
+# Run with Claude Code + proxy (CLIProxyAPI, etc.) for fast model
+PROXY_URL=http://localhost:9090/v1 sr2-agent configs/agents/claude-code-proxy --http --port 8741
+
 # Docker (full stack: agent + Ollama + Prometheus + Grafana + PostgreSQL)
 docker compose up                                    # AMD GPU
 docker compose -f docker-compose.nvidia.yaml up      # NVIDIA GPU / CPU
+docker compose -f docker-compose.claude-code.yaml up # Claude Code + proxy
+```
+
+## Claude Code Provider
+
+SR2-runtime can use Claude Code CLI (`claude -p`) as the main LLM
+provider. Claude Code handles tool execution (Bash, Edit, Read, MCPs, etc.)
+internally while SR2 retains ownership of context engineering (compaction,
+summarization, memory) and session management.
+
+```yaml
+# In agent.yaml:
+runtime:
+  llm:
+    claude_code:
+      enabled: true
+      path: claude
+      allowed_tools: [Read, Glob, Grep, Agent, WebSearch, WebFetch]
+```
+
+**Note:** When using Claude Code, SR2's registered MCP tools are not available
+to Claude Code (which has its own MCP config). Configure MCP servers in Claude
+Code's own settings if needed.
+
+## OpenAI-Compatible Proxy
+
+Any OpenAI-compatible proxy (CLIProxyAPI, LiteLLM proxy, etc.) can serve SR2's
+internal LLM tasks by setting `api_base` on model configs. Useful for routing
+summarization, memory extraction, or embedding calls through a local proxy.
+
+```yaml
+# In agent.yaml:
+runtime:
+  llm:
+    fast_model:
+      name: claude-haiku-4-5-20251001
+      api_base: http://localhost:9090/v1  # Your proxy endpoint
 ```
 
 ## Developer Guides

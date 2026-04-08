@@ -1,0 +1,120 @@
+agent_name: Claude Code Agent
+
+extends: ../../defaults.yaml
+
+system_prompt: |
+  You are a helpful AI assistant with full access to the local system.
+  You can read files, execute commands, search the web, and manage code.
+  Be concise. Use tools proactively to answer questions accurately.
+
+pipeline:
+  token_budget: 128000
+  compaction:
+    rules:
+      - type: tool_output
+        strategy: schema_and_sample
+        max_compacted_tokens: 80
+        recovery_hint: true
+      - type: file_content
+        strategy: reference
+        include_metadata:
+          - line_count
+          - language
+          - size
+      - type: code_execution
+        strategy: result_summary
+        max_output_lines: 3
+  memory:
+    key_schema:
+      - prefix: "user.preference"
+        description: "User preferences and settings"
+      - prefix: "project"
+        description: "Project details and status"
+      - prefix: "decision"
+        description: "Decisions made during conversations"
+  layers:
+    - name: core
+      cache_policy: immutable
+      contents:
+        - key: system_prompt
+          source: config
+          optional: false
+        - key: tools
+          source: config
+          max_tokens: 8000
+
+    - name: session
+      cache_policy: append_only
+      contents:
+        - key: session_history
+          source: session
+          max_tokens: 12000
+          optional: false
+        - key: user_input
+          source: input
+          max_tokens: 2000
+          optional: false
+
+    - name: retrieval
+      cache_policy: refresh_on_topic_shift
+      contents:
+        - key: retrieved_context
+          source: retrieval
+          max_tokens: 4000
+          optional: true
+
+    - name: runtime
+      cache_policy: always_new
+      contents:
+        - key: current_timestamp
+          source: runtime
+
+sessions:
+  main_chat:
+    max_turns: 200
+    idle_timeout_minutes: 120
+  _default:
+    max_turns: 100
+    idle_timeout_minutes: 60
+
+runtime:
+  llm:
+    claude_code:
+      enabled: true
+      path: claude
+      allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - Agent
+        - WebSearch
+        - WebFetch
+      permission_mode: default
+      # dangerously_skip_permissions: true  # YOLO mode — no approval prompts
+
+    # Fast model for SR2 internal tasks (summarization, memory extraction).
+    fast_model:
+      name: claude-haiku-4-5-20251001
+      max_tokens: 1000
+      model_params:
+        temperature: 0.1
+
+    # Fallback model (used if Claude Code is unavailable)
+    model:
+      name: claude-sonnet-4-20250514
+      stream: true
+
+interfaces:
+  telegram_main:
+    plugin: telegram
+    session:
+      name: telegram_{user_id}
+      lifecycle: persistent
+    token: ${TELEGRAM_BOT_TOKEN}
+    allowed_users: ${TELEGRAM_ALLOWED_USERS}
+
+  http_main:
+    plugin: http
+    session:
+      name: "{request.session_id}"
+      lifecycle: persistent

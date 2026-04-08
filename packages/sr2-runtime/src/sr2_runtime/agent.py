@@ -152,6 +152,15 @@ class Agent:
             default_model_config=runtime_conf.llm.model,
         )
 
+        # Claude Code provider (optional — when enabled, bypasses LLMLoop)
+        self._use_claude_code = runtime_conf.llm.claude_code.enabled
+        self._cc_provider = None
+        if self._use_claude_code:
+            from sr2_runtime.llm.claude_code import ClaudeCodeProvider
+
+            self._cc_provider = ClaudeCodeProvider(runtime_conf.llm.claude_code)
+            logger.info("Claude Code provider enabled — LLMLoop will be bypassed")
+
         # --- Sessions (from YAML) ---
         session_cfgs = {}
         for name, cfg in self._agent_config.sessions.items():
@@ -476,6 +485,13 @@ class Agent:
             except Exception as e:
                 logger.warning(f"Heartbeat scanner failed to stop: {e}")
 
+        # Shut down Claude Code provider (kills active subprocesses)
+        if self._cc_provider:
+            try:
+                await self._cc_provider.shutdown()
+            except Exception as e:
+                logger.warning(f"Claude Code provider failed to shut down: {e}")
+
         for name, plugin in self._plugins.items():
             try:
                 await plugin.stop()
@@ -562,7 +578,17 @@ class Agent:
         resolved_model = model_config_override or self._agent_config.runtime.llm.model
         use_streaming = resolved_model.stream and trigger.respond_callback is not None
 
-        if use_streaming:
+        if self._use_claude_code and self._cc_provider:
+            # Claude Code path: bypass LLMLoop, use Claude Code CLI
+            system_context = self._build_claude_code_system_context(ctx)
+            stream_content = self._agent_config.runtime.stream_content
+            loop_result = await self._cc_provider.stream_complete(
+                prompt=str(trigger.input_data),
+                system_prompt=system_context,
+                stream_callback=trigger.respond_callback if use_streaming else None,
+                stream_tool_events=stream_content.tool_status if stream_content else True,
+            )
+        elif use_streaming:
             loop_result = await self._loop.run_streaming(
                 ctx.messages,
                 stream_callback=trigger.respond_callback,
@@ -773,6 +799,21 @@ class Agent:
             return _get()
 
         return None
+
+    # --- Claude Code helpers ---
+
+    def _build_claude_code_system_context(self, ctx) -> str:
+        """Build a system prompt for Claude Code from SR2's compiled context.
+
+        Extracts the system message content from the compiled messages array
+        so that SR2's context engineering (memories, summaries, system prompt)
+        is passed to Claude Code via --system-prompt.
+        """
+        parts = []
+        for msg in ctx.messages:
+            if msg.get("role") == "system":
+                parts.append(msg.get("content", ""))
+        return "\n\n".join(parts) if parts else ""
 
     # --- Internal helpers ---
 

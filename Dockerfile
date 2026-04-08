@@ -12,6 +12,9 @@ RUN apt-get update \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
+# Install Claude Code CLI (optional — only needed for claude_code provider)
+RUN curl -fsSL https://claude.ai/install.sh | bash || true
+
 WORKDIR /app
 
 # Install uv
