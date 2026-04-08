@@ -44,8 +44,6 @@ from sr2.summarization.engine import SummarizationEngine
 from sr2.tools.models import ToolDefinition, ToolManagementConfig
 from sr2.tools.state_machine import ToolStateMachine
 
-from sr2.metrics.registry import get_exporter
-
 logger = logging.getLogger(__name__)
 
 
@@ -234,18 +232,34 @@ class SR2:
         self._token_savings_cumulative: dict[str, float] = {}
         self._token_budget = agent_config.token_budget
 
-        # Premium observability (sr2-pro): OTel + Alerts
-        try:
-            from sr2_pro.metrics.alerts import AlertRuleEngine
-            from sr2_pro.metrics.otel import OTelExporter
+        # Observability plugins (config-driven)
+        obs = agent_config.observability
+        self._push_exporters: list = []
+        for name in obs.push_exporters:
+            try:
+                from sr2.metrics.registry import get_push_exporter
 
-            self._alerts = AlertRuleEngine()
-            self._otel = OTelExporter(self._collector)
-        except ImportError:
-            self._otel = None
+                exporter_cls = get_push_exporter(name)
+                self._push_exporters.append(exporter_cls(self._collector))
+            except ImportError:
+                logger.warning("Push exporter '%s' not available", name)
+
+        self._pull_exporter_name = obs.pull_exporter
+
+        if obs.alert_engine:
+            try:
+                from sr2.plugins.registry import PluginRegistry
+
+                alert_reg: PluginRegistry = PluginRegistry(
+                    "sr2.alerts", install_hint="pip install sr2-pro"
+                )
+                alert_cls = alert_reg.get(obs.alert_engine)
+                self._alerts = alert_cls()
+            except ImportError:
+                logger.warning("Alert engine '%s' not available", obs.alert_engine)
 
         # Internal bridge for build_messages only
-        from sr2_runtime.llm import ContextBridge
+        from sr2.bridge import ContextBridge
 
         self._bridge = ContextBridge()
 
@@ -712,9 +726,9 @@ class SR2:
                 zone_transition=transition_type,
             )
 
-        # Fire alert checks (sr2-pro)
+        # Fire alert checks (via plugin)
         if self._alerts is not None:
-            await self._alerts.check(snapshot)
+            await self._alerts.evaluate(snapshot)
 
     def compare_prefix(
         self,
@@ -732,10 +746,14 @@ class SR2:
     def export_metrics(self) -> str:
         """Export collected metrics in Prometheus text exposition format.
 
-        Requires sr2-pro to be installed for the PrometheusExporter.
+        Uses the pull exporter configured via observability.pull_exporter
+        (defaults to 'prometheus'). Requires the exporter plugin to be installed.
         """
         if not hasattr(self, "_exporter"):
-            exporter_cls = get_exporter("prometheus")
+            from sr2.metrics.registry import get_pull_exporter
+
+            name = self._pull_exporter_name or "prometheus"
+            exporter_cls = get_pull_exporter(name)
             self._exporter = exporter_cls(self._collector)
         return self._exporter.export()
 

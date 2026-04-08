@@ -246,6 +246,18 @@ pipeline:
     # cap is exceeded.
     max_tokens: 2000
 
+  # Observability plugin settings (exporters, alerts)
+  observability:
+    # Push exporter plugin names to activate (e.g. ['otel']). Each must be
+    # registered via sr2.push_exporters entry point.
+    push_exporters: []
+    # Pull exporter plugin name for /metrics endpoint (e.g. 'prometheus'). Must
+    # be registered via sr2.pull_exporters entry point.
+    pull_exporter: null
+    # Alert engine plugin name (e.g. 'rule_based'). Must be registered via
+    # sr2.alerts entry point.
+    alert_engine: null
+
   # Context window layers, ordered from most stable to least stable
   layers: []
   # Example entry:

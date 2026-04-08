@@ -58,7 +58,12 @@ class TestEntryPointDiscovery:
         mock_ep = MagicMock()
         mock_ep.name = "test_exporter"
 
-        with patch("importlib.metadata.entry_points", return_value=[mock_ep]):
+        def _mock_entry_points(group=""):
+            if group == "sr2.exporters":
+                return [mock_ep]
+            return []
+
+        with patch("importlib.metadata.entry_points", side_effect=_mock_entry_points):
             with pytest.raises(ImportError):
                 get_exporter("test_exporter")
             mock_ep.load.assert_called_once()
@@ -69,7 +74,12 @@ class TestEntryPointDiscovery:
         mock_ep = MagicMock()
         mock_ep.name = "test"
 
-        with patch("importlib.metadata.entry_points", return_value=[mock_ep]):
+        def _mock_entry_points(group=""):
+            if group == "sr2.exporters":
+                return [mock_ep]
+            return []
+
+        with patch("importlib.metadata.entry_points", side_effect=_mock_entry_points):
             with pytest.raises(ImportError):
                 get_exporter("missing1")
             with pytest.raises(ImportError):
@@ -83,7 +93,12 @@ class TestEntryPointDiscovery:
         mock_ep.name = "broken"
         mock_ep.load.side_effect = RuntimeError("plugin broken")
 
-        with patch("importlib.metadata.entry_points", return_value=[mock_ep]):
+        def _mock_entry_points(group=""):
+            if group == "sr2.exporters":
+                return [mock_ep]
+            return []
+
+        with patch("importlib.metadata.entry_points", side_effect=_mock_entry_points):
             with pytest.raises(ImportError):
                 get_exporter("anything")
 
@@ -100,6 +115,11 @@ class TestEntryPointDiscovery:
         mock_ep.name = "plugin"
         mock_ep.load.return_value = load_plugin
 
-        with patch("importlib.metadata.entry_points", return_value=[mock_ep]):
+        def _mock_entry_points(group=""):
+            if group == "sr2.exporters":
+                return [mock_ep]
+            return []
+
+        with patch("importlib.metadata.entry_points", side_effect=_mock_entry_points):
             result = get_exporter("plugin")
             assert result is PluginExporter

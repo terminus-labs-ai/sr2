@@ -39,7 +39,7 @@ class TestRegisterAndGetStore:
         assert get_store("custom") is CustomStore
 
     def test_get_nonexistent_raises_import_error(self):
-        with pytest.raises(ImportError, match="Memory store 'nonexistent' is not available"):
+        with pytest.raises(ImportError, match="'nonexistent' is not available"):
             get_store("nonexistent")
 
     def test_error_message_includes_available_backends(self):

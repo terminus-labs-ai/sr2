@@ -422,6 +422,26 @@ class MemoryConfig(BaseModel):
     )
 
 
+class ObservabilityConfig(BaseModel):
+    """Observability plugin configuration."""
+
+    push_exporters: list[str] = Field(
+        default_factory=list,
+        description="Push exporter plugin names to activate (e.g. ['otel']). "
+        "Each must be registered via sr2.push_exporters entry point.",
+    )
+    pull_exporter: str | None = Field(
+        default=None,
+        description="Pull exporter plugin name for /metrics endpoint (e.g. 'prometheus'). "
+        "Must be registered via sr2.pull_exporters entry point.",
+    )
+    alert_engine: str | None = Field(
+        default=None,
+        description="Alert engine plugin name (e.g. 'rule_based'). "
+        "Must be registered via sr2.alerts entry point.",
+    )
+
+
 class PipelineConfig(BaseModel):
     """Root config model. Represents a fully resolved interface config."""
 
@@ -493,6 +513,10 @@ class PipelineConfig(BaseModel):
     session_notes: SessionNotesConfig = Field(
         default_factory=lambda: SessionNotesConfig(),
         description="Session notes — compaction-immune agent working memory",
+    )
+    observability: ObservabilityConfig = Field(
+        default_factory=ObservabilityConfig,
+        description="Observability plugin settings (exporters, alerts)",
     )
     layers: list[LayerConfig] = Field(
         default_factory=list,

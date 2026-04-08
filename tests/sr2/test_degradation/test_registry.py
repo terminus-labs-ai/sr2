@@ -34,7 +34,7 @@ class TestRegisterAndGetPolicy:
         assert get_policy("custom") is CustomPolicy
 
     def test_get_nonexistent_raises_import_error(self):
-        with pytest.raises(ImportError, match="Degradation policy 'nonexistent' is not available"):
+        with pytest.raises(ImportError, match="'nonexistent' is not available"):
             get_policy("nonexistent")
 
     def test_error_message_includes_upgrade_hint(self):
