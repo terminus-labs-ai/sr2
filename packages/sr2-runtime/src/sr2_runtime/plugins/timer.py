@@ -28,6 +28,7 @@ class TimerPlugin:
         self._config = config
         self._callback = agent_callback
         self._interval = config.get("interval_seconds", 300)
+        self._prompt = config.get("prompt", "Timer tick.")
         self._session_config = config.get("session", {})
         self._enabled = config.get("enabled", True)
         self._running = False
@@ -78,7 +79,7 @@ class TimerPlugin:
                     plugin_name="timer",
                     session_name=session_name,
                     session_lifecycle=lifecycle,
-                    input_data="",
+                    input_data=self._prompt,
                     metadata={"tick_time": datetime.now(UTC).isoformat()},
                 )
 
