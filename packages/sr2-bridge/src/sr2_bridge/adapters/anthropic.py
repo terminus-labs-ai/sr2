@@ -81,6 +81,34 @@ def _detect_content_type(
     return None
 
 
+def transform_system_prompt(
+    original: str | None,
+    config,
+) -> str | None:
+    """Apply config-driven transformation to the client's system prompt.
+
+    Runs BEFORE SR2 injection (summaries/memories). The injection always
+    prepends on top of whatever this returns.
+
+    Args:
+        original: The extracted system prompt from the client request.
+        config: BridgeSystemPromptConfig with transform mode and content.
+    """
+    custom = config.resolved_content
+    if not custom:
+        return original
+
+    match config.transform:
+        case "replace":
+            return custom
+        case "prepend":
+            return f"{custom}\n\n{original}" if original else custom
+        case "append":
+            return f"{original}\n\n{custom}" if original else custom
+        case "wrap":
+            return custom.replace("{original}", original or "")
+
+
 class AnthropicAdapter:
     """Implements BridgeAdapter for the Anthropic Messages API (/v1/messages).
 

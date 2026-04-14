@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import logging
+from pathlib import Path
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class BridgeForwardingConfig(BaseModel):
@@ -138,6 +142,78 @@ class BridgeMemoryConfig(BaseModel):
     )
 
 
+class BridgeLoggingConfig(BaseModel):
+    """JSONL request/response payload logging."""
+
+    enabled: bool = Field(default=False, description="Enable JSONL request/response logging.")
+    output_path: str = Field(
+        default="sr2_bridge_requests.jsonl",
+        description="Path to JSONL log file.",
+    )
+    log_system_prompt: bool = Field(
+        default=True,
+        description="Include full system prompt text in log entries.",
+    )
+    log_messages: bool = Field(
+        default=True,
+        description="Include full message content (vs summary only).",
+    )
+    log_rebuilt_body: bool = Field(
+        default=True,
+        description="Log the final body sent upstream.",
+    )
+    max_content_length: int | None = Field(
+        default=None,
+        ge=1,
+        description="Truncate content fields to N chars. None = no limit.",
+    )
+
+
+class BridgeSystemPromptConfig(BaseModel):
+    """Config-driven system prompt transformation.
+
+    Applies a transform to the client's system prompt before SR2 injection
+    (summaries, memories). Default is no-op (prepend with no content).
+    """
+
+    transform: Literal["prepend", "append", "replace", "wrap"] = Field(
+        default="prepend",
+        description="How to apply custom content to the client's system prompt.",
+    )
+    content: str | None = Field(
+        default=None,
+        description="Inline custom system prompt content.",
+    )
+    content_file: str | None = Field(
+        default=None,
+        description="Path to file containing custom system prompt. "
+        "'content' takes precedence if both are set.",
+    )
+
+    @model_validator(mode="after")
+    def validate_content_source(self) -> Self:
+        if self.transform != "prepend" and not self.content and not self.content_file:
+            raise ValueError(
+                f"system_prompt.content or content_file required for transform={self.transform!r}"
+            )
+        if self.transform == "wrap" and self.content and "{original}" not in self.content:
+            raise ValueError("wrap transform requires {original} placeholder in content")
+        return self
+
+    @property
+    def resolved_content(self) -> str | None:
+        """Resolve content from inline or file source."""
+        if self.content:
+            return self.content
+        if self.content_file:
+            try:
+                return Path(self.content_file).read_text()
+            except FileNotFoundError:
+                logger.warning("system_prompt.content_file not found: %s", self.content_file)
+                return None
+        return None
+
+
 class BridgeConfig(BaseModel):
     """Top-level bridge server configuration."""
 
@@ -162,6 +238,14 @@ class BridgeConfig(BaseModel):
     memory: BridgeMemoryConfig = Field(
         default_factory=BridgeMemoryConfig,
         description="Memory extraction and retrieval settings.",
+    )
+    logging: BridgeLoggingConfig = Field(
+        default_factory=BridgeLoggingConfig,
+        description="JSONL request/response payload logging.",
+    )
+    system_prompt: BridgeSystemPromptConfig = Field(
+        default_factory=BridgeSystemPromptConfig,
+        description="Config-driven system prompt transformation.",
     )
     tool_type_overrides: dict[str, str] = Field(
         default_factory=dict,

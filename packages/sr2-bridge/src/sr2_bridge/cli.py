@@ -52,6 +52,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    parser.add_argument(
+        "--request-log",
+        default=None,
+        help="Enable JSONL request/response logging to this file",
+    )
     return parser.parse_args(argv)
 
 
@@ -77,6 +82,10 @@ def load_config(args: argparse.Namespace) -> dict:
         bridge["host"] = args.host
     if args.upstream is not None:
         bridge.setdefault("forwarding", {})["upstream_url"] = args.upstream
+    if args.request_log is not None:
+        log_cfg = bridge.setdefault("logging", {})
+        log_cfg["enabled"] = True
+        log_cfg["output_path"] = args.request_log
 
     return raw
 
@@ -89,6 +98,7 @@ def build_components(raw_config: dict):
     from sr2_bridge.engine import BridgeEngine
     from sr2_bridge.forwarder import BridgeForwarder
     from sr2_bridge.llm import APIKeyCache
+    from sr2_bridge.request_logger import BridgeRequestLogger
     from sr2_bridge.session_tracker import SessionTracker
 
     # Bridge config
@@ -106,7 +116,12 @@ def build_components(raw_config: dict):
     forwarder = BridgeForwarder(bridge_config.forwarding)
     session_tracker = SessionTracker(bridge_config.session)
 
-    return bridge_config, engine, forwarder, session_tracker, key_cache
+    # Request logger (optional — off by default)
+    request_logger = None
+    if bridge_config.logging.enabled:
+        request_logger = BridgeRequestLogger(bridge_config.logging)
+
+    return bridge_config, engine, forwarder, session_tracker, key_cache, request_logger
 
 
 def main():
@@ -130,11 +145,15 @@ def main():
     )
 
     raw_config = load_config(args)
-    bridge_config, engine, forwarder, session_tracker, key_cache = build_components(raw_config)
+    bridge_config, engine, forwarder, session_tracker, key_cache, request_logger = build_components(
+        raw_config
+    )
 
     from sr2_bridge.app import create_bridge_app
 
-    app = create_bridge_app(bridge_config, engine, forwarder, session_tracker, key_cache)
+    app = create_bridge_app(
+        bridge_config, engine, forwarder, session_tracker, key_cache, request_logger
+    )
 
     import uvicorn
 

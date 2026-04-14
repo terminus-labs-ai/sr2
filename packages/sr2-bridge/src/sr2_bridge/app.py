@@ -9,12 +9,13 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
-from sr2_bridge.adapters.anthropic import AnthropicAdapter
+from sr2_bridge.adapters.anthropic import AnthropicAdapter, transform_system_prompt
 from sr2_bridge.config import BridgeConfig
 from sr2_bridge.engine import BridgeEngine
 from sr2_bridge.forwarder import BridgeForwarder
 from sr2_bridge.bridge_metrics import BridgeMetricsExporter
 from sr2_bridge.llm import APIKeyCache
+from sr2_bridge.request_logger import BridgeRequestLogger
 from sr2_bridge.session_tracker import BridgeSession, SessionTracker
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ def create_bridge_app(
     forwarder: BridgeForwarder,
     session_tracker: SessionTracker,
     key_cache: APIKeyCache | None = None,
+    request_logger: BridgeRequestLogger | None = None,
 ) -> FastAPI:
     """Create the FastAPI bridge proxy application."""
 
@@ -138,6 +140,8 @@ def create_bridge_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await forwarder.start()
+        if request_logger:
+            await request_logger.start()
 
         # Restore persisted sessions if enabled
         if engine.session_store:
@@ -159,6 +163,8 @@ def create_bridge_app(
             cleanup_task.cancel()
             await engine.shutdown()
             await forwarder.stop()
+            if request_logger:
+                await request_logger.stop()
             logger.info("SR2 Bridge stopped")
 
     app = FastAPI(title="SR2 Bridge", lifespan=lifespan)
@@ -185,12 +191,24 @@ def create_bridge_app(
         session_id = session_tracker.identify(body, headers, system)
         session = session_tracker.get(session_id)
 
+        # Log incoming request
+        if request_logger:
+            request_logger.log_incoming(session_id, system, messages, body)
+
         logger.debug(
             "Session %s: %d messages, stream=%s",
             session_id,
             len(messages),
             is_streaming,
         )
+
+        # Apply system prompt transform (before SR2 injection)
+        if bridge_config.system_prompt.resolved_content:
+            original_system = system
+            system = transform_system_prompt(system, bridge_config.system_prompt)
+            body["system"] = system  # write back so rebuild_body() sees transformed version
+            if request_logger:
+                request_logger.log_transformed_system(session_id, original_system, system)
 
         # Rewrite model if configured
         _rewrite_model(body, bridge_config.forwarding)
@@ -211,6 +229,10 @@ def create_bridge_app(
         # Rebuild body with optimized messages
         optimized_body = adapter.rebuild_body(body, optimized_messages, system_injection)
         _log_token_reduction(session_id, messages, optimized_messages)
+
+        # Log outgoing body
+        if request_logger:
+            request_logger.log_outgoing(session_id, optimized_body)
 
         # Log message structure for debugging 400s
         opt_msg_roles = [m.get("role", "?") for m in optimized_body.get("messages", [])]
