@@ -401,6 +401,74 @@ class TestRuntimeLLMExtraction:
         assert config.llm.model is None
 
 
+class TestPathTraversalPrevention:
+    """Test: extends paths cannot escape the config directory."""
+
+    def test_parent_directory_traversal_blocked(self, tmp_path):
+        """extends: '../../../etc/passwd' should raise ValueError."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"extends": "../../../etc/passwd"}))
+
+        loader = ConfigLoader()
+        with pytest.raises(ValueError, match="extends path escapes config directory"):
+            loader.load(str(config_file))
+
+    def test_absolute_path_blocked(self, tmp_path):
+        """extends with an absolute-looking relative path that escapes should be blocked."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"extends": "../../outside.yaml"}))
+
+        loader = ConfigLoader()
+        with pytest.raises(ValueError, match="extends path escapes config directory"):
+            loader.load(str(config_file))
+
+    def test_sibling_file_allowed(self, tmp_path):
+        """extends: 'sibling.yaml' in the same directory should work."""
+        sibling = tmp_path / "sibling.yaml"
+        sibling.write_text(yaml.dump({"pipeline": {"token_budget": 32000}}))
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump({"extends": "sibling.yaml", "pipeline": {"token_budget": 16000}})
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+        assert config.token_budget == 16000
+
+    def test_subdirectory_allowed(self, tmp_path):
+        """extends: 'subdir/child.yaml' within the config directory should work."""
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        child = subdir / "child.yaml"
+        child.write_text(yaml.dump({"pipeline": {"token_budget": 32000}}))
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump({"extends": "subdir/child.yaml", "pipeline": {"token_budget": 16000}})
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+        assert config.token_budget == 16000
+
+    def test_dot_dot_in_middle_that_stays_within_dir(self, tmp_path):
+        """extends: 'subdir/../sibling.yaml' resolves within dir — should work."""
+        sibling = tmp_path / "sibling.yaml"
+        sibling.write_text(yaml.dump({"pipeline": {"token_budget": 32000}}))
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            yaml.dump({"extends": "subdir/../sibling.yaml", "pipeline": {"token_budget": 16000}})
+        )
+
+        loader = ConfigLoader()
+        config = loader.load(str(config_file))
+        assert config.token_budget == 16000
+
+
 class TestExpandEnvFunction:
     """Unit tests for _expand_env string expansion."""
 

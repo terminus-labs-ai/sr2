@@ -4,6 +4,8 @@
 
 Your agent framework handles tool calling and orchestration. SR2 manages the context window.
 
+**Requires Python 3.12+**
+
 ## Why SR2
 
 Every turn, agents stuff more history, tool results, and memories into a growing blob of text. Hit the token limit and you start truncating from the top — destroying your KV-cache prefix, evicting the system prompt, losing critical context. The agent gets worse the longer the conversation goes.

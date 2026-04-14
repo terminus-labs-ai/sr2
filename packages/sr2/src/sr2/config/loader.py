@@ -122,15 +122,28 @@ class ConfigLoader:
         return merged
 
     def _resolve_extends(self, extends: str, current_path: Path) -> Path:
-        """Resolve an extends value to an absolute path."""
+        """Resolve an extends value to an absolute path.
+
+        For arbitrary extends paths (not 'defaults' or 'agent' keywords),
+        validates that the resolved path does not escape the config directory
+        to prevent path traversal attacks via malicious extends values.
+        """
         if extends == "defaults":
             if self._defaults_path is None:
                 raise FileNotFoundError("No defaults_path configured but config extends 'defaults'")
             return Path(self._defaults_path).resolve()
         elif extends == "agent":
+            # Known safe pattern: interface configs extend their parent agent.yaml
             return (current_path.parent.parent / "agent.yaml").resolve()
         else:
-            return (current_path.parent / extends).resolve()
+            resolved = (current_path.parent / extends).resolve()
+            allowed_root = current_path.parent.resolve()
+            if not resolved.is_relative_to(allowed_root):
+                raise ValueError(
+                    f"extends path escapes config directory: '{extends}' "
+                    f"resolves to {resolved}, which is outside {allowed_root}"
+                )
+            return resolved
 
     def load_from_dict(self, config: dict) -> PipelineConfig:
         """Load from a dict (for testing). No inheritance resolution."""

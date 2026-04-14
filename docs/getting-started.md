@@ -2,6 +2,8 @@
 
 This guide takes you from zero to a working SR2 pipeline in under 5 minutes. No database, no LLM API key, no runtime — just the library.
 
+**Requires Python 3.12+**
+
 ## Install
 
 ```bash

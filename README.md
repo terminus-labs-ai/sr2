@@ -49,6 +49,8 @@ Layers are ordered most-stable to least-stable. The system prompt never changes,
 
 ## Install
 
+**Requires Python 3.12+**
+
 ```bash
 git clone https://github.com/terminus-labs-ai/sr2.git
 cd sr2
