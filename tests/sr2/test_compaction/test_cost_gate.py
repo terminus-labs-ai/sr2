@@ -100,14 +100,14 @@ class TestShouldCompact:
             estimated_compacted_tokens=500,
             total_tokens_after_turn=1000,
         )
-        # savings = 4500 * 3.0/1M = 0.0135
+        # savings = 4500 * 0.30/1M = 0.00135  (cache_read cost)
         # invalidation = 1000 * (3.75 - 0.30)/1M = 0.00345
-        # net = 0.0135 - 0.00345 = 0.01005
-        assert decision.allowed is True
+        # net = 0.00135 - 0.00345 = -0.0021
+        assert decision.allowed is False  # now blocked: cache_read savings < invalidation cost
         assert decision.tokens_saved == 4500
-        assert decision.estimated_savings_usd == pytest.approx(0.0135)
+        assert decision.estimated_savings_usd == pytest.approx(0.00135)
         assert decision.estimated_invalidation_cost_usd == pytest.approx(0.00345)
-        assert decision.net_usd == pytest.approx(0.01005)
+        assert decision.net_usd == pytest.approx(-0.0021)
 
     def test_small_turn_large_tail_blocks(self):
         """Tiny token savings + huge downstream invalidation => blocked."""
@@ -118,14 +118,14 @@ class TestShouldCompact:
             estimated_compacted_tokens=150,
             total_tokens_after_turn=100_000,
         )
-        # savings = 50 * 3.0/1M = 0.00015
+        # savings = 50 * 0.30/1M = 0.000015  (cache_read cost)
         # invalidation = 100000 * (3.75 - 0.30)/1M = 0.345
-        # net = 0.00015 - 0.345 = -0.34485
+        # net = 0.000015 - 0.345 = -0.344985
         assert decision.allowed is False
         assert decision.tokens_saved == 50
-        assert decision.estimated_savings_usd == pytest.approx(0.00015)
+        assert decision.estimated_savings_usd == pytest.approx(0.000015)
         assert decision.estimated_invalidation_cost_usd == pytest.approx(0.345)
-        assert decision.net_usd == pytest.approx(-0.34485)
+        assert decision.net_usd == pytest.approx(-0.344985)
 
     def test_min_net_savings_threshold(self):
         """Net positive but below threshold => blocked."""
@@ -136,20 +136,20 @@ class TestShouldCompact:
             estimated_compacted_tokens=500,
             total_tokens_after_turn=1000,
         )
-        # net = 0.01005, well under $1 threshold
+        # net = -0.0021 (cache_read savings), well under $1 threshold
         assert decision.allowed is False
-        assert decision.net_usd == pytest.approx(0.01005)
+        assert decision.net_usd == pytest.approx(-0.0021)
 
     def test_boundary_at_exact_threshold(self):
         """Net exactly equal to threshold => blocked (requires strictly greater)."""
-        # We want net == min_net exactly. Use custom pricing for clean math.
+        # Use cache_read_cost for savings calc. Set cache_read = $1/MTok.
         # savings = 1000 tokens * $1/1M = $0.001
         # invalidation = 0 tokens => $0
         # net = $0.001
         pricing = CachePricing(
             input_cost=1.0 / 1_000_000,
             cache_write_cost=1.0 / 1_000_000,
-            cache_read_cost=0.0,
+            cache_read_cost=1.0 / 1_000_000,
             source="test",
         )
         gate_exact = _make_gate(min_net=0.001)
@@ -161,20 +161,20 @@ class TestShouldCompact:
             estimated_compacted_tokens=1000,
             total_tokens_after_turn=0,
         )
-        # savings = 1000 * 1.0/1M = 0.001, invalidation = 0
+        # savings = 1000 * 1.0/1M = 0.001 (cache_read), invalidation = 0
         # net = 0.001, threshold = 0.001 => NOT strictly greater => blocked
         assert decision.net_usd == pytest.approx(0.001)
         assert decision.allowed is False, "net == threshold should be blocked (strict >)"
 
     def test_boundary_just_above_threshold(self):
         """Net just above threshold => allowed."""
-        # savings = 1001 tokens * $1/1M = $0.001001
+        # savings = 1001 tokens * $1/1M (cache_read) = $0.001001
         # invalidation = 0 tokens => $0
         # net = $0.001001 > $0.001
         pricing = CachePricing(
             input_cost=1.0 / 1_000_000,
             cache_write_cost=1.0 / 1_000_000,
-            cache_read_cost=0.0,
+            cache_read_cost=1.0 / 1_000_000,
             source="test",
         )
         gate_above = _make_gate(min_net=0.001)
@@ -186,13 +186,30 @@ class TestShouldCompact:
             estimated_compacted_tokens=1000,
             total_tokens_after_turn=0,
         )
-        # savings = 1001 * 1.0/1M = 0.001001, net = 0.001001 > 0.001
+        # savings = 1001 * 1.0/1M = 0.001001 (cache_read), net = 0.001001 > 0.001
         assert decision.net_usd == pytest.approx(0.001001)
         assert decision.allowed is True
 
-    def test_fail_open_always_allows(self):
-        """When pricing is fail_open, compaction is always allowed."""
+    def test_fail_closed_when_enabled_no_pricing(self):
+        """When cost gate is enabled but pricing is fail_open, compaction is blocked."""
         config = CostGateConfig(enabled=True)
+        gate = CompactionCostGate(config)
+        gate._pricing_cache["__none__"] = CachePricing(
+            input_cost=0, cache_write_cost=0, cache_read_cost=0, source="fail_open",
+        )
+        decision = gate.should_compact(
+            turn_index=0,
+            turn_tokens=100,
+            estimated_compacted_tokens=50,
+            total_tokens_after_turn=1_000_000,
+        )
+        assert decision.allowed is False
+        assert decision.pricing_source == "fail_open"
+        assert "blocking" in decision.reason
+
+    def test_fail_open_when_disabled_no_pricing(self):
+        """When cost gate is disabled but pricing is fail_open, compaction is allowed."""
+        config = CostGateConfig(enabled=False)
         gate = CompactionCostGate(config)
         gate._pricing_cache["__none__"] = CachePricing(
             input_cost=0, cache_write_cost=0, cache_read_cost=0, source="fail_open",
@@ -215,14 +232,14 @@ class TestShouldCompact:
             estimated_compacted_tokens=500,
             total_tokens_after_turn=5000,
         )
-        # savings = 1500 * 3.0/1M = 0.0045
+        # savings = 1500 * 0.30/1M = 0.00045  (cache_read cost)
         # invalidation = 5000 * (3.75 - 0.30)/1M = 0.01725
-        # net = 0.0045 - 0.01725 = -0.01275
+        # net = 0.00045 - 0.01725 = -0.0168
         assert decision.tokens_saved == 1500
         assert decision.cache_invalidation_tokens == 5000
-        assert decision.estimated_savings_usd == pytest.approx(0.0045)
+        assert decision.estimated_savings_usd == pytest.approx(0.00045)
         assert decision.estimated_invalidation_cost_usd == pytest.approx(0.01725)
-        assert decision.net_usd == pytest.approx(-0.01275)
+        assert decision.net_usd == pytest.approx(-0.0168)
         assert decision.allowed is False  # net is negative, below min_net=0.001
         assert isinstance(decision.reason, str)
         assert decision.pricing_source == "test"
@@ -251,21 +268,21 @@ class TestEvaluateBatch:
         decisions = gate.evaluate_batch(candidates)
         assert len(decisions) == 2
 
-        # First: savings = 49500 * 3.0/1M = 0.1485, invalidation = 100 * 3.45/1M = 0.000345
-        # net = 0.1485 - 0.000345 = 0.148155
+        # First: savings = 49500 * 0.30/1M = 0.01485 (cache_read), invalidation = 100 * 3.45/1M = 0.000345
+        # net = 0.01485 - 0.000345 = 0.014505
         assert decisions[0].allowed is True
         assert decisions[0].tokens_saved == 49500
-        assert decisions[0].estimated_savings_usd == pytest.approx(0.1485)
+        assert decisions[0].estimated_savings_usd == pytest.approx(0.01485)
         assert decisions[0].estimated_invalidation_cost_usd == pytest.approx(0.000345)
-        assert decisions[0].net_usd == pytest.approx(0.148155)
+        assert decisions[0].net_usd == pytest.approx(0.014505)
 
-        # Second: effective invalidation = max(0, 80 - 100) = 0, savings = 2700 * 3.0/1M = 0.0081
-        # net = 0.0081 - 0 = 0.0081
+        # Second: effective invalidation = max(0, 80 - 100) = 0, savings = 2700 * 0.30/1M = 0.00081
+        # net = 0.00081 - 0 = 0.00081
         assert decisions[1].allowed is True
         assert decisions[1].tokens_saved == 2700
         assert decisions[1].cache_invalidation_tokens == 0
         assert decisions[1].estimated_invalidation_cost_usd == pytest.approx(0.0)
-        assert decisions[1].net_usd == pytest.approx(0.0081)
+        assert decisions[1].net_usd == pytest.approx(0.00081)
 
     def test_batch_processes_in_turn_order(self):
         """Candidates are sorted by turn_index regardless of input order."""

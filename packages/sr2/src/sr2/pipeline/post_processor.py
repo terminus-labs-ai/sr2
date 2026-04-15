@@ -61,6 +61,7 @@ class PostLLMProcessor:
         conversation_id: str | None = None,
         current_context: dict | None = None,
         extract_only: bool = False,
+        model_hint: str | None = None,
     ) -> PipelineResult:
         """Run all post-LLM steps. Each step is independent — failures don't block others.
 
@@ -106,6 +107,7 @@ class PostLLMProcessor:
                 "compaction",
                 self._run_compaction,
                 session_id,
+                model_hint,
             )
 
             # 5. Summarization
@@ -208,8 +210,8 @@ class PostLLMProcessor:
         """Restore extraction cursor (e.g. after deserialization)."""
         self._extraction_cursor[session_id] = cursor
 
-    async def _run_compaction(self, session_id: str) -> None:
-        self.last_compaction_result = self._conv.run_compaction(session_id=session_id)
+    async def _run_compaction(self, session_id: str, model_hint: str | None = None) -> None:
+        self.last_compaction_result = self._conv.run_compaction(session_id=session_id, model_hint=model_hint)
 
     async def _run_summarization(self, session_id: str) -> None:
         self.last_summarization_result = await self._conv.run_summarization(session_id=session_id)

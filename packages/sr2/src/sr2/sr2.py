@@ -482,6 +482,7 @@ class SR2:
         current_context: dict | None = None,
         extract_only: bool = False,
         tool_results: list[dict] | None = None,
+        model_hint: str | None = None,
     ) -> None:
         """Fire-and-forget post-LLM processing (memory extraction, compaction).
 
@@ -539,6 +540,7 @@ class SR2:
                 session_id,
                 current_context=ctx,
                 extract_only=extract_only,
+                model_hint=model_hint,
             )
 
             # Trace: post-process results

@@ -79,21 +79,44 @@ class CompactionCostGate:
         """
         pricing = self._get_pricing(model_hint)
 
-        # Fail-open: if no pricing data, always allow
+        # Fail-closed: if cost gate is enabled but pricing can't be resolved,
+        # block compaction to prevent cost blowup. If cost gate is disabled
+        # (i.e. CompactionCostGate was instantiated but not gating), fail open.
         if pricing.source == "fail_open":
-            return CostGateDecision(
-                allowed=True,
-                tokens_saved=turn_tokens - estimated_compacted_tokens,
-                estimated_savings_usd=0.0,
-                cache_invalidation_tokens=total_tokens_after_turn,
-                estimated_invalidation_cost_usd=0.0,
-                net_usd=0.0,
-                reason="no pricing data available, failing open",
-                pricing_source=pricing.source,
-            )
+            if self.config.enabled:
+                logger.error(
+                    "Cost gate enabled but no pricing data (model_hint=%r, fallback_model=%r). "
+                    "Blocking compaction to prevent cost blowup. "
+                    "Set custom_pricing or fallback_model in cost_gate config.",
+                    model_hint,
+                    self.config.fallback_model,
+                )
+                return CostGateDecision(
+                    allowed=False,
+                    tokens_saved=turn_tokens - estimated_compacted_tokens,
+                    estimated_savings_usd=0.0,
+                    cache_invalidation_tokens=total_tokens_after_turn,
+                    estimated_invalidation_cost_usd=0.0,
+                    net_usd=0.0,
+                    reason="cost gate enabled but no pricing data — blocking to prevent cost blowup",
+                    pricing_source=pricing.source,
+                )
+            else:
+                return CostGateDecision(
+                    allowed=True,
+                    tokens_saved=turn_tokens - estimated_compacted_tokens,
+                    estimated_savings_usd=0.0,
+                    cache_invalidation_tokens=total_tokens_after_turn,
+                    estimated_invalidation_cost_usd=0.0,
+                    net_usd=0.0,
+                    reason="cost gate disabled, no pricing data — failing open",
+                    pricing_source=pricing.source,
+                )
 
         token_savings = turn_tokens - estimated_compacted_tokens
-        savings_usd = token_savings * pricing.input_cost
+        # Savings: in steady state, removed tokens were cached (cache_read cost).
+        # We avoid paying cache_read_cost per future turn by removing them.
+        savings_usd = token_savings * pricing.cache_read_cost
 
         # Cache invalidation: downstream changes from cache_read to cache_write
         invalidation_cost_usd = total_tokens_after_turn * (
@@ -105,14 +128,14 @@ class CompactionCostGate:
 
         if allowed:
             reason = (
-                f"save {token_savings:,} tokens (${savings_usd:.4f}), "
-                f"invalidate {total_tokens_after_turn:,} tokens (${invalidation_cost_usd:.4f}), "
+                f"remove {token_savings:,} cached tokens (save ${savings_usd:.4f} cache_read), "
+                f"invalidate {total_tokens_after_turn:,} tokens (cost ${invalidation_cost_usd:.4f}), "
                 f"net +${net:.4f}"
             )
         else:
             reason = (
-                f"save {token_savings:,} tokens (${savings_usd:.4f}), "
-                f"invalidate {total_tokens_after_turn:,} tokens (${invalidation_cost_usd:.4f}), "
+                f"remove {token_savings:,} cached tokens (save ${savings_usd:.4f} cache_read), "
+                f"invalidate {total_tokens_after_turn:,} tokens (cost ${invalidation_cost_usd:.4f}), "
                 f"net -${abs(net):.4f}"
             )
 
