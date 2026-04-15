@@ -746,47 +746,16 @@ class TestMemoryConfig:
         assert cfg.retrieval_strategy == "keyword"
         assert cfg.retrieval_top_k == 10
 
-    def test_memory_disabled_by_default_in_engine(self):
+    def test_engine_delegates_memory_to_sr2(self):
+        """Memory subsystem is managed by SR2, not BridgeEngine directly."""
         engine = BridgeEngine(PipelineConfig())
-        assert engine._memory_store is None
-        assert engine._memory_extractor is None
+        # SR2 always has a memory store (InMemoryMemoryStore by default)
+        assert engine._sr2._memory_store is not None
 
-    def test_memory_store_created_when_enabled(self):
-        from sr2_bridge.config import (
-            BridgeLLMConfig,
-            BridgeLLMModelConfig,
-            BridgeMemoryConfig,
-        )
-        from sr2_bridge.llm import APIKeyCache
-
-        bridge_config = BridgeConfig(
-            memory=BridgeMemoryConfig(enabled=True, db_path=":memory:"),
-            llm=BridgeLLMConfig(
-                extraction=BridgeLLMModelConfig(model="test", api_key="key"),
-            ),
-        )
-        engine = BridgeEngine(
-            PipelineConfig(),
-            bridge_config=bridge_config,
-            key_cache=APIKeyCache(),
-        )
-        assert engine._memory_store is not None
-        assert engine._memory_initialized is False  # lazy init
-
-    def test_memory_not_created_without_extraction_config(self):
-        from sr2_bridge.config import BridgeMemoryConfig
-        from sr2_bridge.llm import APIKeyCache
-
-        bridge_config = BridgeConfig(
-            memory=BridgeMemoryConfig(enabled=True),
-            # No llm.extraction configured
-        )
-        engine = BridgeEngine(
-            PipelineConfig(),
-            bridge_config=bridge_config,
-            key_cache=APIKeyCache(),
-        )
-        assert engine._memory_store is None
+    def test_engine_has_conversation_manager(self):
+        """Engine exposes SR2's conversation manager."""
+        engine = BridgeEngine(PipelineConfig())
+        assert engine.conversation_manager is not None
 
 
 # ---------------------------------------------------------------------------
@@ -806,32 +775,15 @@ class TestEngineMemoryExtraction:
         assert session.turn_counter == 4
 
     @pytest.mark.asyncio
-    async def test_memory_lazy_initialization(self):
-        """_ensure_memory_initialized should be idempotent."""
-        from sr2_bridge.config import BridgeLLMConfig, BridgeLLMModelConfig, BridgeMemoryConfig
-        from sr2_bridge.llm import APIKeyCache
+    async def test_sr2_memory_components_wired(self):
+        """SR2 memory components are available through engine's SR2 instance."""
+        engine = BridgeEngine(PipelineConfig())
 
-        bridge_config = BridgeConfig(
-            memory=BridgeMemoryConfig(enabled=True, db_path=":memory:"),
-            llm=BridgeLLMConfig(
-                extraction=BridgeLLMModelConfig(model="test", api_key="key"),
-            ),
-        )
-        key_cache = APIKeyCache()
-        key_cache.update({"x-api-key": "test-key"})
-        engine = BridgeEngine(PipelineConfig(), bridge_config=bridge_config, key_cache=key_cache)
-
-        assert not engine._memory_initialized
-        await engine._ensure_memory_initialized()
-        assert engine._memory_initialized
-        assert engine._memory_extractor is not None
-        assert engine._conflict_detector is not None
-        assert engine._conflict_resolver is not None
-        assert engine._retriever is not None
-
-        # Second call is a no-op
-        await engine._ensure_memory_initialized()
-        assert engine._memory_initialized
+        # SR2 always wires up memory components
+        assert engine._sr2._extractor is not None
+        assert engine._sr2._conflict_detector is not None
+        assert engine._sr2._conflict_resolver is not None
+        assert engine._sr2._retriever is not None
 
         await engine.shutdown()
 
@@ -1087,22 +1039,9 @@ class TestEngineShutdown:
         await engine.shutdown()  # should not raise
 
     @pytest.mark.asyncio
-    async def test_shutdown_disconnects_memory_store(self):
-        from sr2_bridge.config import BridgeLLMConfig, BridgeLLMModelConfig, BridgeMemoryConfig
-        from sr2_bridge.llm import APIKeyCache
-
-        bridge_config = BridgeConfig(
-            memory=BridgeMemoryConfig(enabled=True, db_path=":memory:"),
-            llm=BridgeLLMConfig(
-                extraction=BridgeLLMModelConfig(model="test", api_key="key"),
-            ),
-        )
-        key_cache = APIKeyCache()
-        key_cache.update({"x-api-key": "test-key"})
-        engine = BridgeEngine(PipelineConfig(), bridge_config=bridge_config, key_cache=key_cache)
-
-        # Initialize and then shutdown
-        await engine._ensure_memory_initialized()
-        assert engine._memory_store._conn is not None
+    async def test_shutdown_is_safe_with_sr2(self):
+        """Shutdown is safe when engine delegates to SR2."""
+        engine = BridgeEngine(PipelineConfig())
+        await engine.shutdown()  # should not raise
+        # Can call shutdown multiple times safely
         await engine.shutdown()
-        assert engine._memory_store._conn is None

@@ -93,11 +93,17 @@ def load_config(args: argparse.Namespace) -> dict:
 def build_components(raw_config: dict):
     """Build bridge components from raw config dict."""
     from sr2.config.models import PipelineConfig
+    from sr2.sr2 import SR2, SR2Config
 
     from sr2_bridge.config import BridgeConfig
     from sr2_bridge.engine import BridgeEngine
     from sr2_bridge.forwarder import BridgeForwarder
-    from sr2_bridge.llm import APIKeyCache
+    from sr2_bridge.llm import (
+        APIKeyCache,
+        make_embedding_callable,
+        make_extraction_callable,
+        make_summarization_callable,
+    )
     from sr2_bridge.request_logger import BridgeRequestLogger
     from sr2_bridge.session_tracker import SessionTracker
 
@@ -111,8 +117,70 @@ def build_components(raw_config: dict):
     # Shared API key cache — updated from proxied request headers
     key_cache = APIKeyCache()
 
-    # Build components (engine creates LLM callables from bridge_config.llm)
-    engine = BridgeEngine(pipeline_config, bridge_config=bridge_config, key_cache=key_cache)
+    # Build LLM callables for SR2's internal use
+    upstream_url = bridge_config.forwarding.upstream_url
+    fast_complete = None
+    embed = None
+
+    if bridge_config.llm.summarization:
+        fast_complete = make_summarization_callable(
+            bridge_config.llm.summarization, key_cache, upstream_url
+        )
+    elif bridge_config.llm.extraction:
+        # Fall back to extraction model for summarization
+        fast_complete = make_summarization_callable(
+            bridge_config.llm.extraction, key_cache, upstream_url
+        )
+
+    if bridge_config.llm.embedding:
+        embed = make_embedding_callable(bridge_config.llm.embedding, key_cache, upstream_url)
+
+    # Build memory store based on backend config.
+    # SQLite can be created synchronously; PostgreSQL requires an async pool
+    # that gets created during app lifespan (see app.py).
+    memory_store = None
+    mem_cfg = bridge_config.memory
+    if mem_cfg.enabled and mem_cfg.backend == "sqlite":
+        from sr2.memory.store import SQLiteMemoryStore
+
+        memory_store = SQLiteMemoryStore(db_path=mem_cfg.db_path)
+        logger.info("Bridge memory: using SQLite store (db=%s)", mem_cfg.db_path)
+
+    # Pipeline inspector — ring-buffer trace collector for observability
+    from sr2.pipeline.trace import TraceCollector
+
+    trace_collector = TraceCollector(max_turns=100)
+
+    def _log_trace(turn_trace):
+        warnings = turn_trace.warnings
+        if warnings:
+            for w in warnings:
+                logger.warning("inspect [%s] turn %d: %s", turn_trace.session_id, turn_trace.turn_number, w)
+        stages = [e.stage for e in turn_trace.events]
+        logger.info(
+            "inspect [%s] turn %d: %s (%.0fms)",
+            turn_trace.session_id,
+            turn_trace.turn_number,
+            " → ".join(stages),
+            turn_trace.total_duration_ms,
+        )
+
+    trace_collector.on_turn_complete(_log_trace)
+
+    # Build SR2 instance with preloaded PipelineConfig (no agent.yaml needed)
+    sr2_config = SR2Config(
+        config_dir="",  # Not used when preloaded_config is set
+        agent_yaml={},
+        preloaded_config=pipeline_config,
+        fast_complete=fast_complete,
+        embed=embed,
+        memory_store=memory_store,
+        trace_collector=trace_collector,
+    )
+    sr2 = SR2(sr2_config)
+
+    # Build engine and wire SR2 into it
+    engine = BridgeEngine(pipeline_config, bridge_config=bridge_config, sr2=sr2, key_cache=key_cache)
     forwarder = BridgeForwarder(bridge_config.forwarding)
     session_tracker = SessionTracker(bridge_config.session)
 

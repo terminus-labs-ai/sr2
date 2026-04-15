@@ -53,6 +53,7 @@ class LoopResult:
     total_output_tokens: int = 0
     cached_tokens: int = 0
     stopped_reason: str = "complete"  # complete | max_iterations | error
+    duration_ms: float = 0.0
 
     @property
     def total_tokens(self) -> int:
@@ -111,6 +112,7 @@ class LLMLoop:
         re-computed from masking output before each LLM call, and state
         transitions are attempted after each tool execution.
         """
+        _t0 = time.perf_counter()
         result = LoopResult(response_text="")
         llm_response = None
         resolved_config = model_config_override or self._default_model_config
@@ -148,6 +150,7 @@ class LLMLoop:
                 logger.error(f"LLM call failed at iteration {i + 1}: {e}")
                 result.response_text = f"Error: LLM call failed: {e}"
                 result.stopped_reason = "error"
+                result.duration_ms = (time.perf_counter() - _t0) * 1000
                 return result
 
             # Accumulate token counts
@@ -168,6 +171,7 @@ class LLMLoop:
                         )
                         result.response_text = llm_response.content or ""
                         result.stopped_reason = "complete"
+                        result.duration_ms = (time.perf_counter() - _t0) * 1000
                         return result
                     # Model hallucinated a tool call — retry without tools
                     logger.warning(
@@ -179,6 +183,7 @@ class LLMLoop:
                     continue
                 result.response_text = llm_response.content
                 result.stopped_reason = "complete"
+                result.duration_ms = (time.perf_counter() - _t0) * 1000
                 return result
 
             # Has tool calls -> execute them
@@ -277,6 +282,7 @@ class LLMLoop:
 
         result.response_text = llm_response.content if llm_response else ""
         result.stopped_reason = "max_iterations"
+        result.duration_ms = (time.perf_counter() - _t0) * 1000
         logger.warning(f"LLM loop reached max iterations ({self._max_iter})")
         return result
 
@@ -296,6 +302,7 @@ class LLMLoop:
         ``StreamEvent`` objects to *stream_callback* as tokens arrive.
         Returns the same ``LoopResult`` so callers are unaffected.
         """
+        _t0 = time.perf_counter()
         result = LoopResult(response_text="")
         resolved_config = model_config_override or self._default_model_config
         full_text = ""
@@ -335,6 +342,7 @@ class LLMLoop:
                 logger.error(f"LLM streaming call failed at iteration {i + 1}: {e}")
                 result.response_text = f"Error: LLM call failed: {e}"
                 result.stopped_reason = "error"
+                result.duration_ms = (time.perf_counter() - _t0) * 1000
                 await stream_callback(StreamEndEvent(full_text=full_text))
                 return result
 
@@ -356,6 +364,7 @@ class LLMLoop:
                     logger.error(f"Non-streaming fallback failed: {e}")
                     result.response_text = f"Error: LLM call failed: {e}"
                     result.stopped_reason = "error"
+                    result.duration_ms = (time.perf_counter() - _t0) * 1000
                     await stream_callback(StreamEndEvent(full_text=""))
                     return result
 
@@ -389,6 +398,7 @@ class LLMLoop:
                         )
                         result.response_text = llm_response.content or ""
                         result.stopped_reason = "complete"
+                        result.duration_ms = (time.perf_counter() - _t0) * 1000
                         await stream_callback(StreamEndEvent(full_text=full_text))
                         return result
                     logger.warning(
@@ -400,6 +410,7 @@ class LLMLoop:
                     continue
                 result.response_text = llm_response.content
                 result.stopped_reason = "complete"
+                result.duration_ms = (time.perf_counter() - _t0) * 1000
                 await stream_callback(StreamEndEvent(full_text=full_text))
                 return result
 
@@ -520,6 +531,7 @@ class LLMLoop:
 
         result.response_text = full_text
         result.stopped_reason = "max_iterations"
+        result.duration_ms = (time.perf_counter() - _t0) * 1000
         logger.warning(f"LLM streaming loop reached max iterations ({self._max_iter})")
         await stream_callback(StreamEndEvent(full_text=full_text))
         return result

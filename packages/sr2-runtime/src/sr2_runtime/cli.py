@@ -68,6 +68,34 @@ def parse_args(argv: list[str] | None = None):
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    parser.add_argument(
+        "--inspect",
+        nargs="?",
+        const="default",
+        choices=["default", "full", "brief"],
+        help="Enable pipeline inspector (default, full, or brief mode)",
+    )
+    parser.add_argument(
+        "--inspect-ui",
+        action="store_true",
+        help="Enable web inspector UI (default port: 9201)",
+    )
+    parser.add_argument(
+        "--inspect-port",
+        type=int,
+        default=9201,
+        help="Port for inspector web UI (default: 9201)",
+    )
+    parser.add_argument(
+        "--agent-log-path",
+        default=None,
+        help="Path to agent log file (default: config_dir/agent.log)",
+    )
+    parser.add_argument(
+        "--infra-log-path",
+        default=None,
+        help="Path to infrastructure log file (default: config_dir/infra.log)",
+    )
     return parser.parse_args(argv)
 
 
@@ -89,13 +117,42 @@ async def run_agent(args):
     """Start and run the agent."""
     name = resolve_name(args.config_dir, args.name)
 
+    # Allow SR2_INSPECT env var to enable inspector without CLI flag
+    # (useful in Docker where you don't want to modify the CMD)
+    if args.inspect is None and not args.inspect_ui:
+        env_inspect = os.environ.get("SR2_INSPECT")
+        if env_inspect:
+            args.inspect = env_inspect if env_inspect in ("default", "full", "brief") else "default"
+
+    # Create trace collector if inspector is enabled
+    trace_collector = None
+    if args.inspect or args.inspect_ui:
+        from sr2.pipeline.trace import TraceCollector
+
+        trace_collector = TraceCollector()
+
     agent = Agent(
         AgentConfig(
             name=name,
             config_dir=args.config_dir,
             defaults_path=args.defaults,
+            trace_collector=trace_collector,
         )
     )
+
+    # Wire CLI trace output if --inspect is set
+    if args.inspect and trace_collector:
+        from sr2.pipeline.trace_renderer import render_brief, render_default, render_full
+
+        renderers = {"default": render_default, "full": render_full, "brief": render_brief}
+        renderer = renderers[args.inspect]
+
+        def _print_trace(trace):
+            sys.stderr.write(renderer(trace))
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+
+        trace_collector.on_turn_complete(_print_trace)
 
     if args.single_shot:
         interface_name = args.single_shot
@@ -134,11 +191,12 @@ async def run_agent(args):
         import uvicorn
 
         app = create_http_app(agent)
+        uv_log_level = "warning" if (args.inspect or args.inspect_ui) else args.log_level.lower()
         config = uvicorn.Config(
             app,
             host="0.0.0.0",
             port=args.port,
-            log_level=args.log_level.lower(),
+            log_level=uv_log_level,
         )
         server = uvicorn.Server(config)
 
@@ -173,9 +231,46 @@ def main():
     if not os.isatty(sys.stderr.fileno()):
         os.set_blocking(sys.stderr.fileno(), True)
 
+    log_handlers: list[logging.Handler] = []
+    if args.inspect or args.inspect_ui:
+        # When inspector is active, redirect logs to files so stderr stays clean
+        # for inspector output. Log files sit next to the agent config by default.
+        agent_log_file = args.agent_log_path or os.path.join(args.config_dir, "agent.log")
+        infra_log_file = args.infra_log_path or os.path.join(args.config_dir, "infra.log")
+
+        agent_handler = logging.FileHandler(agent_log_file, mode="a")
+        agent_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+        )
+        log_handlers.append(agent_handler)
+
+        infra_handler = logging.FileHandler(infra_log_file, mode="a")
+        infra_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+        )
+
+        # Redirect all LiteLLM loggers to infra log (it creates multiple)
+        litellm.suppress_debug_info = True
+        for ll_name in ("LiteLLM", "LiteLLM Proxy", "LiteLLM Router", "litellm"):
+            ll_logger = logging.getLogger(ll_name)
+            ll_logger.handlers = [infra_handler]
+            ll_logger.propagate = False
+
+        # Redirect uvicorn's loggers to infra log
+        for uv_logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+            uv_logger = logging.getLogger(uv_logger_name)
+            uv_logger.handlers = [infra_handler]
+            uv_logger.propagate = False
+
+        sys.stderr.write(f"[inspect] Logs redirected to {agent_log_file} and {infra_log_file}\n")
+        sys.stderr.flush()
+    else:
+        log_handlers.append(logging.StreamHandler(sys.stderr))
+
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        handlers=log_handlers,
         force=True,
     )
 

@@ -28,6 +28,7 @@ class HybridRetriever:
         keyword_weight: float = 0.2,
         scope_config: MemoryScopeConfig | None = None,
         current_context: dict | None = None,
+        trace_collector=None,
     ):
         self._store = store
         self._embed = embedding_callable
@@ -36,6 +37,7 @@ class HybridRetriever:
         self._current_context = current_context
         self._top_k = top_k
         self._recency_decay = recency_decay_days
+        self._trace = trace_collector
         self._weights = {
             "semantic": semantic_weight,
             "keyword": keyword_weight,
@@ -140,6 +142,30 @@ class HybridRetriever:
         self._total_retrievals += 1
         if self.last_was_empty:
             self._empty_retrievals += 1
+
+        # Emit trace event with all scored candidates
+        if self._trace:
+            self._trace.emit("retrieve", {
+                "query": query,
+                "strategy": self._strategy,
+                "candidates_scored": len(scored),
+                "results_returned": len(results),
+                "top_k": k,
+                "threshold": 0.0,
+                "results": [
+                    {
+                        "key": r.memory.key,
+                        "value_preview": r.memory.value[:100],
+                        "relevance_score": r.relevance_score,
+                        "match_type": r.match_type,
+                        "selected": r in results,
+                        "memory_type": r.memory.memory_type,
+                        "scope": r.memory.scope,
+                    }
+                    for r in scored
+                ],
+                "latency_ms": self.last_latency_ms,
+            }, duration_ms=self.last_latency_ms)
 
         return results
 

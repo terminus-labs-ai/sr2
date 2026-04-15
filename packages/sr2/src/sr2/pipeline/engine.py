@@ -1,4 +1,5 @@
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -48,11 +49,13 @@ class PipelineEngine:
         cache_registry: CachePolicyRegistry,
         circuit_breaker: CircuitBreaker | None = None,
         budget_overflow_handler: BudgetOverflowHandler | None = None,
+        trace_collector=None,
     ):
         self._resolvers = resolver_registry
         self._cache_policies = cache_registry
         self._circuit_breaker = circuit_breaker or CircuitBreaker()
         self._budget_overflow_handler = budget_overflow_handler
+        self._trace = trace_collector
         self._previous_state: PipelineState | None = None
         self._layer_cache: dict[str, list[ResolvedContent]] = {}
         self._serializer = ContextSerializer()
@@ -84,6 +87,7 @@ class PipelineEngine:
         state: PipelineState | None = None,
     ) -> CompiledContext:
         """Compile context from config."""
+        _compile_t0 = time.perf_counter()
         self._log_resolved_config(config)
         result = PipelineResult(config_used=config.extends or "")
         layers: dict[str, list[ResolvedContent]] = {}
@@ -101,6 +105,7 @@ class PipelineEngine:
                         stage_name=layer.name,
                         status="degraded",
                         fallback_used=True,
+                        cache_status="skipped",
                         error="circuit_breaker_open",
                     )
                 )
@@ -127,6 +132,7 @@ class PipelineEngine:
                         stage_name=layer.name,
                         status="success",
                         tokens_used=sum(c.tokens for c in layers[layer.name]),
+                        cache_status="hit",
                     )
                 )
                 self._circuit_breaker.record_success(layer.name)
@@ -222,6 +228,30 @@ class PipelineEngine:
             prefix_tokens=prefix_tokens,
         )
 
+        # Trace: resolve stage with layer details
+        _compile_ms = (time.perf_counter() - _compile_t0) * 1000
+        if self._trace:
+            utilization = total_tokens / config.token_budget if config.token_budget > 0 else 0.0
+            cb_status = self._circuit_breaker.status()
+            # Build per-layer cache_status from StageResults
+            _stage_cache = {s.stage_name: s.cache_status for s in result.stages}
+            self._trace.emit("resolve", {
+                "total_tokens": total_tokens,
+                "budget": config.token_budget,
+                "utilization": utilization,
+                "cache_efficiency": None,  # populated by runtime via CacheReport
+                "layers": [
+                    {
+                        "name": name,
+                        "tokens": sum(c.tokens for c in contents),
+                        "items": len(contents),
+                        "cache_status": _stage_cache.get(name, ""),
+                        "circuit_breaker": "open" if name in cb_status and cb_status[name].get("is_open") else "closed",
+                    }
+                    for name, contents in layers.items()
+                ],
+            }, duration_ms=_compile_ms)
+
         return CompiledContext(
             content=content,
             tokens=total_tokens,
@@ -262,6 +292,7 @@ class PipelineEngine:
                     result.add_stage(
                         timer.result(
                             status="failed",
+                            cache_status="miss",
                             error=str(e),
                         )
                     )
@@ -271,14 +302,16 @@ class PipelineEngine:
             if resolved:
                 tokens = sum(c.tokens for c in resolved)
                 result.add_stage(
-                    timer.result(status="degraded", tokens_used=tokens, fallback_used=True)
+                    timer.result(
+                        status="degraded", tokens_used=tokens, fallback_used=True, cache_status="miss"
+                    )
                 )
                 logger.info(f"Layer {layer.name} degraded to {tokens} tokens.")
                 return resolved
             return None
 
         tokens = sum(c.tokens for c in resolved)
-        result.add_stage(timer.result(status="success", tokens_used=tokens))
+        result.add_stage(timer.result(status="success", tokens_used=tokens, cache_status="miss"))
         logger.info(f"Layer {layer.name} successfully resolved to {tokens} tokens.")
         return resolved
 

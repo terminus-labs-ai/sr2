@@ -41,6 +41,7 @@ from sr2.resolvers.runtime_resolver import RuntimeResolver
 from sr2.resolvers.session_resolver import SessionResolver
 from sr2.resolvers.static_template_resolver import StaticTemplateResolver
 from sr2.summarization.engine import SummarizationEngine
+from sr2.pipeline.trace import TraceCollector
 from sr2.tools.models import ToolDefinition, ToolManagementConfig
 from sr2.tools.state_machine import ToolStateMachine
 
@@ -61,6 +62,8 @@ class SR2Config:
     embed: Callable | None = None  # async (text) -> list[float]
     mcp_resource_reader: Callable | None = None  # async (uri, server_name) -> str
     mcp_prompt_reader: Callable | None = None  # async (name, arguments, server_name) -> str
+    trace_collector: TraceCollector | None = None  # Pipeline Inspector traces
+    preloaded_config: Any = None  # PipelineConfig — skip file-based loading (used by bridge)
 
 
 @dataclass
@@ -76,6 +79,17 @@ class ProcessedContext:
     pipeline_result: PipelineResult
 
 
+@dataclass
+class ProxyResult:
+    """Result of proxy_optimize — what the bridge needs to rebuild its response."""
+
+    system_injection: str | None
+    zones: Any  # ConversationZones
+    compaction_result: Any | None  # CompactionResult | None
+    summarization_result: Any | None  # SummarizationResult | None
+    current_context: dict[str, str] | None = None
+
+
 class SR2:
     """Facade over the SR2 context-engineering pipeline.
 
@@ -86,6 +100,7 @@ class SR2:
 
     def __init__(self, config: SR2Config) -> None:
         self._config = config
+        self._trace = config.trace_collector
 
         # Memory stack
         self._memory_store = (
@@ -94,6 +109,7 @@ class SR2:
         self._retriever = HybridRetriever(
             store=self._memory_store,
             embedding_callable=config.embed,
+            trace_collector=self._trace,
         )
         self._matcher = DimensionalMatcher()
         self._conflict_detector = ConflictDetector(store=self._memory_store)
@@ -152,8 +168,11 @@ class SR2:
         self._cache_reg = create_default_cache_registry()
 
         # Compaction + Summarization
-        agent_yaml_path = os.path.join(config.config_dir, config.config_filename)
-        agent_config = self._loader.load(agent_yaml_path)
+        if config.preloaded_config is not None:
+            agent_config = config.preloaded_config
+        else:
+            agent_yaml_path = os.path.join(config.config_dir, config.config_filename)
+            agent_config = self._loader.load(agent_yaml_path)
 
         # Pipeline — wire CircuitBreaker from config
         deg = agent_config.degradation
@@ -164,6 +183,7 @@ class SR2:
                 threshold=deg.circuit_breaker_threshold,
                 cooldown_seconds=deg.circuit_breaker_cooldown_minutes * 60,
             ),
+            trace_collector=self._trace,
         )
 
         # Wire retrieval enabled flag now that agent_config is loaded
@@ -208,6 +228,7 @@ class SR2:
             summarization_engine=self._summarization_engine,
             raw_window=agent_config.compaction.raw_window,
             compacted_max_tokens=agent_config.token_budget // 2,
+            trace_collector=self._trace,
         )
 
         # Wire budget overflow handler into engine
@@ -220,6 +241,7 @@ class SR2:
             conflict_detector=self._conflict_detector,
             conflict_resolver=self._conflict_resolver,
             retriever=self._retriever,
+            trace_collector=self._trace,
         )
 
         # Metrics
@@ -277,6 +299,21 @@ class SR2:
         Routes to the correct pipeline config, compiles context layers,
         builds messages, and creates the tool state machine with initial masking.
         """
+        # Begin trace turn
+        if self._trace:
+            self._trace.begin_turn(
+                turn_number=len(session_turns) + 1,
+                session_id=session_id,
+                interface_name=interface_name,
+            )
+            self._trace.emit("input", {
+                "trigger_input": str(trigger_input)[:500] if trigger_input else "",
+                "session_turns": len(session_turns),
+                "session_id": session_id,
+                "interface_name": interface_name,
+                "tool_count": len(tool_schemas),
+            }, session_id=session_id)
+
         # Route to pipeline config
         try:
             config = self._router.route(interface_name)
@@ -399,6 +436,32 @@ class SR2:
         filtered_schemas = masking.get("tool_schemas", tool_schemas)
         tool_choice = masking.get("tool_choice", "auto")
 
+        # Trace: tool state
+        if self._trace:
+            allowed = masking.get("allowed_tools", tool_defs)
+            allowed_names = {t.name for t in allowed}
+            self._trace.emit("tool_state", {
+                "current_state": state_machine.current_state,
+                "allowed_tools": sorted(allowed_names),
+                "denied_tools": sorted(t.name for t in tool_defs if t.name not in allowed_names),
+                "tool_choice": str(tool_choice),
+                "denied_attempts": 0,
+                "state_history": [state_machine.current_state],
+            }, session_id=session_id)
+
+        # Trace: LLM request summary
+        if self._trace:
+            self._trace.emit("llm_request", {
+                "provider": "caller-managed",
+                "message_count": len(messages),
+                "system_tokens": len(str(messages[0].get("content", ""))) // 4 if messages else 0,
+                "conversation_tokens": sum(
+                    len(str(m.get("content", ""))) // 4 for m in messages[1:]
+                ) if len(messages) > 1 else 0,
+                "tool_count": len(filtered_schemas),
+                "tool_choice": str(tool_choice),
+            }, session_id=session_id)
+
         return ProcessedContext(
             messages=messages,
             tool_schemas=filtered_schemas,
@@ -477,8 +540,54 @@ class SR2:
                 current_context=ctx,
                 extract_only=extract_only,
             )
+
+            # Trace: post-process results
+            if self._trace:
+                cr = self._post_processor.last_compaction_result
+                sr = self._post_processor.last_summarization_result
+                self._trace.emit("post_process", {
+                    "memory_extraction": {
+                        "memories_extracted": self._post_processor.last_memories_extracted,
+                        "conflicts_detected": self._post_processor.last_conflicts_detected,
+                    },
+                    "compaction": {
+                        "turns_compacted": cr.turns_compacted if cr else 0,
+                        "original_tokens": cr.original_tokens if cr else 0,
+                        "compacted_tokens": cr.compacted_tokens if cr else 0,
+                        "tokens_saved": (cr.original_tokens - cr.compacted_tokens) if cr else 0,
+                        "strategy": "rule_based",
+                        "details": [
+                            {
+                                "turn_number": d.turn_number,
+                                "role": d.role,
+                                "content_type": d.content_type,
+                                "rule": d.rule_applied,
+                                "original_tokens": d.original_tokens,
+                                "compacted_tokens": d.compacted_tokens,
+                            }
+                            for d in (cr.details if cr else [])
+                        ],
+                        "cost_gate": {
+                            "passed": cr.cost_gate_result.passed,
+                            "token_savings_usd": cr.cost_gate_result.token_savings_usd,
+                            "cache_invalidation_usd": cr.cost_gate_result.cache_invalidation_usd,
+                            "net_savings_usd": cr.cost_gate_result.net_savings_usd,
+                        } if cr and cr.cost_gate_result else None,
+                    } if cr else None,
+                    "summarization": {
+                        "triggered": sr is not None,
+                        "original_tokens": sr.original_tokens if sr else 0,
+                        "summary_tokens": sr.summary_tokens if sr else 0,
+                    } if sr else None,
+                }, session_id=session_id)
         except Exception:
             logger.error("Post-processing failed", exc_info=True)
+        finally:
+            # Always close the trace turn — even on error.
+            # Without this the trace stays in _current/_active forever and
+            # is silently discarded when the next begin_turn() fires.
+            if self._trace:
+                self._trace.end_turn(session_id=session_id)
 
     async def save_memory(
         self,
@@ -726,6 +835,41 @@ class SR2:
                 zone_transition=transition_type,
             )
 
+        # Trace: zones event — conversation zone state snapshot
+        if self._trace:
+            raw_util = self._conversation.get_raw_window_utilization(session_id)
+            self._trace.emit("zones", {
+                "summarized_turns": len(zones.summarized),
+                "summarized_tokens": int(extra.get(MetricNames.ZONE_SUMMARIZED_TOKENS, 0)),
+                "compacted_turns": len(zones.compacted),
+                "compacted_tokens": int(extra.get(MetricNames.ZONE_COMPACTED_TOKENS, 0)),
+                "raw_turns": len(zones.raw),
+                "raw_tokens": int(extra.get(MetricNames.ZONE_RAW_TOKENS, 0)),
+                "raw_window_utilization": raw_util,
+                "zone_transitions": transitions,
+            }, session_id=session_id)
+
+        # Trace: metrics event — key indicators from the snapshot
+        if self._trace:
+            self._trace.emit("metrics", {
+                "invocation_id": snapshot.invocation_id,
+                "budget_utilization": extra.get(MetricNames.BUDGET_UTILIZATION, 0.0),
+                "budget_headroom_tokens": int(extra.get(MetricNames.BUDGET_HEADROOM_TOKENS, 0)),
+                "cache_hit_rate": loop_cache_hit_rate,
+                "loop_iterations": loop_iterations,
+                "loop_total_tokens": loop_total_tokens,
+                "loop_tool_calls": loop_tool_calls,
+                "truncation_events": int(extra.get(MetricNames.TRUNCATION_EVENTS, 0)),
+                "circuit_breaker_activations": int(extra.get(
+                    MetricNames.CIRCUIT_BREAKER_ACTIVATIONS, 0
+                )),
+                "memories_extracted": int(extra.get(MetricNames.MEMORIES_EXTRACTED, 0)),
+                "compaction_ratio": extra.get(MetricNames.COMPACTION_RATIO, 0.0)
+                if MetricNames.COMPACTION_RATIO in extra else None,
+                "summarization_ratio": extra.get(MetricNames.SUMMARIZATION_RATIO, 0.0)
+                if MetricNames.SUMMARIZATION_RATIO in extra else None,
+            }, session_id=session_id)
+
         # Fire alert checks (via plugin)
         if self._alerts is not None:
             await self._alerts.evaluate(snapshot)
@@ -756,6 +900,235 @@ class SR2:
             exporter_cls = get_pull_exporter(name)
             self._exporter = exporter_cls(self._collector)
         return self._exporter.export()
+
+    # --- Proxy API (used by sr2-bridge) ---
+
+    async def proxy_optimize(
+        self,
+        new_turns: list[ConversationTurn],
+        session_id: str,
+        system_prompt: str | None = None,
+        retrieval_query: str | None = None,
+    ) -> "ProxyResult":
+        """Optimize a pre-built turn list (proxy/bridge mode).
+
+        Bridge receives full message history from Claude Code and converts
+        to ConversationTurns itself.  This method runs the same compaction →
+        summarization → scope detection → memory retrieval pipeline that
+        ``process()`` uses, but without resolver-based content layers.
+
+        Returns a ProxyResult with zones, system injection text, and
+        compaction/summarization results so the bridge can rebuild its
+        response.
+        """
+        # Trace: begin turn
+        if self._trace:
+            self._trace.begin_turn(
+                turn_number=new_turns[-1].turn_number if new_turns else 0,
+                session_id=session_id,
+                interface_name="proxy",
+            )
+            self._trace.emit("input", {
+                "trigger_input": retrieval_query[:500] if retrieval_query else "",
+                "session_turns": len(new_turns),
+                "session_id": session_id,
+                "interface_name": "proxy",
+                "tool_count": 0,
+            }, session_id=session_id)
+
+        # 1. Add turns to conversation manager
+        for turn in new_turns:
+            self._conversation.add_turn(turn, session_id)
+
+        # 2. Compaction (local, no circuit breaker needed)
+        compaction_result = self._conversation.run_compaction(session_id)
+        if compaction_result and compaction_result.turns_compacted > 0:
+            logger.info(
+                "proxy_optimize: session=%s compacted %d turns (%d -> %d tokens)",
+                session_id,
+                compaction_result.turns_compacted,
+                compaction_result.original_tokens,
+                compaction_result.compacted_tokens,
+            )
+
+        # 3. Summarization (guarded by circuit breaker)
+        summarization_result = None
+        if not self._engine._circuit_breaker.is_open("summarization"):
+            try:
+                summarization_result = await self._conversation.run_summarization(session_id)
+                if summarization_result:
+                    logger.info(
+                        "proxy_optimize: session=%s summarized turns %s (%d -> %d tokens)",
+                        session_id,
+                        summarization_result.turn_range,
+                        summarization_result.original_tokens,
+                        summarization_result.summary_tokens,
+                    )
+                    self._engine._circuit_breaker.record_success("summarization")
+            except Exception:
+                logger.warning("proxy_optimize: summarization failed", exc_info=True)
+                self._engine._circuit_breaker.record_failure("summarization")
+
+        # 4. Scope detection
+        current_context: dict[str, str] | None = None
+        if self._scope_detector and not self._engine._circuit_breaker.is_open("scope_detection"):
+            try:
+                detected = await self._scope_detector.detect(
+                    system_prompt=system_prompt,
+                    user_message=retrieval_query,
+                    session_id=session_id,
+                )
+                if detected:
+                    current_context = {}
+                    for scope_name, scope_ref in detected.items():
+                        if scope_name != "private" and scope_ref is not None:
+                            current_context["project_id"] = scope_ref
+                            break
+                    if not current_context:
+                        current_context = None
+                if current_context:
+                    self._retriever.update_context(current_context)
+                self._engine._circuit_breaker.record_success("scope_detection")
+            except Exception:
+                logger.warning("proxy_optimize: scope detection failed", exc_info=True)
+                self._engine._circuit_breaker.record_failure("scope_detection")
+
+        # 5. Memory retrieval
+        memory_injection: str | None = None
+        if retrieval_query and not self._engine._circuit_breaker.is_open("memory_retrieval"):
+            try:
+                results = await self._retriever.retrieve(retrieval_query)
+                if results:
+                    memory_lines = [f"- {r.memory.key}: {r.memory.value}" for r in results]
+                    memory_injection = (
+                        "[Relevant memories from previous sessions]\n"
+                        + "\n".join(memory_lines)
+                        + "\n[End of memories]"
+                    )
+                    logger.info(
+                        "proxy_optimize: session=%s retrieved %d memories",
+                        session_id,
+                        len(results),
+                    )
+                self._engine._circuit_breaker.record_success("memory_retrieval")
+            except Exception:
+                logger.warning("proxy_optimize: memory retrieval failed", exc_info=True)
+                self._engine._circuit_breaker.record_failure("memory_retrieval")
+
+        # 6. Build system injection
+        zones = self._conversation.zones(session_id)
+        system_injection: str | None = None
+        injection_parts: list[str] = []
+        if zones.summarized:
+            summary_text = "\n\n".join(zones.summarized)
+            injection_parts.append(
+                f"[Previous conversation summary]\n{summary_text}\n"
+                f"[End of summary — recent conversation follows]"
+            )
+        if memory_injection:
+            injection_parts.append(memory_injection)
+        if injection_parts:
+            system_injection = "\n\n".join(injection_parts)
+
+        # Trace: zones
+        if self._trace:
+            self._trace.emit("zones", {
+                "summarized_turns": len(zones.summarized),
+                "summarized_tokens": sum(len(s) // 4 for s in zones.summarized),
+                "compacted_turns": len(zones.compacted),
+                "compacted_tokens": sum(len(t.content) // 4 for t in zones.compacted),
+                "raw_turns": len(zones.raw),
+                "raw_tokens": sum(len(t.content) // 4 for t in zones.raw),
+                "raw_window_utilization": self._conversation.get_raw_window_utilization(session_id),
+                "zone_transitions": self._conversation.get_zone_transitions(session_id),
+            }, session_id=session_id)
+
+        return ProxyResult(
+            system_injection=system_injection,
+            zones=zones,
+            compaction_result=compaction_result,
+            summarization_result=summarization_result,
+            current_context=current_context,
+        )
+
+    async def proxy_post_process(
+        self,
+        assistant_text: str,
+        session_id: str,
+        turn_number: int = 0,
+        current_context: dict | None = None,
+    ) -> None:
+        """Post-process after a proxied response completes.
+
+        Delegates to the same PostLLMProcessor used by the runtime, giving
+        bridge callers batched extraction, cursor tracking, conflict detection,
+        and trace events for free.
+
+        Auto-closes the trace turn when done.  Because the bridge fires this
+        via ``create_task`` (fire-and-forget), the trace must be finalized
+        here — ``proxy_end_turn()`` is never called externally.
+        """
+        turn = ConversationTurn(
+            turn_number=turn_number,
+            role="assistant",
+            content=assistant_text,
+        )
+        try:
+            # Trace: llm_response (bridge has the full text but no structured response)
+            if self._trace:
+                self._trace.emit("llm_response", {
+                    "content_length": len(assistant_text),
+                    "content_preview": assistant_text[:200],
+                    "role": "assistant",
+                }, session_id=session_id)
+
+            await self._post_processor.process(
+                turn,
+                session_id,
+                current_context=current_context,
+            )
+
+            # Trace: post-process results
+            if self._trace:
+                cr = self._post_processor.last_compaction_result
+                sr = self._post_processor.last_summarization_result
+                self._trace.emit("post_process", {
+                    "memory_extraction": {
+                        "memories_extracted": self._post_processor.last_memories_extracted,
+                        "conflicts_detected": self._post_processor.last_conflicts_detected,
+                    },
+                    "compaction": {
+                        "turns_compacted": cr.turns_compacted if cr else 0,
+                        "original_tokens": cr.original_tokens if cr else 0,
+                        "compacted_tokens": cr.compacted_tokens if cr else 0,
+                    } if cr else None,
+                    "summarization": {
+                        "triggered": sr is not None,
+                        "original_tokens": sr.original_tokens if sr else 0,
+                        "summary_tokens": sr.summary_tokens if sr else 0,
+                    } if sr else None,
+                }, session_id=session_id)
+        except Exception:
+            logger.error("proxy_post_process failed", exc_info=True)
+        finally:
+            # Always close the trace turn — this is the last action in the
+            # proxy pipeline.  Listeners (inspector log, etc.) fire here.
+            if self._trace:
+                self._trace.end_turn(session_id=session_id)
+
+    def proxy_end_turn(self, duration_ms: float = 0.0, session_id: str | None = None) -> None:
+        """End the current trace turn (proxy mode).
+
+        .. deprecated::
+            proxy_post_process() now auto-closes the trace.  This method is
+            retained for callers that skip post-processing.
+        """
+        if self._trace:
+            self._trace.end_turn(session_id=session_id)
+
+    def reset_session(self, session_id: str) -> None:
+        """Reset conversation state for a session (message edit/clear detected)."""
+        self._conversation.destroy_session(session_id)
 
     async def _handle_budget_overflow(
         self,

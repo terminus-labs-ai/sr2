@@ -116,9 +116,18 @@ class BridgeMemoryConfig(BaseModel):
     """Memory system settings for the bridge."""
 
     enabled: bool = Field(default=False, description="Enable memory extraction and retrieval.")
+    backend: Literal["sqlite", "postgres"] = Field(
+        default="sqlite",
+        description="Memory store backend. 'sqlite' for local, 'postgres' for shared (requires sr2-pro).",
+    )
     db_path: str = Field(
         default="sr2_bridge_memory.db",
-        description="Path to SQLite database for memory persistence.",
+        description="Path to SQLite database (backend=sqlite only).",
+    )
+    database_url: str | None = Field(
+        default=None,
+        description="PostgreSQL connection URL (backend=postgres only). "
+        "Example: postgresql://user:pass@host:5432/dbname",
     )
     max_memories_per_turn: int = Field(
         default=5,

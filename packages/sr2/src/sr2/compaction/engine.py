@@ -1,7 +1,7 @@
 """Compaction engine that applies rules to conversation turns."""
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sr2.compaction.cost_gate import CompactionCostGate
 from sr2.compaction.rules import CompactionInput, get_rule
@@ -23,6 +23,30 @@ class ConversationTurn:
 
 
 @dataclass
+class CostGateResult:
+    """Result of the compaction cost gate evaluation."""
+
+    passed: bool
+    token_savings_usd: float
+    cache_invalidation_usd: float
+    net_savings_usd: float
+
+
+@dataclass
+class TurnCompactionDetail:
+    """What happened to a single turn during compaction."""
+
+    turn_number: int
+    role: str
+    content_type: str | None
+    rule_applied: str | None
+    original_tokens: int
+    compacted_tokens: int
+    original_content: str
+    compacted_content: str
+
+
+@dataclass
 class CompactionResult:
     """Result of running compaction on conversation history."""
 
@@ -31,6 +55,8 @@ class CompactionResult:
     compacted_tokens: int
     turns_compacted: int
     analysis: dict | None = None  # Structured analysis from LLM compaction strategy
+    details: list[TurnCompactionDetail] = field(default_factory=list)
+    cost_gate_result: CostGateResult | None = None
 
 
 class CompactionEngine:
@@ -95,6 +121,8 @@ class CompactionEngine:
         original_tokens = 0
         compacted_tokens = 0
         turns_compacted = 0
+        details: list[TurnCompactionDetail] = []
+        last_cost_gate_result: CostGateResult | None = None
 
         for turn in compactable:
             est_tokens = len(turn.content) // 4
@@ -161,12 +189,28 @@ class CompactionEngine:
                     total_tokens_after_turn=tokens_after,
                     model_hint=model_hint,
                 )
+                last_cost_gate_result = CostGateResult(
+                    passed=decision.allowed,
+                    token_savings_usd=decision.estimated_savings_usd,
+                    cache_invalidation_usd=decision.estimated_invalidation_cost_usd,
+                    net_savings_usd=decision.net_usd,
+                )
                 if not decision.allowed:
                     logger.info(
                         "Turn %d: cost gate blocked compaction — %s",
                         turn.turn_number,
                         decision.reason,
                     )
+                    details.append(TurnCompactionDetail(
+                        turn_number=turn.turn_number,
+                        role=turn.role,
+                        content_type=turn.content_type,
+                        rule_applied=None,
+                        original_tokens=est_tokens,
+                        compacted_tokens=est_tokens,
+                        original_content=turn.content,
+                        compacted_content=turn.content,
+                    ))
                     compacted_tokens += est_tokens
                     continue
 
@@ -199,6 +243,16 @@ class CompactionEngine:
                     compacted=True,
                 )
                 compactable[compactable.index(turn)] = new_turn
+                details.append(TurnCompactionDetail(
+                    turn_number=turn.turn_number,
+                    role=turn.role,
+                    content_type=turn.content_type,
+                    rule_applied=rule_config.strategy,
+                    original_tokens=est_tokens,
+                    compacted_tokens=output.tokens,
+                    original_content=turn.content,
+                    compacted_content=compacted_content,
+                ))
                 compacted_tokens += output.tokens
                 turns_compacted += 1
             else:
@@ -230,4 +284,6 @@ class CompactionEngine:
             original_tokens=original_tokens,
             compacted_tokens=compacted_tokens,
             turns_compacted=turns_compacted,
+            details=details,
+            cost_gate_result=last_cost_gate_result,
         )

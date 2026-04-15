@@ -10,6 +10,7 @@ class StageResult:
     fallback_used: bool = False
     tokens_used: int = 0
     duration_ms: float = 0.0
+    cache_status: str = ""  # "hit" | "miss" | "skipped" | ""
     error: str | None = None
 
 
@@ -64,6 +65,7 @@ class StageTimer:
         status: Literal["success", "degraded", "failed"],
         tokens_used: int = 0,
         fallback_used: bool = False,
+        cache_status: str = "",
         error: str | None = None,
     ) -> StageResult:
         return StageResult(
@@ -72,5 +74,6 @@ class StageTimer:
             fallback_used=fallback_used,
             tokens_used=tokens_used,
             duration_ms=self.duration_ms,
+            cache_status=cache_status,
             error=error,
         )

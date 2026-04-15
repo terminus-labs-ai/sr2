@@ -34,12 +34,14 @@ class PostLLMProcessor:
         retriever: HybridRetriever | None = None,
         extraction_batch_size: int = 5,
         extraction_mutex: bool = True,
+        trace_collector=None,
     ):
         self._conv = conversation_manager
         self._extractor = memory_extractor
         self._detector = conflict_detector
         self._resolver = conflict_resolver
         self._retriever = retriever
+        self._trace = trace_collector
         self._extraction_batch_size = extraction_batch_size
         # Cursor tracking: last turn index processed for extraction, per session
         self._extraction_cursor: dict[str, int] = {}

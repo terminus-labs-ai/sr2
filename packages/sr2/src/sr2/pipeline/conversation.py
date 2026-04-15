@@ -40,11 +40,13 @@ class ConversationManager:
         summarization_engine: SummarizationEngine | None = None,
         raw_window: int = 5,
         compacted_max_tokens: int = 6000,
+        trace_collector=None,
     ):
         self._compaction = compaction_engine
         self._summarization = summarization_engine
         self._raw_window = raw_window
         self._compacted_max = compacted_max_tokens
+        self._trace = trace_collector
         self._zones_by_session: dict[str, ConversationZones] = {}
         # Track zone transition counts per session for metrics
         self._zone_transitions: dict[str, dict[str, int]] = {}
@@ -177,6 +179,20 @@ class ConversationManager:
         last_turn = to_summarize[-1].turn_number
         turn_range = f"{first_turn}-{last_turn}"
         summarized_tokens = sum(len(t.content) // 4 for t in to_summarize)
+
+        # Cap input to summarization LLM to avoid context window overflow.
+        # The LLM prompt includes system instructions (~500 tokens) + turns_text.
+        # Cap turns_text to compacted_max_tokens to stay within typical model limits.
+        max_input_chars = self._compacted_max * 4  # ~1 token per 4 chars
+        if len(turns_text) > max_input_chars:
+            logger.warning(
+                "run_summarization: truncating input from %d to %d chars "
+                "(compacted_max_tokens=%d) to fit summarization model",
+                len(turns_text),
+                max_input_chars,
+                self._compacted_max,
+            )
+            turns_text = turns_text[:max_input_chars]
 
         result = await self._summarization.summarize(
             turns_text=turns_text,

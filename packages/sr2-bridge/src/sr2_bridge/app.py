@@ -137,11 +137,31 @@ def create_bridge_app(
 
     from contextlib import asynccontextmanager
 
+    _pg_pool = None  # Track asyncpg pool for cleanup
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        nonlocal _pg_pool
         await forwarder.start()
         if request_logger:
             await request_logger.start()
+
+        # Wire PostgreSQL memory store if configured (requires async pool creation)
+        mem_cfg = bridge_config.memory
+        if mem_cfg.enabled and mem_cfg.backend == "postgres" and mem_cfg.database_url:
+            try:
+                import asyncpg
+
+                _pg_pool = await asyncpg.create_pool(mem_cfg.database_url)
+                await engine._sr2.set_postgres_store(_pg_pool)
+                logger.info("Bridge memory: PostgreSQL store connected (%s)", mem_cfg.database_url)
+            except ImportError:
+                logger.warning(
+                    "PostgreSQL memory requested but asyncpg/sr2-pro not installed. "
+                    "Memory will use in-memory store."
+                )
+            except Exception:
+                logger.error("Failed to connect PostgreSQL memory store", exc_info=True)
 
         # Restore persisted sessions if enabled
         if engine.session_store:
@@ -162,6 +182,8 @@ def create_bridge_app(
         finally:
             cleanup_task.cancel()
             await engine.shutdown()
+            if _pg_pool:
+                await _pg_pool.close()
             await forwarder.stop()
             if request_logger:
                 await request_logger.stop()

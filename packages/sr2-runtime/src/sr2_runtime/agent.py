@@ -27,13 +27,35 @@ from sr2_runtime.tool_executor import (
 logger = logging.getLogger(__name__)
 
 
-def _load_agent_yaml_with_extends(agent_yaml_path: str) -> dict:
+def _load_agent_yaml_with_extends(agent_yaml_path: str, defaults_path: str | None = None) -> dict:
     """Load agent YAML with extends directive support.
 
     Recursively loads parent configs via 'extends' and merges them.
-    Relative extends are resolved from the agent.yaml directory.
+
+    Supported extends values:
+    - 'defaults': resolves to defaults_path (from --defaults CLI flag)
+    - 'agent': resolves to agent.yaml in the parent directory (for interface configs)
+    - absolute path: used as-is
+    - relative path: resolved from the current file's directory
     """
     visited = set()
+
+    def _resolve_extends(extends: str, current_path: str) -> str:
+        if extends == "defaults":
+            if defaults_path is None:
+                raise FileNotFoundError(
+                    "No defaults_path configured but config extends 'defaults'"
+                )
+            return os.path.abspath(defaults_path)
+        elif extends == "agent":
+            return os.path.abspath(
+                os.path.join(os.path.dirname(current_path), "..", "agent.yaml")
+            )
+        elif extends.startswith("/"):
+            return extends
+        else:
+            parent_dir = os.path.dirname(current_path)
+            return os.path.normpath(os.path.join(parent_dir, extends))
 
     def _load_recursive(path: str) -> dict:
         abs_path = os.path.abspath(path)
@@ -48,13 +70,7 @@ def _load_agent_yaml_with_extends(agent_yaml_path: str) -> dict:
         if not extends:
             return config
 
-        # Resolve extends path relative to current file's directory
-        if extends.startswith("/"):
-            parent_path = extends
-        else:
-            parent_dir = os.path.dirname(abs_path)
-            parent_path = os.path.normpath(os.path.join(parent_dir, extends))
-
+        parent_path = _resolve_extends(extends, abs_path)
         parent_config = _load_recursive(parent_path)
 
         # Deep merge: parent is base, current file overrides
@@ -82,6 +98,7 @@ class AgentConfig:
     name: str
     config_dir: str
     defaults_path: str = "configs/defaults.yaml"
+    trace_collector: object | None = None  # TraceCollector, duck-typed
 
 
 class Agent:
@@ -101,7 +118,7 @@ class Agent:
 
         # Load raw agent YAML with extends support and validate with Pydantic
         agent_yaml_path = os.path.join(config.config_dir, "agent.yaml")
-        self._agent_yaml = _load_agent_yaml_with_extends(agent_yaml_path)
+        self._agent_yaml = _load_agent_yaml_with_extends(agent_yaml_path, config.defaults_path)
         self._agent_config = AgentYAMLConfig(**self._agent_yaml)
         runtime_conf = self._agent_config.runtime
 
@@ -136,8 +153,12 @@ class Agent:
                 mcp_prompt_reader=lambda name, args=None, server_name=None: (
                     self._mcp_manager.get_prompt(name, args, server_name=server_name)
                 ),
+                trace_collector=config.trace_collector,
             )
         )
+
+        # Store trace collector reference for runtime-level trace events
+        self._trace = config.trace_collector
 
         # Tools
         self._tool_executor = tool_executor or ToolExecutor()
@@ -581,6 +602,23 @@ class Agent:
                 tool_state_machine=ctx.state_machine,
             )
 
+        # Emit llm_response trace event
+        if self._trace:
+            self._trace.emit("llm_response", {
+                "role": "assistant",
+                "content_preview": str(loop_result.response_text)[:200]
+                if loop_result.response_text
+                else "",
+                "content_tokens": len(str(loop_result.response_text)) // 4
+                if loop_result.response_text
+                else 0,
+                "tool_calls": [tc.tool_name for tc in loop_result.tool_calls],
+                "iterations": loop_result.iterations,
+                "input_tokens": loop_result.total_input_tokens,
+                "output_tokens": loop_result.total_output_tokens,
+                "cached_tokens": loop_result.cached_tokens,
+            }, duration_ms=loop_result.duration_ms)
+
         # Record in session — group tool calls by loop iteration so the
         # assistant message contains all tool_calls from the same LLM response
         # (required by OpenAI message format).
@@ -640,6 +678,13 @@ class Agent:
             session_created_at=session.created_at.timestamp(),
             tool_state_machine=ctx.state_machine,
         )
+
+        # End trace turn AFTER collect_metrics so zones + metrics events
+        # land in the current turn. post_process fires async and its
+        # "post_process" event will be captured in the next turn or dropped —
+        # zones/metrics already carry the same data synchronously.
+        if self._trace:
+            self._trace.end_turn()
 
         # Clean up ephemeral session
         if trigger.session_lifecycle == "ephemeral":
