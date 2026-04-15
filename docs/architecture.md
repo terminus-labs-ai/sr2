@@ -152,3 +152,32 @@ Key differences from the agent runtime:
 - **Session tracking by system prompt hash** — Claude Code's system prompt is session-specific, so hashing it naturally groups related requests
 
 The bridge reuses the same CompactionEngine, ConversationManager, and SummarizationEngine as the agent runtime, just wired differently. See [Bridge Guide](guide-bridge.md).
+
+## Pipeline Inspection
+
+Every pipeline invocation can be traced via the **TraceCollector** subsystem. Trace events are emitted at each stage (resolve, retrieve, compact, cache) with timing, token counts, and diagnostics.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     TraceCollector                          │
+│                                                             │
+│  Components emit:                                           │
+│    PipelineEngine  ──► emit("resolve", {layers, tokens})    │
+│    HybridRetriever ──► emit("retrieve", {candidates, k})   │
+│    CompactionEngine──► emit("compact", {original, result})  │
+│    Runtime         ──► emit("cache", {hit_rate, prefix})    │
+│                                                             │
+│  Ring buffer (100 turns) ─► on_turn_complete callbacks      │
+│                              │                              │
+│                     ┌────────▼────────┐                     │
+│                     │  TraceRenderer  │                     │
+│                     │  default|full|  │                     │
+│                     │  brief          │                     │
+│                     └─────────────────┘                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- **Always available** — TraceCollector is wired in both agent runtime and bridge
+- **Zero overhead when unused** — events are only collected if a collector is attached
+- **`--inspect` flag** — enables CLI rendering (`default`, `full`, or `brief` modes)
+- **Programmatic access** — `trace_collector.get_session_traces(session_id)` returns structured `TurnTrace` objects

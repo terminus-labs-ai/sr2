@@ -19,6 +19,9 @@ uv run sr2-agent configs/agents/edi
 #   --name EDI               Override agent name
 #   --defaults path.yaml     Custom defaults file
 #   --log-level DEBUG        Verbose logging
+#   --inspect                Pipeline inspector (default mode)
+#   --inspect=full           Full trace with all event data
+#   --inspect=brief          One-line-per-turn summary
 ```
 
 Once running with `--http`, open the built-in chat UI at [http://localhost:8008](http://localhost:8008), or talk to it via curl:
