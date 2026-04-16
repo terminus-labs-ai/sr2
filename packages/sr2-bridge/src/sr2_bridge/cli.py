@@ -72,6 +72,11 @@ def load_config(args: argparse.Namespace) -> dict:
         with open(config_path) as f:
             raw = yaml.safe_load(f) or {}
 
+        # Expand ${VAR} and ${VAR:-default} patterns in all string values
+        from sr2.config.loader import expand_env_vars
+
+        raw = expand_env_vars(raw)
+
     # Ensure bridge section exists
     bridge = raw.setdefault("bridge", {})
 

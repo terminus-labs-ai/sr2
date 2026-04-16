@@ -911,6 +911,7 @@ class SR2:
         session_id: str,
         system_prompt: str | None = None,
         retrieval_query: str | None = None,
+        agent_name: str | None = None,
     ) -> "ProxyResult":
         """Optimize a pre-built turn list (proxy/bridge mode).
 
@@ -919,10 +920,42 @@ class SR2:
         summarization → scope detection → memory retrieval pipeline that
         ``process()`` uses, but without resolver-based content layers.
 
+        Args:
+            agent_name: Optional per-request override for scope_config.agent_name.
+                When set (e.g. from X-SR2-Agent-Name header), private memory
+                scopes use this identity instead of the YAML-configured default.
+
         Returns a ProxyResult with zones, system injection text, and
         compaction/summarization results so the bridge can rebuild its
         response.
         """
+        # Apply per-request agent_name override to scope config
+        _scope_override = None
+        if agent_name and self._scope_config_resolved:
+            _scope_override = self._scope_config_resolved.model_copy(
+                update={"agent_name": agent_name}
+            )
+            self._retriever._scope_config = _scope_override
+            self._extractor._scope_config = _scope_override
+
+        try:
+            return await self._proxy_optimize_inner(
+                new_turns, session_id, system_prompt, retrieval_query,
+            )
+        finally:
+            # Restore original scope config if we overrode it
+            if _scope_override:
+                self._retriever._scope_config = self._scope_config_resolved
+                self._extractor._scope_config = self._scope_config_resolved
+
+    async def _proxy_optimize_inner(
+        self,
+        new_turns: list[ConversationTurn],
+        session_id: str,
+        system_prompt: str | None = None,
+        retrieval_query: str | None = None,
+    ) -> "ProxyResult":
+        """Inner implementation of proxy_optimize (extracted for scope override safety)."""
         # Trace: begin turn
         if self._trace:
             self._trace.begin_turn(
@@ -1059,6 +1092,7 @@ class SR2:
         session_id: str,
         turn_number: int = 0,
         current_context: dict | None = None,
+        agent_name: str | None = None,
     ) -> None:
         """Post-process after a proxied response completes.
 
@@ -1069,7 +1103,20 @@ class SR2:
         Auto-closes the trace turn when done.  Because the bridge fires this
         via ``create_task`` (fire-and-forget), the trace must be finalized
         here — ``proxy_end_turn()`` is never called externally.
+
+        Args:
+            agent_name: Optional per-request override for scope_config.agent_name.
+                When set, memory extraction stamps memories with this agent identity.
         """
+        # Apply per-request agent_name override to scope config
+        _scope_override = None
+        if agent_name and self._scope_config_resolved:
+            _scope_override = self._scope_config_resolved.model_copy(
+                update={"agent_name": agent_name}
+            )
+            self._retriever._scope_config = _scope_override
+            self._extractor._scope_config = _scope_override
+
         turn = ConversationTurn(
             turn_number=turn_number,
             role="assistant",
@@ -1113,6 +1160,10 @@ class SR2:
         except Exception:
             logger.error("proxy_post_process failed", exc_info=True)
         finally:
+            # Restore original scope config if we overrode it
+            if _scope_override:
+                self._retriever._scope_config = self._scope_config_resolved
+                self._extractor._scope_config = self._scope_config_resolved
             # Always close the trace turn — this is the last action in the
             # proxy pipeline.  Listeners (inspector log, etc.) fire here.
             if self._trace:

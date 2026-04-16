@@ -10,6 +10,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 
 from sr2_bridge.adapters.anthropic import AnthropicAdapter, transform_system_prompt
+from sr2_bridge.adapters.base import BridgeAdapter
+from sr2_bridge.adapters.openai import OpenAIAdapter
 from sr2_bridge.config import BridgeConfig
 from sr2_bridge.engine import BridgeEngine
 from sr2_bridge.forwarder import BridgeForwarder
@@ -44,6 +46,26 @@ def _rewrite_model(body: dict, fwd_config) -> None:
         logger.debug("Model rewrite: %s -> %s", original_model, body["model"])
 
 
+def _extract_agent_name(headers: dict[str, str]) -> str | None:
+    """Extract agent name from headers.
+
+    Checks X-SR2-Agent-Name first. Falls back to parsing the agent name
+    from X-SR2-Session-ID when it uses the ``name,X-SR2-Agent-Name: value``
+    convention that Claude Code emits.
+    """
+    agent_name = headers.get("x-sr2-agent-name")
+    if agent_name:
+        return agent_name
+
+    session_id = headers.get("x-sr2-session-id", "")
+    marker = "X-SR2-Agent-Name: "
+    idx = session_id.find(marker)
+    if idx != -1:
+        return session_id[idx + len(marker):]
+
+    return None
+
+
 def _log_token_reduction(
     session_id: str, messages: list[dict], optimized_messages: list[dict]
 ) -> None:
@@ -63,11 +85,13 @@ def _log_token_reduction(
 def _build_streaming_response(
     forwarder: BridgeForwarder,
     engine: BridgeEngine,
-    adapter: AnthropicAdapter,
+    adapter: BridgeAdapter,
     body: dict,
     headers: dict[str, str],
     session: BridgeSession,
     query_params: str | None,
+    upstream_path: str = "/v1/messages",
+    agent_name: str | None = None,
 ) -> StreamingResponse:
     """Build a streaming response that captures text for post-processing."""
     return StreamingResponse(
@@ -79,6 +103,8 @@ def _build_streaming_response(
             headers,
             session,
             query_params=query_params,
+            upstream_path=upstream_path,
+            agent_name=agent_name,
         ),
         media_type="text/event-stream",
         headers={
@@ -94,10 +120,11 @@ async def _build_sync_response(
     body: dict,
     headers: dict[str, str],
     query_params: str | None,
+    upstream_path: str = "/v1/messages",
 ) -> Response:
     """Build a non-streaming response."""
     response = await forwarder.forward(
-        "/v1/messages",
+        upstream_path,
         body,
         headers,
         query_params=query_params or None,
@@ -190,7 +217,8 @@ def create_bridge_app(
             logger.info("SR2 Bridge stopped")
 
     app = FastAPI(title="SR2 Bridge", lifespan=lifespan)
-    adapter = AnthropicAdapter(tool_type_overrides=bridge_config.tool_type_overrides or None)
+    anthropic_adapter = AnthropicAdapter(tool_type_overrides=bridge_config.tool_type_overrides or None)
+    openai_adapter = OpenAIAdapter(tool_type_overrides=bridge_config.tool_type_overrides or None)
     _key_cache = key_cache or APIKeyCache()
 
     # Track startup time for health endpoint
@@ -208,8 +236,11 @@ def create_bridge_app(
         # Cache API key for bridge-internal LLM calls
         _key_cache.update(headers)
 
+        # Extract per-request agent identity for memory scoping
+        agent_name = _extract_agent_name(headers)
+
         # Extract messages and identify session
-        system, messages = adapter.extract_messages(body)
+        system, messages = anthropic_adapter.extract_messages(body)
         session_id = session_tracker.identify(body, headers, system)
         session = session_tracker.get(session_id)
 
@@ -218,10 +249,11 @@ def create_bridge_app(
             request_logger.log_incoming(session_id, system, messages, body)
 
         logger.debug(
-            "Session %s: %d messages, stream=%s",
+            "Session %s: %d messages, stream=%s, agent=%s",
             session_id,
             len(messages),
             is_streaming,
+            agent_name or "(default)",
         )
 
         # Apply system prompt transform (before SR2 injection)
@@ -241,7 +273,8 @@ def create_bridge_app(
                 system=system,
                 messages=messages,
                 session=session,
-                adapter=adapter,
+                adapter=anthropic_adapter,
+                agent_name=agent_name,
             )
         except Exception:
             logger.exception("Optimization failed for session %s, forwarding original", session_id)
@@ -249,7 +282,7 @@ def create_bridge_app(
             optimized_messages = messages
 
         # Rebuild body with optimized messages
-        optimized_body = adapter.rebuild_body(body, optimized_messages, system_injection)
+        optimized_body = anthropic_adapter.rebuild_body(body, optimized_messages, system_injection)
         _log_token_reduction(session_id, messages, optimized_messages)
 
         # Log outgoing body
@@ -270,11 +303,12 @@ def create_bridge_app(
             return _build_streaming_response(
                 forwarder,
                 engine,
-                adapter,
+                anthropic_adapter,
                 optimized_body,
                 headers,
                 session,
                 query_params=request.url.query,
+                agent_name=agent_name,
             )
         else:
             return await _build_sync_response(
@@ -283,6 +317,104 @@ def create_bridge_app(
                 optimized_body,
                 headers,
                 query_params=request.url.query,
+            )
+
+    # --- OpenAI Chat Completions proxy route ---
+
+    @app.post("/v1/chat/completions")
+    async def proxy_chat_completions(request: Request):
+        """OpenAI-compatible proxy route: optimize context, forward to upstream, stream back."""
+        body = await request.json()
+        headers = dict(request.headers)
+        is_streaming = body.get("stream", False)
+
+        # Cache API key for bridge-internal LLM calls
+        _key_cache.update(headers)
+
+        # Extract agent name for memory scoping (optional)
+        agent_name = _extract_agent_name(headers)
+
+        # Extract messages and identify session
+        system, messages = openai_adapter.extract_messages(body)
+        session_id = session_tracker.identify(body, headers, system)
+        session = session_tracker.get(session_id)
+
+        # Log incoming request
+        if request_logger:
+            request_logger.log_incoming(session_id, system, messages, body)
+
+        logger.debug(
+            "Session %s: %d messages (openai), stream=%s, agent=%s",
+            session_id,
+            len(messages),
+            is_streaming,
+            agent_name or "(default)",
+        )
+
+        # Apply system prompt transform (before SR2 injection)
+        if bridge_config.system_prompt.resolved_content:
+            original_system = system
+            system = transform_system_prompt(system, bridge_config.system_prompt)
+            # For OpenAI, system prompt is in messages — no top-level field to update.
+            # The rebuild_body() will re-inject the transformed system prompt.
+            if request_logger:
+                request_logger.log_transformed_system(session_id, original_system, system)
+
+        # Rewrite model if configured
+        _rewrite_model(body, bridge_config.forwarding)
+
+        # Optimize context
+        try:
+            system_injection, optimized_messages = await engine.optimize(
+                system=system,
+                messages=messages,
+                session=session,
+                adapter=openai_adapter,
+                agent_name=agent_name,
+            )
+        except Exception:
+            logger.exception("Optimization failed for session %s, forwarding original", session_id)
+            system_injection = None
+            optimized_messages = messages
+
+        # Rebuild body with optimized messages (re-inserts system message)
+        optimized_body = openai_adapter.rebuild_body(body, optimized_messages, system_injection)
+        _log_token_reduction(session_id, messages, optimized_messages)
+
+        # Log outgoing body
+        if request_logger:
+            request_logger.log_outgoing(session_id, optimized_body)
+
+        # Log message structure for debugging 400s
+        opt_msg_roles = [m.get("role", "?") for m in optimized_body.get("messages", [])]
+        logger.debug(
+            "Session %s: forwarding %d messages (openai), roles=%s, model=%s",
+            session_id,
+            len(opt_msg_roles),
+            opt_msg_roles,
+            optimized_body.get("model"),
+        )
+
+        if is_streaming:
+            return _build_streaming_response(
+                forwarder,
+                engine,
+                openai_adapter,
+                optimized_body,
+                headers,
+                session,
+                query_params=request.url.query,
+                upstream_path="/v1/chat/completions",
+                agent_name=agent_name,
+            )
+        else:
+            return await _build_sync_response(
+                forwarder,
+                session_id,
+                optimized_body,
+                headers,
+                query_params=request.url.query,
+                upstream_path="/v1/chat/completions",
             )
 
     # --- Infrastructure endpoints ---
@@ -342,17 +474,19 @@ def _log_task_exception(task: asyncio.Task) -> None:
 async def _stream_and_capture(
     forwarder: BridgeForwarder,
     engine: BridgeEngine,
-    adapter: AnthropicAdapter,
+    adapter: BridgeAdapter,
     body: dict,
     headers: dict[str, str],
     session: BridgeSession,
     query_params: str | None = None,
+    upstream_path: str = "/v1/messages",
+    agent_name: str | None = None,
 ):
     """Stream SSE from upstream, passthrough each chunk, accumulate response text."""
     accumulated: list[str] = []
 
     async for chunk in forwarder.forward_streaming(
-        "/v1/messages",
+        upstream_path,
         body,
         headers,
         query_params=query_params or None,
@@ -365,5 +499,5 @@ async def _stream_and_capture(
     # Post-process after stream completes (fire-and-forget with error logging)
     if accumulated:
         full_text = "".join(accumulated)
-        task = asyncio.create_task(engine.post_process(session, full_text))
+        task = asyncio.create_task(engine.post_process(session, full_text, agent_name=agent_name))
         task.add_done_callback(_log_task_exception)

@@ -77,8 +77,13 @@ class BridgeEngine:
         messages: list[dict],
         session: BridgeSession,
         adapter: BridgeAdapter,
+        agent_name: str | None = None,
     ) -> tuple[str | None, list[dict]]:
         """Optimize messages using SR2 pipeline.
+
+        Args:
+            agent_name: Optional per-request agent identity (from X-SR2-Agent-Name
+                header). When set, private memory scopes use this identity.
 
         Returns (system_injection_or_None, optimized_messages).
         """
@@ -89,7 +94,9 @@ class BridgeEngine:
             self._session_locks[session_id] = asyncio.Lock()
 
         async with self._session_locks[session_id]:
-            return await self._optimize_locked(system, messages, session, adapter)
+            return await self._optimize_locked(
+                system, messages, session, adapter, agent_name=agent_name,
+            )
 
     async def _optimize_locked(
         self,
@@ -97,6 +104,7 @@ class BridgeEngine:
         messages: list[dict],
         session: BridgeSession,
         adapter: BridgeAdapter,
+        agent_name: str | None = None,
     ) -> tuple[str | None, list[dict]]:
         """Actual optimization logic, called under per-session lock."""
         session_id = session.session_id
@@ -157,6 +165,7 @@ class BridgeEngine:
             session_id=session_id,
             system_prompt=system,
             retrieval_query=retrieval_query,
+            agent_name=agent_name,
         )
         elapsed = time.monotonic() - t0
 
@@ -211,11 +220,19 @@ class BridgeEngine:
                 exc_info=True,
             )
 
-    async def post_process(self, session: BridgeSession, assistant_text: str) -> None:
+    async def post_process(
+        self,
+        session: BridgeSession,
+        assistant_text: str,
+        agent_name: str | None = None,
+    ) -> None:
         """Post-process after a response stream completes.
 
         Delegates to SR2.proxy_post_process() for memory extraction,
         conflict detection, and compaction.
+
+        Args:
+            agent_name: Optional per-request agent identity for memory extraction.
         """
         turn_number = session.turn_counter
         session.turn_counter += 1
@@ -225,6 +242,7 @@ class BridgeEngine:
                 assistant_text=assistant_text,
                 session_id=session.session_id,
                 turn_number=turn_number,
+                agent_name=agent_name,
             )
         except Exception:
             logger.warning(

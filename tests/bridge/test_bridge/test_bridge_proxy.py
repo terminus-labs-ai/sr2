@@ -21,6 +21,7 @@ from sr2.compaction.engine import ConversationTurn
 from sr2.config.models import CompactionConfig, PipelineConfig
 
 from sr2_bridge.adapters.anthropic import AnthropicAdapter
+from sr2_bridge.adapters.openai import OpenAIAdapter
 from sr2_bridge.app import create_bridge_app, _is_fast_model
 from sr2_bridge.bridge_metrics import BridgeMetricsExporter
 from sr2_bridge.config import BridgeConfig, BridgeSessionConfig
@@ -192,6 +193,310 @@ class TestAnthropicAdapter:
         turns = self.adapter.messages_to_turns(original_messages, 0)
         rebuilt = self.adapter.turns_to_messages(turns, original_messages)
         # Raw turns should preserve originals
+        assert rebuilt[0] is original_messages[0]
+        assert rebuilt[1] is original_messages[1]
+
+
+class TestOpenAIAdapter:
+    """Test OpenAI wire-format adapter."""
+
+    def setup_method(self):
+        self.adapter = OpenAIAdapter()
+
+    # --- extract_messages ---
+
+    def test_extract_system_message(self):
+        body = {
+            "messages": [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        system, messages = self.adapter.extract_messages(body)
+        assert system == "You are helpful."
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+
+    def test_extract_developer_message(self):
+        body = {
+            "messages": [
+                {"role": "developer", "content": "Dev instructions."},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        system, messages = self.adapter.extract_messages(body)
+        assert system == "Dev instructions."
+        assert len(messages) == 1
+
+    def test_extract_no_system(self):
+        body = {"messages": [{"role": "user", "content": "Hello"}]}
+        system, messages = self.adapter.extract_messages(body)
+        assert system is None
+        assert len(messages) == 1
+
+    def test_extract_multiple_system_messages(self):
+        body = {
+            "messages": [
+                {"role": "system", "content": "Part one."},
+                {"role": "system", "content": "Part two."},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        system, messages = self.adapter.extract_messages(body)
+        assert "Part one." in system
+        assert "Part two." in system
+        assert len(messages) == 1
+
+    def test_extract_multipart_system_content(self):
+        body = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Line one."},
+                        {"type": "text", "text": "Line two."},
+                    ],
+                },
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        system, messages = self.adapter.extract_messages(body)
+        assert "Line one." in system
+        assert "Line two." in system
+
+    # --- rebuild_body ---
+
+    def test_rebuild_preserves_non_message_fields(self):
+        body = {
+            "model": "gpt-4",
+            "temperature": 0.7,
+            "messages": [
+                {"role": "system", "content": "Base."},
+                {"role": "user", "content": "Hi"},
+            ],
+        }
+        rebuilt = self.adapter.rebuild_body(body, [{"role": "user", "content": "hi"}], None)
+        assert rebuilt["model"] == "gpt-4"
+        assert rebuilt["temperature"] == 0.7
+
+    def test_rebuild_with_system_injection(self):
+        body = {
+            "messages": [
+                {"role": "system", "content": "Base prompt."},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        _, messages = self.adapter.extract_messages(body)
+        rebuilt = self.adapter.rebuild_body(body, messages, "Injected summary.")
+        # System message should be first with injection prepended
+        assert rebuilt["messages"][0]["role"] == "system"
+        assert rebuilt["messages"][0]["content"].startswith("Injected summary.")
+        assert "Base prompt." in rebuilt["messages"][0]["content"]
+
+    def test_rebuild_injection_creates_system_when_absent(self):
+        body = {"messages": [{"role": "user", "content": "Hi"}]}
+        rebuilt = self.adapter.rebuild_body(body, [{"role": "user", "content": "Hi"}], "Summary.")
+        assert rebuilt["messages"][0]["role"] == "system"
+        assert rebuilt["messages"][0]["content"] == "Summary."
+
+    def test_rebuild_preserves_developer_role(self):
+        body = {
+            "messages": [
+                {"role": "developer", "content": "Dev prompt."},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        _, messages = self.adapter.extract_messages(body)
+        rebuilt = self.adapter.rebuild_body(body, messages, "Injected.")
+        assert rebuilt["messages"][0]["role"] == "developer"
+
+    # --- parse_sse_text ---
+
+    def test_parse_text_delta(self):
+        chunk = b'data: {"id":"chatcmpl-123","choices":[{"index":0,"delta":{"content":"Hello"}}]}\n'
+        assert self.adapter.parse_sse_text(chunk) == "Hello"
+
+    def test_parse_non_content_event(self):
+        chunk = b'data: {"id":"chatcmpl-123","choices":[{"index":0,"delta":{"role":"assistant"}}]}\n'
+        assert self.adapter.parse_sse_text(chunk) is None
+
+    def test_parse_done_signal(self):
+        chunk = b"data: [DONE]\n"
+        assert self.adapter.parse_sse_text(chunk) is None
+
+    def test_parse_event_line(self):
+        chunk = b"event: message\n"
+        assert self.adapter.parse_sse_text(chunk) is None
+
+    # --- messages_to_turns ---
+
+    def test_text_message_to_turn(self):
+        messages = [{"role": "user", "content": "Hello world"}]
+        turns = self.adapter.messages_to_turns(messages, turn_counter_start=0)
+        assert len(turns) == 1
+        assert turns[0].role == "user"
+        assert turns[0].content == "Hello world"
+        assert turns[0].turn_number == 0
+
+    def test_tool_call_message_to_turn(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Let me search.",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": '{"q": "test"}'},
+                    }
+                ],
+            }
+        ]
+        turns = self.adapter.messages_to_turns(messages, turn_counter_start=5)
+        assert len(turns) == 1
+        assert turns[0].turn_number == 5
+        assert "[tool_call: search" in turns[0].content
+        assert "Let me search." in turns[0].content
+        assert turns[0].content_type == "tool_output"
+
+    def test_tool_message_to_turn(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path": "/etc/hosts"}'},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc",
+                "content": "127.0.0.1 localhost",
+            },
+        ]
+        turns = self.adapter.messages_to_turns(messages, turn_counter_start=0)
+        assert len(turns) == 2
+        assert turns[1].role == "user"  # tool normalized to user
+        assert turns[1].content_type == "file_content"  # read_file classified
+        assert "127.0.0.1 localhost" in turns[1].content
+
+    def test_turn_numbering_sequential(self):
+        messages = [
+            {"role": "user", "content": "First"},
+            {"role": "assistant", "content": "Second"},
+            {"role": "user", "content": "Third"},
+        ]
+        turns = self.adapter.messages_to_turns(messages, turn_counter_start=10)
+        assert [t.turn_number for t in turns] == [10, 11, 12]
+
+    def test_original_message_preserved_in_metadata(self):
+        msg = {"role": "user", "content": "Hello"}
+        turns = self.adapter.messages_to_turns([msg], turn_counter_start=0)
+        assert turns[0].metadata["_original_message"] is msg
+
+    # --- turns_to_messages ---
+
+    def test_compacted_turn_becomes_plain_text(self):
+        turn = ConversationTurn(
+            turn_number=0, role="user", content="Compacted content", compacted=True
+        )
+        messages = self.adapter.turns_to_messages([turn], [])
+        assert messages == [{"role": "user", "content": "Compacted content"}]
+
+    def test_compacted_tool_turn_becomes_user(self):
+        """Compacted tool message should become user role (not tool without tool_call_id)."""
+        original = {"role": "tool", "tool_call_id": "call_123", "content": "result data"}
+        turn = ConversationTurn(
+            turn_number=0,
+            role="user",
+            content="Compacted tool result",
+            compacted=True,
+            metadata={"_original_message": original},
+        )
+        messages = self.adapter.turns_to_messages([turn], [original])
+        assert messages[0]["role"] == "user"
+        assert "tool_call_id" not in messages[0]
+
+    def test_raw_turn_preserves_original(self):
+        original = {"role": "user", "content": "Hello"}
+        turn = ConversationTurn(
+            turn_number=0,
+            role="user",
+            content="Hello",
+            metadata={"_original_message": original},
+        )
+        messages = self.adapter.turns_to_messages([turn], [original])
+        assert messages[0] is original
+
+    def test_orphaned_tool_message_flattened(self):
+        """Tool message whose tool_call was compacted should be flattened."""
+        # Assistant with tool_calls was compacted (no tool_calls in output)
+        compacted_assistant = ConversationTurn(
+            turn_number=0,
+            role="assistant",
+            content="I searched for the file.",
+            compacted=True,
+        )
+        # Tool message still references the compacted tool_call
+        tool_original = {"role": "tool", "tool_call_id": "call_xyz", "content": "file contents"}
+        tool_turn = ConversationTurn(
+            turn_number=1,
+            role="user",
+            content="[tool_result: read_file]\nfile contents",
+            metadata={"_original_message": tool_original},
+        )
+        messages = self.adapter.turns_to_messages(
+            [compacted_assistant, tool_turn], []
+        )
+        # Tool message should be flattened to user message (no tool_call_id)
+        assert messages[1]["role"] == "user"
+        assert "tool_call_id" not in messages[1]
+
+    def test_live_tool_call_preserved(self):
+        """Tool message whose tool_call is still present should be preserved."""
+        assistant_original = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_live",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        }
+        assistant_turn = ConversationTurn(
+            turn_number=0,
+            role="assistant",
+            content="[tool_call: search({})]",
+            metadata={"_original_message": assistant_original},
+        )
+        tool_original = {"role": "tool", "tool_call_id": "call_live", "content": "results"}
+        tool_turn = ConversationTurn(
+            turn_number=1,
+            role="user",
+            content="[tool_result: search]\nresults",
+            metadata={"_original_message": tool_original},
+        )
+        messages = self.adapter.turns_to_messages(
+            [assistant_turn, tool_turn], [assistant_original, tool_original]
+        )
+        # Both should preserve originals
+        assert messages[0] is assistant_original
+        assert messages[1] is tool_original
+
+    def test_roundtrip_preserves_content(self):
+        """messages_to_turns → turns_to_messages roundtrip for raw turns."""
+        original_messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        turns = self.adapter.messages_to_turns(original_messages, 0)
+        rebuilt = self.adapter.turns_to_messages(turns, original_messages)
         assert rebuilt[0] is original_messages[0]
         assert rebuilt[1] is original_messages[1]
 

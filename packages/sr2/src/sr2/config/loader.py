@@ -30,6 +30,17 @@ def _expand_env(value: str) -> str:
     return _ENV_VAR_PATTERN.sub(_replace, value)
 
 
+def expand_env_vars(data: object) -> object:
+    """Recursively expand ${VAR} and ${VAR:-default} in all string values."""
+    if isinstance(data, str):
+        return _expand_env(data)
+    if isinstance(data, dict):
+        return {k: expand_env_vars(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [expand_env_vars(item) for item in data]
+    return data
+
+
 class ConfigLoader:
     def __init__(self, defaults_path: str | None = None):
         """Initialize with optional path to library defaults YAML."""
@@ -151,13 +162,7 @@ class ConfigLoader:
 
     def expand_env_vars(self, data: object) -> object:
         """Recursively expand ${VAR} and ${VAR:-default} in string values."""
-        if isinstance(data, str):
-            return _expand_env(data)
-        if isinstance(data, dict):
-            return {k: self.expand_env_vars(v) for k, v in data.items()}
-        if isinstance(data, list):
-            return [self.expand_env_vars(item) for item in data]
-        return data
+        return expand_env_vars(data)
 
     def merge(self, base: dict, override: dict) -> dict:
         """Deep merge override into base.
