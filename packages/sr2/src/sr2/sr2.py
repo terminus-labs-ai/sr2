@@ -462,6 +462,23 @@ class SR2:
                 "tool_choice": str(tool_choice),
             }, session_id=session_id)
 
+        # Compute session prefix budget for post-process compaction
+        if self._post_processor:
+            session_layer = None
+            for layer_cfg in config.layers:
+                for item_cfg in layer_cfg.contents:
+                    if item_cfg.source == "session":
+                        session_layer = layer_cfg.name
+                        break
+                if session_layer:
+                    break
+            budget = self._engine.session_prefix_tokens(session_layer) if session_layer else 0
+            self._post_processor.set_prefix_budget(budget)
+            self._post_processor.set_budget_info(
+                token_budget=self._token_budget,
+                current_tokens=compiled.tokens,
+            )
+
         return ProcessedContext(
             messages=messages,
             tool_schemas=filtered_schemas,
@@ -976,7 +993,12 @@ class SR2:
             self._conversation.add_turn(turn, session_id)
 
         # 2. Compaction (local, no circuit breaker needed)
-        compaction_result = self._conversation.run_compaction(session_id)
+        zones = self._conversation.zones(session_id)
+        compaction_result = self._conversation.run_compaction(
+            session_id,
+            token_budget=self._token_budget,
+            current_tokens=zones.total_tokens,
+        )
         if compaction_result and compaction_result.turns_compacted > 0:
             logger.info(
                 "proxy_optimize: session=%s compacted %d turns (%d -> %d tokens)",
@@ -1244,7 +1266,14 @@ class SR2:
                 self._conversation.add_turn(turn, session_id)
 
         # Phase 1: Run compaction
-        self._conversation.run_compaction(session_id)
+        session_prefix = self._engine.session_prefix_tokens(session_layer_name)
+        total_tokens = sum(c.tokens for contents in layers.values() for c in contents)
+        self._conversation.run_compaction(
+            session_id,
+            prefix_budget=session_prefix,
+            token_budget=budget,
+            current_tokens=total_tokens,
+        )
 
         # Phase 2: Check if we need summarization
         zones = self._conversation.zones(session_id)

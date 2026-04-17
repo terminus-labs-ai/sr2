@@ -5,7 +5,7 @@ import json
 import pytest
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.config.models import CompactionConfig, CompactionRuleConfig, SummarizationConfig
+from sr2.config.models import CompactionConfig, CompactionRuleConfig, CostGateConfig, SummarizationConfig
 from sr2.pipeline.conversation import ConversationManager, ConversationZones
 from sr2.summarization.engine import SummarizationEngine
 
@@ -15,6 +15,7 @@ def _make_compaction_engine(raw_window: int = 3) -> CompactionEngine:
         enabled=True,
         raw_window=raw_window,
         min_content_size=10,
+        cost_gate=CostGateConfig(enabled=False),
         rules=[CompactionRuleConfig(type="tool_output", strategy="schema_and_sample")],
     )
     return CompactionEngine(config)

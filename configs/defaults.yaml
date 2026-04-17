@@ -61,16 +61,20 @@ pipeline:
       # Enable cost-aware compaction gating. When True, each compaction
       # candidate is evaluated against cache invalidation costs before being
       # compacted.
-      enabled: false
+      enabled: true
       # Fallback model name for LiteLLM pricing lookup when the request model is
       # unknown (e.g., 'claude-sonnet-4-6').
-      fallback_model: null
+      fallback_model: claude-sonnet-4-6-20250514
       # Custom per-token pricing in $/MTok. Expected keys: 'input',
       # 'cache_write', 'cache_read'. Takes priority over LiteLLM lookup.
       custom_pricing: null
       # Minimum net dollar savings required for compaction to be allowed. Set to
       # 0 to allow any cost-positive compaction.
-      min_net_savings_usd: 0.001
+      min_net_savings_usd: 0.01
+      # Expected number of future turns in the session. Savings from compaction
+      # compound over each subsequent API call — this multiplier reflects that.
+      # Higher values favor compaction; lower values are conservative.
+      expected_remaining_turns: 10
 
     # Compaction rules. Each rule matches a content_type and applies a strategy.
     # Available strategies: schema_and_sample, reference, result_summary,
@@ -91,6 +95,35 @@ pipeline:
     llm_compaction_model: null
     # Maximum tokens for LLM compaction output (analysis + summary).
     llm_compaction_max_tokens: 1000
+    # Budget-pressure-aware compaction optimizer. When enabled, takes precedence
+    # over cost_gate for compaction decisions.
+    budget_optimizer:
+      # Enable budget-aware compaction optimization. When True, takes precedence
+      # over cost_gate for compaction decisions.
+      enabled: true
+      # Budget utilization fraction above which compaction becomes increasingly
+      # aggressive. Below this, only cost-positive compactions run.
+      pressure_threshold: 0.8
+      # Budget utilization fraction above which all cost checks are bypassed. If
+      # still over after compacting outside raw_window, raw_window turns become
+      # eligible.
+      force_threshold: 0.95
+      # Fallback model name for LiteLLM pricing lookup when the request model is
+      # unknown.
+      fallback_model: claude-sonnet-4-6-20250514
+      # Custom per-token pricing in $/MTok. Expected keys: 'input',
+      # 'cache_write', 'cache_read'. Takes priority over LiteLLM lookup.
+      custom_pricing: null
+      # Minimum net dollar savings at zero pressure. Reduced toward zero as
+      # pressure rises. Set to 0 to allow any cost-positive compaction.
+      min_net_savings_usd: 0.0
+      # Expected number of future turns. Savings compound over each subsequent
+      # API call — this multiplier reflects that.
+      expected_remaining_turns: 10
+      # Run actual compaction rules to estimate output size before deciding.
+      # When False, falls back to original_tokens // 4 heuristic.
+      dry_run: true
+
 
   # Conversation summarization settings
   summarization:

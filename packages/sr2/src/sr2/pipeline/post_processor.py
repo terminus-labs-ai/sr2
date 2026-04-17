@@ -54,6 +54,11 @@ class PostLLMProcessor:
         # Last compaction/summarization results for metrics collection
         self.last_compaction_result: "CompactionResult | None" = None
         self.last_summarization_result: "SummarizationResult | None" = None
+        # Prefix budget for cost gate optimization (set by SR2 facade after process())
+        self._prefix_budget: int | None = None
+        # Budget info for optimizer (set by SR2 facade after process())
+        self._token_budget: int | None = None
+        self._current_tokens: int | None = None
 
     async def process(
         self,
@@ -210,8 +215,23 @@ class PostLLMProcessor:
         """Restore extraction cursor (e.g. after deserialization)."""
         self._extraction_cursor[session_id] = cursor
 
+    def set_prefix_budget(self, budget: int | None) -> None:
+        """Set the prefix budget for cost gate optimization."""
+        self._prefix_budget = budget
+
+    def set_budget_info(self, token_budget: int | None, current_tokens: int | None) -> None:
+        """Set budget context for the BudgetOptimizer."""
+        self._token_budget = token_budget
+        self._current_tokens = current_tokens
+
     async def _run_compaction(self, session_id: str, model_hint: str | None = None) -> None:
-        self.last_compaction_result = self._conv.run_compaction(session_id=session_id, model_hint=model_hint)
+        self.last_compaction_result = self._conv.run_compaction(
+            session_id=session_id,
+            model_hint=model_hint,
+            prefix_budget=self._prefix_budget,
+            token_budget=self._token_budget,
+            current_tokens=self._current_tokens,
+        )
 
     async def _run_summarization(self, session_id: str) -> None:
         self.last_summarization_result = await self._conv.run_summarization(session_id=session_id)

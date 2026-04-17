@@ -16,7 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from sr2.compaction.engine import ConversationTurn
-from sr2.config.models import CompactionConfig, PipelineConfig
+from sr2.config.models import CompactionConfig, CostGateConfig, PipelineConfig
 from sr2.pipeline.conversation import ConversationZones
 
 from sr2_bridge.adapters.anthropic import AnthropicAdapter
@@ -85,7 +85,7 @@ def sample_zones():
 
 def _make_persistent_engine(db_path: str, raw_window: int = 5) -> BridgeEngine:
     """Create a BridgeEngine with persistence enabled."""
-    config = PipelineConfig(compaction=CompactionConfig(raw_window=raw_window))
+    config = PipelineConfig(compaction=CompactionConfig(raw_window=raw_window, cost_gate=CostGateConfig(enabled=False)))
     bridge_config = BridgeConfig(
         session=BridgeSessionConfig(persistence=True),
         memory=BridgeMemoryConfig(db_path=db_path),

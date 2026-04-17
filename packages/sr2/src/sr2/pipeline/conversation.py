@@ -74,7 +74,12 @@ class ConversationManager:
         )
 
     def run_compaction(
-        self, session_id: str = "default", model_hint: str | None = None
+        self,
+        session_id: str = "default",
+        model_hint: str | None = None,
+        prefix_budget: int | None = None,
+        token_budget: int | None = None,
+        current_tokens: int | None = None,
     ) -> CompactionResult | None:
         """Run compaction on raw zone, moving compacted turns to compacted zone.
 
@@ -105,7 +110,13 @@ class ConversationManager:
             )
             return None
 
-        result = self._compaction.compact(all_turns, model_hint=model_hint)
+        result = self._compaction.compact(
+            all_turns,
+            model_hint=model_hint,
+            prefix_budget=prefix_budget,
+            token_budget=token_budget,
+            current_tokens=current_tokens,
+        )
 
         if len(result.turns) > self._raw_window:
             zones.compacted = result.turns[: -self._raw_window]

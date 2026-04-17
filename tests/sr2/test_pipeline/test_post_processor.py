@@ -5,7 +5,7 @@ import json
 import pytest
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.config.models import CompactionConfig
+from sr2.config.models import CompactionConfig, CostGateConfig
 from sr2.memory.conflicts import ConflictDetector
 from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
@@ -19,6 +19,7 @@ def _make_compaction_engine(raw_window: int = 3) -> CompactionEngine:
         enabled=True,
         raw_window=raw_window,
         min_content_size=10,
+        cost_gate=CostGateConfig(enabled=False),
         rules=[],
     )
     return CompactionEngine(config)

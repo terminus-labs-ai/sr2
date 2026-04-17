@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.config.models import CompactionConfig, CompactionRuleConfig
+from sr2.config.models import CompactionConfig, CompactionRuleConfig, CostGateConfig
 from sr2.memory.extraction import ExtractionResult
 from sr2.pipeline.conversation import ConversationManager
 from sr2.pipeline.post_processor import PostLLMProcessor
@@ -17,6 +17,7 @@ def _make_compaction_engine() -> CompactionEngine:
             enabled=True,
             raw_window=20,
             min_content_size=10,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[CompactionRuleConfig(type="tool_output", strategy="schema_and_sample")],
         )
     )

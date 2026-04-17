@@ -6,7 +6,9 @@ import pytest
 
 from sr2.compaction.cost_gate import CompactionCandidate, CompactionCostGate
 from sr2.compaction.pricing import CachePricing, resolve_pricing
-from sr2.config.models import CostGateConfig
+from sr2.config.models import BudgetOptimizerConfig, CostGateConfig
+
+_NO_OPTIMIZER = BudgetOptimizerConfig(enabled=False)
 
 
 # ---------------------------------------------------------------------------
@@ -80,8 +82,8 @@ _SONNET_PRICING = CachePricing(
 )
 
 
-def _make_gate(min_net: float = 0.001) -> CompactionCostGate:
-    config = CostGateConfig(enabled=True, min_net_savings_usd=min_net)
+def _make_gate(min_net: float = 0.001, expected_remaining_turns: int = 1) -> CompactionCostGate:
+    config = CostGateConfig(enabled=True, min_net_savings_usd=min_net, expected_remaining_turns=expected_remaining_turns)
     gate = CompactionCostGate(config)
     # Pre-fill pricing cache to avoid litellm dependency
     gate._pricing_cache["__none__"] = _SONNET_PRICING
@@ -244,6 +246,17 @@ class TestShouldCompact:
         assert isinstance(decision.reason, str)
         assert decision.pricing_source == "test"
 
+    def test_expected_remaining_turns_multiplies_savings(self):
+        """Savings scale with expected_remaining_turns."""
+        gate_1x = _make_gate(expected_remaining_turns=1)
+        gate_10x = _make_gate(expected_remaining_turns=10)
+
+        d1 = gate_1x.should_compact(0, 5000, 200, 5000)
+        d10 = gate_10x.should_compact(0, 5000, 200, 5000)
+
+        assert d10.estimated_savings_usd == pytest.approx(d1.estimated_savings_usd * 10)
+        assert d10.estimated_invalidation_cost_usd == d1.estimated_invalidation_cost_usd
+
 
 # ---------------------------------------------------------------------------
 # Batch evaluation
@@ -310,6 +323,7 @@ class TestEngineIntegration:
         config = CompactionConfig(
             enabled=True,
             cost_gate=CostGateConfig(enabled=True),
+            budget_optimizer=_NO_OPTIMIZER,
             rules=[CompactionRuleConfig(type="tool_output", strategy="result_summary")],
         )
         engine = CompactionEngine(config)
@@ -333,6 +347,7 @@ class TestEngineIntegration:
             raw_window=1,
             min_content_size=10,
             cost_gate=CostGateConfig(enabled=True, min_net_savings_usd=999.0),  # absurdly high threshold
+            budget_optimizer=_NO_OPTIMIZER,
             rules=[CompactionRuleConfig(type="tool_output", strategy="result_summary")],
         )
         engine = CompactionEngine(config)
@@ -357,6 +372,7 @@ class TestEngineIntegration:
             raw_window=1,
             min_content_size=10,
             cost_gate=CostGateConfig(enabled=True, min_net_savings_usd=0.0),  # allow everything positive
+            budget_optimizer=_NO_OPTIMIZER,
             rules=[CompactionRuleConfig(type="tool_output", strategy="result_summary")],
         )
         engine = CompactionEngine(config)
@@ -373,3 +389,116 @@ class TestEngineIntegration:
         result = engine.compact(turns)
         # Gate should allow, and the tool_output rule should compact the large turn
         assert result.turns_compacted >= 1
+
+
+# ---------------------------------------------------------------------------
+# Prefix-budget integration (cost gate bypass for turns past the cached prefix)
+# ---------------------------------------------------------------------------
+
+class TestPrefixBudget:
+    """Tests for prefix-aware cost gate skipping."""
+
+    def _make_engine_with_high_threshold(self):
+        """Engine with cost gate that blocks everything (absurd threshold)."""
+        from sr2.compaction.engine import CompactionEngine
+        from sr2.config.models import CompactionConfig, CompactionRuleConfig
+
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=10,
+            cost_gate=CostGateConfig(enabled=True, min_net_savings_usd=999.0),
+            budget_optimizer=_NO_OPTIMIZER,
+            rules=[CompactionRuleConfig(type="tool_output", strategy="result_summary")],
+        )
+        engine = CompactionEngine(config)
+        engine._cost_gate._pricing_cache["__none__"] = _SONNET_PRICING
+        return engine
+
+    def test_prefix_budget_none_applies_cost_gate_to_all(self):
+        """Default prefix_budget=None: cost gate evaluates every turn."""
+        from sr2.compaction.engine import ConversationTurn
+
+        engine = self._make_engine_with_high_threshold()
+        turns = [
+            ConversationTurn(turn_number=0, role="assistant", content="x" * 2000, content_type="tool_output"),
+            ConversationTurn(turn_number=1, role="user", content="hello"),
+        ]
+        result = engine.compact(turns, prefix_budget=None)
+        assert result.turns_compacted == 0, "Cost gate should block all turns when prefix_budget is None"
+        assert result.prefix_exempt_turns == 0
+
+    def test_prefix_budget_zero_skips_cost_gate_for_all(self):
+        """prefix_budget=0: all turns are past prefix, cost gate skipped."""
+        from sr2.compaction.engine import ConversationTurn
+
+        engine = self._make_engine_with_high_threshold()
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="assistant",
+                content="line\n" * 500,
+                content_type="tool_output",
+            ),
+            ConversationTurn(turn_number=1, role="user", content="hello"),
+        ]
+        result = engine.compact(turns, prefix_budget=0)
+        assert result.turns_compacted >= 1, "Turns past prefix should bypass cost gate"
+        assert result.prefix_exempt_turns >= 1
+
+    def test_prefix_budget_splits_turns(self):
+        """Turns before prefix_budget get cost gate; turns after skip it."""
+        from sr2.compaction.engine import ConversationTurn
+
+        engine = self._make_engine_with_high_threshold()
+        # Turn 0: ~500 tokens (2000 chars // 4), within prefix budget of 600
+        # Turn 1: ~500 tokens, cumulative 1000 > prefix budget 600, past prefix
+        turns = [
+            ConversationTurn(turn_number=0, role="assistant", content="a" * 2000, content_type="tool_output"),
+            ConversationTurn(turn_number=1, role="assistant", content="b" * 2000, content_type="tool_output"),
+            ConversationTurn(turn_number=2, role="user", content="hello"),
+        ]
+        result = engine.compact(turns, prefix_budget=600)
+        # Turn 0 (500 tokens, cumulative 500 <= 600): cost gate applies -> blocked
+        # Turn 1 (500 tokens, cumulative 1000 > 600): past prefix -> compacted
+        assert result.turns_compacted == 1, "Only the turn past prefix should be compacted"
+        assert result.prefix_exempt_turns == 1
+
+    def test_prefix_exempt_count_in_result(self):
+        """CompactionResult.prefix_exempt_turns reflects correct count."""
+        from sr2.compaction.engine import ConversationTurn
+
+        engine = self._make_engine_with_high_threshold()
+        # 3 compactable tool_output turns, all past prefix (budget=0)
+        turns = [
+            ConversationTurn(turn_number=0, role="assistant", content="line\n" * 100, content_type="tool_output"),
+            ConversationTurn(turn_number=1, role="assistant", content="line\n" * 100, content_type="tool_output"),
+            ConversationTurn(turn_number=2, role="assistant", content="line\n" * 100, content_type="tool_output"),
+            ConversationTurn(turn_number=3, role="user", content="hello"),
+        ]
+        result = engine.compact(turns, prefix_budget=0)
+        assert result.prefix_exempt_turns == 3
+
+    def test_prefix_budget_with_no_cost_gate(self):
+        """When cost gate is disabled, prefix_budget has no effect."""
+        from sr2.compaction.engine import CompactionEngine, ConversationTurn
+        from sr2.config.models import CompactionConfig, CompactionRuleConfig
+
+        config = CompactionConfig(
+            enabled=True,
+            raw_window=1,
+            min_content_size=10,
+            cost_gate=CostGateConfig(enabled=False),
+            rules=[CompactionRuleConfig(type="tool_output", strategy="result_summary")],
+        )
+        engine = CompactionEngine(config)
+        turns = [
+            ConversationTurn(
+                turn_number=0, role="assistant",
+                content="line\n" * 500,
+                content_type="tool_output",
+            ),
+            ConversationTurn(turn_number=1, role="user", content="hello"),
+        ]
+        result = engine.compact(turns, prefix_budget=None)
+        assert result.turns_compacted >= 1
+        assert result.prefix_exempt_turns == 0

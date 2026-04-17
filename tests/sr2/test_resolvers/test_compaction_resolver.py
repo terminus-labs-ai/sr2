@@ -3,7 +3,7 @@
 import pytest
 
 from sr2.compaction.engine import CompactionEngine
-from sr2.config.models import CompactionConfig, CompactionRuleConfig
+from sr2.config.models import CompactionConfig, CompactionRuleConfig, CostGateConfig
 from sr2.resolvers.compaction_resolver import CompactionResolver
 from sr2.resolvers.registry import ResolverContext
 
@@ -20,6 +20,7 @@ def _make_engine(raw_window: int = 3) -> CompactionEngine:
         enabled=True,
         raw_window=raw_window,
         min_content_size=10,
+        cost_gate=CostGateConfig(enabled=False),
         rules=[
             CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
         ],

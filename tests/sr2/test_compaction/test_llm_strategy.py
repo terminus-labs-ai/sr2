@@ -10,7 +10,7 @@ from sr2.compaction.llm_strategy import (
     LLMCompactionResult,
     LLMCompactionStrategy,
 )
-from sr2.config.models import CompactionConfig
+from sr2.config.models import CompactionConfig, CostGateConfig
 
 
 def _make_turn(num: int, content: str = "turn content here") -> ConversationTurn:
@@ -154,16 +154,16 @@ class TestCompactionResultAnalysis:
 
 class TestCompactionConfigStrategy:
     def test_default_strategy_is_rule_based(self):
-        config = CompactionConfig()
+        config = CompactionConfig(cost_gate=CostGateConfig(enabled=False))
         assert config.strategy == "rule_based"
 
     def test_llm_strategy_config(self):
-        config = CompactionConfig(strategy="llm", llm_compaction_model="gpt-4o-mini")
+        config = CompactionConfig(strategy="llm", llm_compaction_model="gpt-4o-mini", cost_gate=CostGateConfig(enabled=False))
         assert config.strategy == "llm"
         assert config.llm_compaction_model == "gpt-4o-mini"
 
     def test_hybrid_strategy_config(self):
-        config = CompactionConfig(strategy="hybrid")
+        config = CompactionConfig(strategy="hybrid", cost_gate=CostGateConfig(enabled=False))
         assert config.strategy == "hybrid"
 
     def test_invalid_strategy_rejected(self):
@@ -173,5 +173,5 @@ class TestCompactionConfigStrategy:
             CompactionConfig(strategy="invalid")
 
     def test_llm_max_tokens_default(self):
-        config = CompactionConfig()
+        config = CompactionConfig(cost_gate=CostGateConfig(enabled=False))
         assert config.llm_compaction_max_tokens == 1000

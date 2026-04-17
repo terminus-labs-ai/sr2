@@ -91,12 +91,12 @@ class CompactionRuleConfig(BaseModel):
 
 class CostGateConfig(BaseModel):
     enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable cost-aware compaction gating. When True, each compaction candidate "
         "is evaluated against cache invalidation costs before being compacted.",
     )
     fallback_model: str | None = Field(
-        default=None,
+        default="claude-sonnet-4-6-20250514",
         description="Fallback model name for LiteLLM pricing lookup when the request model "
         "is unknown (e.g., 'claude-sonnet-4-6').",
     )
@@ -106,11 +106,77 @@ class CostGateConfig(BaseModel):
         "'cache_read'. Takes priority over LiteLLM lookup.",
     )
     min_net_savings_usd: float = Field(
-        default=0.001,
+        default=0.01,
         ge=0.0,
         description="Minimum net dollar savings required for compaction to be allowed. "
         "Set to 0 to allow any cost-positive compaction.",
     )
+    expected_remaining_turns: int = Field(
+        default=10,
+        ge=1,
+        description="Expected number of future turns in the session. Savings from "
+        "compaction compound over each subsequent API call — this multiplier "
+        "reflects that. Higher values favor compaction; lower values are conservative.",
+    )
+
+
+class BudgetOptimizerConfig(BaseModel):
+    enabled: bool = Field(
+        default=True,
+        description="Enable budget-aware compaction optimization. When True, takes precedence "
+        "over cost_gate for compaction decisions.",
+    )
+    pressure_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Budget utilization fraction above which compaction becomes increasingly "
+        "aggressive. Below this, only cost-positive compactions run.",
+    )
+    force_threshold: float = Field(
+        default=0.95,
+        ge=0.0,
+        le=1.0,
+        description="Budget utilization fraction above which all cost checks are bypassed. "
+        "If still over after compacting outside raw_window, raw_window turns become eligible.",
+    )
+    fallback_model: str | None = Field(
+        default="claude-sonnet-4-6-20250514",
+        description="Fallback model name for LiteLLM pricing lookup when the request model "
+        "is unknown.",
+    )
+    custom_pricing: dict[str, float] | None = Field(
+        default=None,
+        description="Custom per-token pricing in $/MTok. Expected keys: 'input', 'cache_write', "
+        "'cache_read'. Takes priority over LiteLLM lookup.",
+    )
+    min_net_savings_usd: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum net dollar savings at zero pressure. Reduced toward zero as "
+        "pressure rises. Set to 0 to allow any cost-positive compaction.",
+    )
+    expected_remaining_turns: int = Field(
+        default=10,
+        ge=1,
+        description="Expected number of future turns. Savings compound over each subsequent "
+        "API call — this multiplier reflects that.",
+    )
+    dry_run: bool = Field(
+        default=True,
+        description="Run actual compaction rules to estimate output size before deciding. "
+        "When False, falls back to original_tokens // 4 heuristic.",
+    )
+
+    @model_validator(mode="after")
+    def validate_thresholds(self):
+        if self.force_threshold <= self.pressure_threshold:
+            msg = (
+                f"force_threshold ({self.force_threshold}) must be greater than "
+                f"pressure_threshold ({self.pressure_threshold})"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class CompactionConfig(BaseModel):
@@ -147,6 +213,11 @@ class CompactionConfig(BaseModel):
         default=1000,
         ge=100,
         description="Maximum tokens for LLM compaction output (analysis + summary).",
+    )
+    budget_optimizer: BudgetOptimizerConfig = Field(
+        default_factory=BudgetOptimizerConfig,
+        description="Budget-pressure-aware compaction optimizer. When enabled, takes precedence "
+        "over cost_gate for compaction decisions.",
     )
 
 

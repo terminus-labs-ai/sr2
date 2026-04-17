@@ -64,6 +64,24 @@ class PipelineEngine:
         self._config_logged = False
         self.truncation_events: int = 0
 
+    def session_prefix_tokens(self, session_layer_name: str) -> int:
+        """Count how many session-layer tokens are within the cached prefix.
+
+        The prefix is built from consecutive cached layers starting from the
+        first layer.  The session layer is typically last and changes every turn,
+        so its prefix contribution is usually 0.
+        """
+        if session_layer_name not in self._layer_string_cache:
+            return 0
+        # Session layer is cached — but only counts if ALL prior layers are
+        # also cached (prefix is contiguous from the start).
+        for layer_name in self._layer_cache:
+            if layer_name == session_layer_name:
+                return sum(c.tokens for c in self._layer_cache[layer_name])
+            if layer_name not in self._layer_string_cache:
+                return 0
+        return 0
+
     def _log_resolved_config(self, config: PipelineConfig) -> None:
         """Log the fully resolved config once at INFO level."""
         if self._config_logged:

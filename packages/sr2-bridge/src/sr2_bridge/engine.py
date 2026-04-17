@@ -173,6 +173,19 @@ class BridgeEngine:
         if result.summarization_result:
             self._last_summarization_duration = elapsed
 
+        # Check if anything was actually modified
+        has_compaction = result.compaction_result and result.compaction_result.turns_compacted > 0
+        has_summarization = result.summarization_result is not None
+        has_injection = result.system_injection is not None
+
+        if not has_compaction and not has_summarization and not has_injection:
+            # Nothing changed — pass through original messages byte-identical
+            # to preserve Anthropic's prompt cache.
+            tokens_est = sum(len(str(m.get("content", ""))) // 4 for m in messages)
+            self._last_request_tokens[session_id] = (tokens_est, tokens_est)
+            await self._persist_session(session)
+            return None, messages
+
         # Convert turns back to wire format via adapter
         zones = result.zones
         all_turns = list(zones.compacted) + list(zones.raw)

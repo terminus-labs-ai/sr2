@@ -13,7 +13,7 @@ from sr2.resolvers.registry import ContentResolverRegistry, ResolverContext, Res
 from sr2.cache.policies import create_default_cache_registry
 from sr2.config.models import PipelineConfig, LayerConfig, ContentItemConfig
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.config.models import CompactionConfig, CompactionRuleConfig
+from sr2.config.models import CompactionConfig, CompactionRuleConfig, CostGateConfig
 from sr2.pipeline.conversation import ConversationManager
 from sr2.summarization.engine import SummarizationEngine
 from sr2.config.models import SummarizationConfig
@@ -100,6 +100,7 @@ def _make_compaction_config(raw_window=3):
     return CompactionConfig(
         enabled=True,
         raw_window=raw_window,
+        cost_gate=CostGateConfig(enabled=False),
         rules=[
             CompactionRuleConfig(
                 type="tool_output",

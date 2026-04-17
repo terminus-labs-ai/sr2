@@ -13,6 +13,7 @@ from sr2.compaction.engine import CompactionEngine, ConversationTurn
 from sr2.config.models import (
     CompactionConfig,
     CompactionRuleConfig,
+    CostGateConfig,
     SummarizationConfig,
 )
 from sr2.pipeline.conversation import ConversationManager
@@ -64,6 +65,7 @@ class TestCompactionOnlyIntegration:
             enabled=True,
             raw_window=self.RAW_WINDOW,
             min_content_size=10,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(
                     type="tool_output",
@@ -204,6 +206,7 @@ class TestCompactionOnlyIntegration:
             enabled=True,
             raw_window=2,
             min_content_size=10,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(
                     type="file_content",
@@ -338,6 +341,7 @@ class TestCompactionPlusSummarizationIntegration:
             enabled=True,
             raw_window=self.RAW_WINDOW,
             min_content_size=10,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(
                     type="tool_output",
@@ -512,6 +516,7 @@ class TestCompactionRuleMatching:
             enabled=True,
             raw_window=2,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(type="tool_output", strategy="schema_and_sample", recovery_hint=True),
                 CompactionRuleConfig(type="file_content", strategy="reference"),
@@ -569,6 +574,7 @@ class TestCompactionRuleMatching:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
             ],
@@ -592,6 +598,7 @@ class TestCompactionRuleMatching:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
             ],
@@ -619,6 +626,7 @@ class TestCompactionDisabled:
             enabled=False,
             raw_window=2,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
                 CompactionRuleConfig(type="file_content", strategy="reference"),
@@ -695,6 +703,7 @@ class TestRuleMatchingBehavior:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 # First rule for tool_output: schema_and_sample
                 CompactionRuleConfig(
@@ -743,6 +752,7 @@ class TestRuleMatchingBehavior:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
                 CompactionRuleConfig(type="file_content", strategy="reference"),

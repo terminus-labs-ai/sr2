@@ -1,11 +1,14 @@
 """Cache-cost-aware compaction gate.
 
-Decides whether compacting a turn is net-positive after accounting for
-prompt caching economics. Compaction saves input tokens but invalidates
-cached prefixes, forcing expensive cache writes.
+.. deprecated::
+    Use :class:`sr2.compaction.budget_optimizer.BudgetOptimizer` instead.
+    CompactionCostGate evaluates turns individually and does not account for
+    budget pressure or correct input token economics. It is retained for
+    backward compatibility when ``budget_optimizer.enabled`` is False.
 """
 
 import logging
+import warnings
 from dataclasses import dataclass
 
 from sr2.compaction.pricing import CachePricing, resolve_pricing
@@ -42,6 +45,13 @@ class CompactionCostGate:
     """Decides whether compacting a turn is cost-positive after cache economics."""
 
     def __init__(self, config: CostGateConfig):
+        warnings.warn(
+            "CompactionCostGate is deprecated. Use BudgetOptimizer "
+            "(compaction.budget_optimizer.enabled: true) for budget-aware "
+            "compaction decisions.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.config = config
         self._pricing_cache: dict[str, CachePricing] = {}
 
@@ -114,11 +124,13 @@ class CompactionCostGate:
                 )
 
         token_savings = turn_tokens - estimated_compacted_tokens
-        # Savings: in steady state, removed tokens were cached (cache_read cost).
-        # We avoid paying cache_read_cost per future turn by removing them.
-        savings_usd = token_savings * pricing.cache_read_cost
+        # Savings compound: removed tokens avoid cache_read_cost on every
+        # subsequent API call for the rest of the session.
+        remaining = self.config.expected_remaining_turns
+        savings_usd = token_savings * pricing.cache_read_cost * remaining
 
-        # Cache invalidation: downstream changes from cache_read to cache_write
+        # Cache invalidation: one-time cost — downstream tokens transition
+        # from cache_read to cache_write on the next request only.
         invalidation_cost_usd = total_tokens_after_turn * (
             pricing.cache_write_cost - pricing.cache_read_cost
         )

@@ -10,6 +10,7 @@ from sr2.compaction.engine import CompactionEngine
 from sr2.config.models import (
     CompactionConfig,
     CompactionRuleConfig,
+    CostGateConfig,
     LayerConfig,
     PipelineConfig,
     SummarizationConfig,
@@ -62,6 +63,7 @@ def _build_compaction_config(
         enabled=True,
         raw_window=raw_window,
         min_content_size=100,
+        cost_gate=CostGateConfig(enabled=False),
         rules=compaction_rules,
     )
 

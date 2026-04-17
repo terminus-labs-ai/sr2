@@ -3,7 +3,7 @@
 import pytest
 
 from sr2.compaction.engine import CompactionEngine, ConversationTurn
-from sr2.config.models import CompactionConfig, CompactionRuleConfig
+from sr2.config.models import CompactionConfig, CompactionRuleConfig, CostGateConfig
 
 
 def _make_config(raw_window: int = 3, min_content_size: int = 10) -> CompactionConfig:
@@ -12,6 +12,7 @@ def _make_config(raw_window: int = 3, min_content_size: int = 10) -> CompactionC
         enabled=True,
         raw_window=raw_window,
         min_content_size=min_content_size,
+        cost_gate=CostGateConfig(enabled=False),
         rules=[
             CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
         ],
@@ -368,6 +369,7 @@ class TestRecoveryHintInCompactedContent:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(
                     type="tool_output",
@@ -400,6 +402,7 @@ class TestRecoveryHintInCompactedContent:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(
                     type="file_content",
@@ -434,6 +437,7 @@ class TestRecoveryHintInCompactedContent:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(
                     type="code_execution",
@@ -465,6 +469,7 @@ class TestRecoveryHintInCompactedContent:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(
                     type="code_execution",
@@ -496,6 +501,7 @@ class TestRecoveryHintInCompactedContent:
             enabled=True,
             raw_window=1,
             min_content_size=5,
+            cost_gate=CostGateConfig(enabled=False),
             rules=[
                 CompactionRuleConfig(
                     type="tool_output",

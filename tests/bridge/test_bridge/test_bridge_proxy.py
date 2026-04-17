@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 from sr2.compaction.engine import ConversationTurn
-from sr2.config.models import CompactionConfig, PipelineConfig
+from sr2.config.models import CompactionConfig, CostGateConfig, PipelineConfig
 
 from sr2_bridge.adapters.anthropic import AnthropicAdapter
 from sr2_bridge.adapters.openai import OpenAIAdapter
@@ -78,15 +78,15 @@ class TestAnthropicAdapter:
     def test_rebuild_with_string_system_injection(self):
         body = {"system": "Base prompt.", "messages": []}
         rebuilt = self.adapter.rebuild_body(body, [], "Injected summary.")
-        assert rebuilt["system"].startswith("Injected summary.")
-        assert "Base prompt." in rebuilt["system"]
+        assert rebuilt["system"].startswith("Base prompt.")
+        assert "Injected summary." in rebuilt["system"]
 
     def test_rebuild_with_content_block_system_injection(self):
         body = {"system": [{"type": "text", "text": "Base."}], "messages": []}
         rebuilt = self.adapter.rebuild_body(body, [], "Summary.")
         assert isinstance(rebuilt["system"], list)
-        assert rebuilt["system"][0]["text"] == "Summary."
-        assert rebuilt["system"][1]["text"] == "Base."
+        assert rebuilt["system"][0]["text"] == "Base."
+        assert rebuilt["system"][1]["text"] == "Summary."
 
     def test_rebuild_injection_creates_system_when_absent(self):
         body = {"messages": []}
@@ -593,7 +593,7 @@ class TestBridgeEngine:
     """Test format-agnostic engine logic."""
 
     def _make_engine(self, raw_window: int = 5) -> BridgeEngine:
-        config = PipelineConfig(compaction=CompactionConfig(raw_window=raw_window))
+        config = PipelineConfig(compaction=CompactionConfig(raw_window=raw_window, cost_gate=CostGateConfig(enabled=False)))
         return BridgeEngine(config)
 
     def _make_session(self, session_id: str = "test") -> BridgeSession:
@@ -1009,7 +1009,7 @@ class TestCircuitBreakerIntegration:
         """Create engine with a failing summarization callable."""
         from sr2_bridge.config import BridgeLLMConfig, BridgeLLMModelConfig, BridgeDegradationConfig
 
-        config = PipelineConfig(compaction=CompactionConfig(raw_window=2))
+        config = PipelineConfig(compaction=CompactionConfig(raw_window=2, cost_gate=CostGateConfig(enabled=False)))
         bridge_config = BridgeConfig(
             llm=BridgeLLMConfig(
                 summarization=BridgeLLMModelConfig(

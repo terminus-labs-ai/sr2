@@ -2,6 +2,7 @@ import pytest
 from sr2.config.models import (
     CompactionConfig,
     ContentItemConfig,
+    CostGateConfig,
     LayerConfig,
     PipelineConfig,
     RetrievalConfig,
@@ -15,7 +16,7 @@ class TestValidateConfig:
         """A fully valid config with no issues returns an empty warnings list."""
         config = PipelineConfig(
             token_budget=32000,
-            compaction=CompactionConfig(enabled=False),
+            compaction=CompactionConfig(enabled=False, cost_gate=CostGateConfig(enabled=False)),
             summarization=SummarizationConfig(enabled=False),
             retrieval=RetrievalConfig(enabled=False),
             layers=[
@@ -34,7 +35,7 @@ class TestValidateConfig:
         """When sum of content max_tokens exceeds token_budget, raise ConfigValidationError."""
         config = PipelineConfig(
             token_budget=2000,
-            compaction=CompactionConfig(enabled=False),
+            compaction=CompactionConfig(enabled=False, cost_gate=CostGateConfig(enabled=False)),
             summarization=SummarizationConfig(enabled=False),
             retrieval=RetrievalConfig(enabled=False),
             layers=[
@@ -57,7 +58,7 @@ class TestValidateConfig:
         """Cache-killing layout: always_new layer before append_only layer raises error."""
         config = PipelineConfig(
             token_budget=32000,
-            compaction=CompactionConfig(enabled=False),
+            compaction=CompactionConfig(enabled=False, cost_gate=CostGateConfig(enabled=False)),
             summarization=SummarizationConfig(enabled=False),
             retrieval=RetrievalConfig(enabled=False),
             layers=[
@@ -87,7 +88,7 @@ class TestValidateConfig:
         """A config with no layers raises ConfigValidationError."""
         config = PipelineConfig(
             token_budget=32000,
-            compaction=CompactionConfig(enabled=False),
+            compaction=CompactionConfig(enabled=False, cost_gate=CostGateConfig(enabled=False)),
             summarization=SummarizationConfig(enabled=False),
             retrieval=RetrievalConfig(enabled=False),
             layers=[],
@@ -100,7 +101,7 @@ class TestValidateConfig:
         """Compaction enabled but no rules defined produces a warning."""
         config = PipelineConfig(
             token_budget=32000,
-            compaction=CompactionConfig(enabled=True, rules=[]),
+            compaction=CompactionConfig(enabled=True, rules=[], cost_gate=CostGateConfig(enabled=False)),
             summarization=SummarizationConfig(enabled=False),
             retrieval=RetrievalConfig(enabled=False),
             layers=[
@@ -119,7 +120,7 @@ class TestValidateConfig:
         """Summarization enabled but compaction disabled produces a warning."""
         config = PipelineConfig(
             token_budget=32000,
-            compaction=CompactionConfig(enabled=False),
+            compaction=CompactionConfig(enabled=False, cost_gate=CostGateConfig(enabled=False)),
             summarization=SummarizationConfig(enabled=True),
             retrieval=RetrievalConfig(enabled=False),
             layers=[

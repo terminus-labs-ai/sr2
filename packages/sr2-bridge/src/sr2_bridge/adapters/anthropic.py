@@ -103,18 +103,24 @@ class AnthropicAdapter:
         optimized_messages: list[dict],
         system_injection: str | None,
     ) -> dict:
-        """Rebuild Anthropic request body with optimized messages."""
+        """Rebuild Anthropic request body with optimized messages.
+
+        Summaries and memories are appended (not prepended) to the system
+        prompt so the original system prompt text remains a stable KV-cache
+        prefix. The injection content changes infrequently (only on
+        summarization or memory updates), so it also becomes part of the
+        cached prefix between those events.
+        """
         body = dict(original_body)
         body["messages"] = optimized_messages
 
         if system_injection:
             existing_system = body.get("system")
             if isinstance(existing_system, list):
-                # Prepend injection as a text block
                 injection_block = {"type": "text", "text": system_injection}
-                body["system"] = [injection_block] + existing_system
+                body["system"] = existing_system + [injection_block]
             elif existing_system:
-                body["system"] = f"{system_injection}\n\n{existing_system}"
+                body["system"] = f"{existing_system}\n\n{system_injection}"
             else:
                 body["system"] = system_injection
 
@@ -225,13 +231,29 @@ class AnthropicAdapter:
                             tool_name = tool_name_map.get(block.get("tool_use_id", ""))
                             break
 
+            # Anthropic wraps tool_result blocks in role="user" messages.
+            # Remap to "tool_result" so the compaction engine can compact them
+            # (it skips all role="user" turns).
+            effective_role = role
+            if role == "user" and isinstance(content, list):
+                has_tool_result = any(
+                    isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in content
+                )
+                has_text = any(
+                    isinstance(b, dict) and b.get("type") == "text" and b.get("text", "").strip()
+                    for b in content
+                )
+                if has_tool_result and not has_text:
+                    effective_role = "tool_result"
+
             meta = {"_original_message": msg}
             if tool_name:
                 meta["tool_name"] = tool_name
 
             turn = ConversationTurn(
                 turn_number=counter,
-                role=role,
+                role=effective_role,
                 content=content_str,
                 content_type=content_type,
                 metadata=meta,
@@ -263,12 +285,15 @@ class AnthropicAdapter:
         live_tool_use_ids: set[str] = set()
 
         for turn in turns:
+            # Map internal "tool_result" role back to Anthropic's "user"
+            wire_role = "user" if turn.role == "tool_result" else turn.role
+
             if turn.compacted:
-                messages.append({"role": turn.role, "content": turn.content})
+                messages.append({"role": wire_role, "content": turn.content})
             else:
                 original = turn.metadata.get("_original_message") if turn.metadata else None
                 if not original:
-                    messages.append({"role": turn.role, "content": turn.content})
+                    messages.append({"role": wire_role, "content": turn.content})
                     continue
 
                 msg_content = original.get("content", "")
@@ -285,7 +310,7 @@ class AnthropicAdapter:
 
                     if has_orphan:
                         # Flatten to plain text to avoid Anthropic 400
-                        messages.append({"role": turn.role, "content": turn.content})
+                        messages.append({"role": wire_role, "content": turn.content})
                         logger.debug(
                             "Flattened turn %d: orphaned tool_result (tool_use was compacted/summarized)",
                             turn.turn_number,

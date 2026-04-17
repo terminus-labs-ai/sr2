@@ -9,7 +9,9 @@ from sr2.compaction.engine import (
     CostGateResult,
     TurnCompactionDetail,
 )
-from sr2.config.models import CompactionConfig, CompactionRuleConfig, CostGateConfig
+from sr2.config.models import BudgetOptimizerConfig, CompactionConfig, CompactionRuleConfig, CostGateConfig
+
+_NO_OPTIMIZER = BudgetOptimizerConfig(enabled=False)
 
 
 def _long_content(lines: int = 20) -> str:
@@ -257,6 +259,7 @@ class TestCompactPopulatesDetails:
                 fallback_model="claude-sonnet-4-20250514",
                 min_net_savings_usd=0.0,  # Very permissive so it always allows
             ),
+            budget_optimizer=_NO_OPTIMIZER,
             rules=[
                 CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
             ],
@@ -288,6 +291,7 @@ class TestCompactPopulatesDetails:
                 fallback_model="claude-sonnet-4-20250514",
                 min_net_savings_usd=999999.0,  # Absurdly high threshold blocks everything
             ),
+            budget_optimizer=_NO_OPTIMIZER,
             rules=[
                 CompactionRuleConfig(type="tool_output", strategy="schema_and_sample"),
             ],
