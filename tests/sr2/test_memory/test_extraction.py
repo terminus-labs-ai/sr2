@@ -6,6 +6,7 @@ import pytest
 
 from sr2.config.models import MemoryScopeConfig
 from sr2.memory.extraction import MemoryExtractor
+from sr2.memory.schema import Memory
 from sr2.memory.store import InMemoryMemoryStore
 
 
@@ -523,3 +524,158 @@ class TestCommentaryBeforeJson:
         parsed = json.loads(result)
         assert len(parsed) == 1
         assert parsed[0]["key"] == "real"
+
+
+class TestKeySchemaEnforcement:
+    """Tests for key_schema enforcement — reject keys with non-schema prefixes."""
+
+    @pytest.mark.asyncio
+    async def test_allowed_prefix_passes(self, store):
+        """Memory with a key matching an allowed prefix is saved."""
+        response = json.dumps([
+            {"key": "user.preference.timezone", "value": "MST"},
+        ])
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        schema = [{"prefix": "user.preference"}, {"prefix": "project"}]
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm, store=store, key_schema=schema,
+        )
+        result = await extractor.extract("My timezone is MST")
+
+        assert len(result.memories) == 1
+        assert result.memories[0].key == "user.preference.timezone"
+
+    @pytest.mark.asyncio
+    async def test_disallowed_prefix_rejected(self, store):
+        """Memory with a key not matching any allowed prefix is filtered out."""
+        response = json.dumps([
+            {"key": "tasks.buy_groceries", "value": "Buy groceries"},
+            {"key": "career.current_role", "value": "Engineer"},
+            {"key": "user.preference.timezone", "value": "MST"},
+        ])
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        schema = [{"prefix": "user.preference"}, {"prefix": "project"}]
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm, store=store, key_schema=schema,
+        )
+        result = await extractor.extract("test")
+
+        assert len(result.memories) == 1
+        assert result.memories[0].key == "user.preference.timezone"
+
+    @pytest.mark.asyncio
+    async def test_no_schema_allows_all(self, store):
+        """Without key_schema, all prefixes are allowed (backward compat)."""
+        response = json.dumps([
+            {"key": "tasks.something", "value": "A task"},
+            {"key": "random.key", "value": "A value"},
+        ])
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        result = await extractor.extract("test")
+
+        assert len(result.memories) == 2
+
+    @pytest.mark.asyncio
+    async def test_all_rejected_returns_empty(self, store):
+        """When all LLM outputs have non-schema keys, result is empty."""
+        response = json.dumps([
+            {"key": "tasks.a", "value": "A"},
+            {"key": "career.b", "value": "B"},
+        ])
+
+        async def mock_llm(prompt: str) -> str:
+            return response
+
+        schema = [{"prefix": "user.preference"}]
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm, store=store, key_schema=schema,
+        )
+        result = await extractor.extract("test")
+
+        assert len(result.memories) == 0
+
+
+class TestKeyHints:
+    """Tests for existing key hints in extraction prompt."""
+
+    @pytest.mark.asyncio
+    async def test_key_hints_appear_in_prompt(self, store):
+        """When store has existing keys, they appear in the extraction prompt."""
+        # Pre-populate store with memories
+        mem1 = Memory(
+            key="user.preference.timezone", value="MST",
+            scope_ref="agent:test", access_count=10,
+        )
+        mem2 = Memory(
+            key="user.contact.employer", value="Acme",
+            scope_ref="agent:test", access_count=5,
+        )
+        await store.save(mem1)
+        await store.save(mem2)
+
+        captured_prompt = None
+
+        async def mock_llm(prompt: str) -> str:
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            return "[]"
+
+        scope_config = MemoryScopeConfig(
+            allowed_write=["private"], agent_name="test",
+        )
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm, store=store, scope_config=scope_config,
+        )
+        await extractor.extract("some conversation")
+
+        assert captured_prompt is not None
+        assert "user.preference.timezone" in captured_prompt
+        assert "user.contact.employer" in captured_prompt
+        assert "do NOT create synonyms" in captured_prompt
+
+    @pytest.mark.asyncio
+    async def test_no_hints_when_store_empty(self, store):
+        """No key hints section when store has no memories."""
+        captured_prompt = None
+
+        async def mock_llm(prompt: str) -> str:
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            return "[]"
+
+        scope_config = MemoryScopeConfig(
+            allowed_write=["private"], agent_name="test",
+        )
+        extractor = MemoryExtractor(
+            llm_callable=mock_llm, store=store, scope_config=scope_config,
+        )
+        await extractor.extract("some conversation")
+
+        assert captured_prompt is not None
+        assert "EXISTING KEYS" not in captured_prompt
+
+    @pytest.mark.asyncio
+    async def test_no_hints_without_scope_config(self, store):
+        """No key hints when no scope_config is set (no agent_name)."""
+        captured_prompt = None
+
+        async def mock_llm(prompt: str) -> str:
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            return "[]"
+
+        extractor = MemoryExtractor(llm_callable=mock_llm, store=store)
+        await extractor.extract("some conversation")
+
+        assert captured_prompt is not None
+        assert "EXISTING KEYS" not in captured_prompt

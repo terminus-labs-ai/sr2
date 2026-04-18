@@ -71,6 +71,7 @@ class MemoryExtractor:
         self._max = max_memories_per_turn
         self._embed = embed_callable
         self._scope_config = scope_config
+        self._key_hint_limit: int = 30  # overridden by MemoryConfig.key_hint_limit
         self._normalizer = ResponseNormalizer()
 
     async def extract(
@@ -96,7 +97,18 @@ class MemoryExtractor:
             conversation_id,
             turn_number,
         )
-        prompt = self._build_prompt(conversation_turn)
+        # Pre-fetch existing keys for hint injection (reduces synonym invention)
+        existing_keys: list[str] = []
+        if self._key_hint_limit > 0 and self._scope_config and self._scope_config.agent_name:
+            try:
+                scope_ref = f"agent:{self._scope_config.agent_name}"
+                existing_keys = await self._store.list_top_keys(
+                    scope_ref, limit=self._key_hint_limit,
+                )
+            except Exception:
+                logger.debug("Failed to fetch existing keys for hints", exc_info=True)
+
+        prompt = self._build_prompt(conversation_turn, existing_keys=existing_keys)
         raw_response = await self._llm(prompt)
         logger.debug(
             "Memory extraction: raw LLM response (%d chars): %.300s",
@@ -186,7 +198,9 @@ class MemoryExtractor:
         """Detect if running in task_runner/single-shot mode."""
         return bool(os.environ.get("SR2_TASK_SOURCE"))
 
-    def _build_prompt(self, conversation_turn: str) -> str:
+    def _build_prompt(
+        self, conversation_turn: str, existing_keys: list[str] | None = None,
+    ) -> str:
         """Build the extraction prompt, scoped to project, task, or private context."""
         schema_text = ""
         if self._key_schema:
@@ -201,6 +215,17 @@ class MemoryExtractor:
             schema_text += (
                 "Format: <prefix>.<specific_attribute> in lowercase with dots, no spaces.\n"
             )
+
+        # Key reuse hints: pass existing keys so the LLM reuses them
+        # instead of inventing synonyms
+        key_hints_text = ""
+        if existing_keys:
+            key_hints_text = (
+                "EXISTING KEYS (reuse these when the topic matches — "
+                "do NOT create synonyms or near-duplicates):\n"
+            )
+            for k in existing_keys:
+                key_hints_text += f"  - {k}\n"
 
         # Shared rule: never extract own execution errors
         do_not_extract_errors = """\
@@ -217,7 +242,7 @@ class MemoryExtractor:
             return f"""Extract technical findings, decisions, patterns, constraints, and reusable knowledge from this conversation.
 Output ONLY a JSON array. No markdown, no explanation.
 Each object: {{"key": "...", "value": "...", "memory_type": "identity|semi_stable|dynamic", "confidence_source": "explicit_statement|direct_answer|contextual_mention|inferred|offhand"}}
-{schema_text}
+{schema_text}{key_hints_text}
 EXTRACT: Research conclusions, API specifications, architectural decisions, implementation patterns, limitations discovered, and recommendations.
 DO NOT EXTRACT:
 - Raw data dumps, step-by-step reasoning, or tool call details
@@ -236,7 +261,7 @@ Conversation turn:
             return f"""Extract reusable implementation patterns and technical decisions from this task.
 Output ONLY a JSON array. No markdown, no explanation.
 Each object: {{"key": "...", "value": "...", "memory_type": "identity|semi_stable|dynamic", "confidence_source": "explicit_statement|direct_answer|contextual_mention|inferred|offhand"}}
-{schema_text}
+{schema_text}{key_hints_text}
 EXTRACT: Focus on:
 - Patterns that would help with FUTURE tasks (not just this one)
 - Coding conventions discovered in the codebase
@@ -259,7 +284,7 @@ Conversation turn:
             return f"""Extract durable, personal facts from this conversation turn.
 Output ONLY a JSON array. No markdown, no explanation.
 Each object: {{"key": "...", "value": "...", "memory_type": "identity|semi_stable|dynamic", "confidence_source": "explicit_statement|direct_answer|contextual_mention|inferred|offhand"}}
-{schema_text}
+{schema_text}{key_hints_text}
 EXTRACT: Personal facts, preferences, decisions, goals, relationships, and stable context about the user.
 DO NOT EXTRACT:
 - Tool call details, function names, search queries, or raw JSON/code
@@ -382,6 +407,17 @@ Conversation turn:
             if _JSON_VALUE.match(value):
                 filtered_count += 1
                 continue
+
+            # Enforce key_schema: reject keys not matching any allowed prefix
+            if self._key_schema:
+                allowed_prefixes = [s["prefix"] for s in self._key_schema]
+                if not any(key.startswith(prefix) for prefix in allowed_prefixes):
+                    logger.debug(
+                        "Memory extraction: key %r rejected (no matching key_schema prefix)",
+                        key,
+                    )
+                    filtered_count += 1
+                    continue
 
             mem_type = item.get("memory_type", "semi_stable")
             if mem_type not in STABILITY_DEFAULTS:

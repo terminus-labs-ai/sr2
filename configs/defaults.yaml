@@ -265,6 +265,9 @@ pipeline:
     # Maximum number of turns to process per extraction run. Limits LLM calls
     # per pipeline invocation.
     extraction_batch_size: 5
+    # Number of existing keys to include as reuse hints in the extraction
+    # prompt. Reduces synonym key invention. 0 disables hints.
+    key_hint_limit: 30
     # Enable mutual exclusion for extraction. When True, concurrent pipeline
     # invocations skip extraction if one is already running.
     extraction_mutex: true

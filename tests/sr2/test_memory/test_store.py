@@ -142,3 +142,83 @@ class TestInMemoryMemoryStore:
         result = await store.get(mem.id)
         assert result.value == "updated"
         assert await store.count() == 1
+
+
+class TestListTopKeys:
+    """Tests for list_top_keys()."""
+
+    @pytest.mark.asyncio
+    async def test_returns_keys_sorted_by_access_count(self, store):
+        """Keys returned in descending access_count order."""
+        await store.save(Memory(
+            key="user.name", value="Alice", scope_ref="agent:test", access_count=5,
+        ))
+        await store.save(Memory(
+            key="user.timezone", value="MST", scope_ref="agent:test", access_count=20,
+        ))
+        await store.save(Memory(
+            key="user.employer", value="Acme", scope_ref="agent:test", access_count=10,
+        ))
+
+        keys = await store.list_top_keys("agent:test")
+        assert keys == ["user.timezone", "user.employer", "user.name"]
+
+    @pytest.mark.asyncio
+    async def test_filters_by_scope_ref(self, store):
+        """Only keys from the specified scope_ref are returned."""
+        await store.save(Memory(
+            key="user.name", value="Alice", scope_ref="agent:miranda", access_count=5,
+        ))
+        await store.save(Memory(
+            key="user.name", value="Bob", scope_ref="agent:other", access_count=10,
+        ))
+
+        keys = await store.list_top_keys("agent:miranda")
+        assert keys == ["user.name"]
+
+    @pytest.mark.asyncio
+    async def test_excludes_archived(self, store):
+        """Archived memories are not included."""
+        await store.save(Memory(
+            key="user.old", value="Old", scope_ref="agent:test",
+            access_count=100, archived=True,
+        ))
+        await store.save(Memory(
+            key="user.current", value="Current", scope_ref="agent:test",
+            access_count=1,
+        ))
+
+        keys = await store.list_top_keys("agent:test")
+        assert keys == ["user.current"]
+
+    @pytest.mark.asyncio
+    async def test_respects_limit(self, store):
+        """Returns at most `limit` keys."""
+        for i in range(10):
+            await store.save(Memory(
+                key=f"key.{i}", value=f"v{i}", scope_ref="agent:test",
+                access_count=10 - i,
+            ))
+
+        keys = await store.list_top_keys("agent:test", limit=3)
+        assert len(keys) == 3
+        assert keys == ["key.0", "key.1", "key.2"]
+
+    @pytest.mark.asyncio
+    async def test_empty_store_returns_empty(self, store):
+        """Empty store returns empty list."""
+        keys = await store.list_top_keys("agent:test")
+        assert keys == []
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_keys(self, store):
+        """Multiple memories with same key return single entry with max access."""
+        await store.save(Memory(
+            key="user.name", value="Alice", scope_ref="agent:test", access_count=5,
+        ))
+        await store.save(Memory(
+            key="user.name", value="Bob", scope_ref="agent:test", access_count=2,
+        ))
+
+        keys = await store.list_top_keys("agent:test")
+        assert keys.count("user.name") == 1

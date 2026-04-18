@@ -486,6 +486,12 @@ class MemoryConfig(BaseModel):
         description="Maximum number of turns to process per extraction run. "
         "Limits LLM calls per pipeline invocation.",
     )
+    key_hint_limit: int = Field(
+        default=30,
+        ge=0,
+        description="Number of existing keys to include as reuse hints in the "
+        "extraction prompt. Reduces synonym key invention. 0 disables hints.",
+    )
     extraction_mutex: bool = Field(
         default=True,
         description="Enable mutual exclusion for extraction. When True, concurrent "

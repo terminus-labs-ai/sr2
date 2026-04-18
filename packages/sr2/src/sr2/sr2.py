@@ -193,10 +193,11 @@ class SR2:
         except KeyError:
             pass  # No retrieval resolver registered
 
-        # Wire key_schema and scope_config now that agent_config is loaded
+        # Wire key_schema, key_hint_limit, and scope_config now that agent_config is loaded
         key_schema = [s.model_dump() for s in agent_config.memory.key_schema]
         if key_schema:
             self._extractor._key_schema = key_schema
+        self._extractor._key_hint_limit = agent_config.memory.key_hint_limit
 
         # Wire scope config to retriever and extractor
         scope_config = agent_config.memory.scope
