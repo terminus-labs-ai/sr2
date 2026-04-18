@@ -2,6 +2,8 @@
 
 import json
 
+from sr2.compaction.engine import ConversationTurn
+from sr2.pipeline.conversation import ConversationZones
 from sr2.pipeline.engine import CompiledContext
 
 
@@ -91,6 +93,94 @@ class ContextBridge:
                 messages.append({"role": "user", "content": current_input})
 
         return messages
+
+    def build_messages_from_zones(
+        self,
+        compiled: CompiledContext,
+        zones: ConversationZones,
+        current_input: str | None = None,
+        skip_session_layer: str | None = None,
+    ) -> list[dict]:
+        """Build messages using zone-managed conversation history.
+
+        Instead of raw session dicts, uses compacted/summarized zones.
+        Summaries and session notes go into the system message;
+        compacted + raw turns become individual messages.
+
+        Args:
+            compiled: The compiled context from SR2
+            zones: Conversation zones with managed history
+            current_input: Current user message (optional)
+            skip_session_layer: Layer name to exclude from system message
+                (avoids duplicating session content that's now in zones)
+        """
+        messages = []
+
+        # 1. System message: compiled layers + summaries + notes
+        system_parts = []
+        for layer_name in compiled.layers:
+            if skip_session_layer and layer_name == skip_session_layer:
+                continue
+            part = self._get_layer_content(compiled, layer_name)
+            if part:
+                system_parts.append(part)
+
+        # Append zone summaries
+        for summary in zones.summarized:
+            system_parts.append(f"[Previous conversation summary]\n{summary}")
+
+        # Append session notes
+        for note in zones.session_notes:
+            system_parts.append(note)
+
+        if system_parts:
+            messages.append({
+                "role": "system",
+                "content": "\n\n".join(system_parts),
+            })
+
+        # 2. Conversation turns from zones (compacted first, then raw)
+        for turn in zones.compacted + zones.raw:
+            messages.append(self._turn_to_message(turn))
+
+        # 3. Current input (if not already the last user message)
+        if current_input:
+            last_user = None
+            for m in reversed(messages):
+                if m["role"] == "user":
+                    last_user = m["content"]
+                    break
+            if last_user != current_input:
+                messages.append({"role": "user", "content": current_input})
+
+        return messages
+
+    def _turn_to_message(self, turn: ConversationTurn) -> dict:
+        """Convert a ConversationTurn to an LLM message dict."""
+        metadata = turn.metadata or {}
+
+        # Tool result turns
+        if turn.role in ("tool_result", "tool"):
+            return {
+                "role": "tool",
+                "content": turn.content,
+                "tool_call_id": metadata.get("tool_call_id", ""),
+                "name": metadata.get("tool_name", ""),
+            }
+
+        # Assistant with tool calls
+        if turn.role == "assistant" and metadata.get("tool_calls"):
+            return {
+                "role": "assistant",
+                "content": turn.content or None,
+                "tool_calls": metadata["tool_calls"],
+            }
+
+        # Regular turn
+        return {
+            "role": turn.role,
+            "content": turn.content,
+        }
 
     def append_tool_result(
         self,

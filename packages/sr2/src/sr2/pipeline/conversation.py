@@ -143,14 +143,22 @@ class ConversationManager:
 
         return result
 
-    async def run_summarization(self, session_id: str = "default") -> SummarizationResult | None:
+    async def run_summarization(
+        self, session_id: str = "default", force: bool = False,
+    ) -> SummarizationResult | None:
         """Check if summarization should trigger, and run it if needed.
 
         1. Calculate compacted zone tokens
-        2. Check if summarization should trigger
+        2. Check if summarization should trigger (or force=True)
         3. If yes: summarize the compacted zone (excluding preserve_recent_turns)
         4. Move summary to summarized zone
         5. Keep preserved turns in the compacted zone
+
+        Args:
+            force: Skip the threshold check and summarize if there are
+                compacted turns. Used when the turn count itself is the
+                problem (e.g. hundreds of short messages that individually
+                fit in budget but overwhelm the LLM as individual messages).
         """
         if not self._summarization:
             return None
@@ -159,14 +167,15 @@ class ConversationManager:
         compacted_tokens = sum(len(t.content) // 4 for t in zones.compacted)
         threshold_tokens = self._summarization._config.threshold * self._compacted_max
         logger.debug(
-            "run_summarization: session=%s, compacted_tokens=%d, threshold=%d (%.0f%% of %d)",
+            "run_summarization: session=%s, compacted_tokens=%d, threshold=%d (%.0f%% of %d), force=%s",
             session_id,
             compacted_tokens,
             int(threshold_tokens),
             self._summarization._config.threshold * 100,
             self._compacted_max,
+            force,
         )
-        if not self._summarization.should_trigger(compacted_tokens, self._compacted_max):
+        if not force and not self._summarization.should_trigger(compacted_tokens, self._compacted_max):
             logger.debug("run_summarization: not triggered (below threshold)")
             return None
 
@@ -232,6 +241,51 @@ class ConversationManager:
 
         return result
 
+    def seed_from_history(self, history: list[dict], session_id: str = "default") -> int:
+        """Populate zones from raw session history dicts.
+
+        Idempotent — no-op if zones already have raw or compacted content.
+        Returns the count of turns seeded.
+        """
+        zones = self._get_zones(session_id)
+        if zones.raw or zones.compacted:
+            return 0
+
+        for i, msg in enumerate(history):
+            role = msg["role"]
+            content = msg.get("content") or ""
+            content_type = "tool_output" if role in ("tool", "tool_result") else None
+
+            # Build metadata from tool_calls, tool_call_id, and existing metadata
+            meta: dict | None = None
+            existing = msg.get("metadata")
+            tool_calls = msg.get("tool_calls")
+            tool_call_id = msg.get("tool_call_id")
+
+            if existing or tool_calls or tool_call_id:
+                meta = dict(existing) if existing else {}
+                if tool_calls:
+                    meta["tool_calls"] = tool_calls
+                if tool_call_id:
+                    meta["tool_call_id"] = tool_call_id
+
+            zones.raw.append(
+                ConversationTurn(
+                    turn_number=i,
+                    role=role,
+                    content=content,
+                    content_type=content_type,
+                    metadata=meta,
+                )
+            )
+
+        count = len(history)
+        if count:
+            logger.debug(
+                "Seeded %d turns from history (session=%s)", count, session_id
+            )
+        return count
+
     def get_all_turns(self, session_id: str = "default") -> list[ConversationTurn]:
         """Get all turns across zones (for full history access)."""
         zones = self._get_zones(session_id)
@@ -278,6 +332,55 @@ class ConversationManager:
     def get_session_notes(self, session_id: str = "default") -> list[str]:
         """Read current session notes."""
         return list(self._get_zones(session_id).session_notes)
+
+    # --- Seeding from history ---
+
+    def seed_from_history(self, history: list[dict], session_id: str = "default") -> int:
+        """Populate zones from raw session history dicts.
+
+        Idempotent — no-op if zones already have raw or compacted content.
+        Returns count of turns seeded.
+        """
+        zones = self._get_zones(session_id)
+        if zones.raw or zones.compacted:
+            return 0
+
+        for i, msg in enumerate(history):
+            role = msg["role"]
+            content = msg.get("content") or ""
+            content_type = "tool_output" if role in ("tool", "tool_result") else None
+
+            # Build metadata from tool_calls, tool_call_id, and existing metadata
+            meta: dict | None = None
+            existing_meta = msg.get("metadata")
+            tool_calls = msg.get("tool_calls")
+            tool_call_id = msg.get("tool_call_id")
+
+            if existing_meta or tool_calls or tool_call_id:
+                meta = {}
+                if existing_meta:
+                    meta.update(existing_meta)
+                if tool_calls:
+                    meta["tool_calls"] = tool_calls
+                if tool_call_id:
+                    meta["tool_call_id"] = tool_call_id
+
+            zones.raw.append(
+                ConversationTurn(
+                    turn_number=i,
+                    role=role,
+                    content=content,
+                    content_type=content_type,
+                    metadata=meta,
+                )
+            )
+
+        count = len(history)
+        if count:
+            logger.debug(
+                "Seeded %d turns from history (session=%s)", count, session_id
+            )
+        return count
 
     # --- Persistence ---
 

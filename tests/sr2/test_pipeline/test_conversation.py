@@ -406,3 +406,203 @@ class TestConversationManager:
             mock_compact.assert_called_once()
             _, kwargs = mock_compact.call_args
             assert kwargs.get("prefix_budget") == 42
+
+
+class TestSeedFromHistory:
+    """Tests for ConversationManager.seed_from_history()."""
+
+    def _make_mgr(self) -> ConversationManager:
+        engine = _make_compaction_engine()
+        return ConversationManager(compaction_engine=engine, raw_window=5)
+
+    # --- Basic seeding ---
+
+    def test_basic_seeding_populates_raw_zone(self):
+        """seed_from_history() creates ConversationTurn objects in raw zone."""
+        mgr = self._make_mgr()
+        history = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+
+        count = mgr.seed_from_history(history)
+
+        assert count == 2
+        assert len(mgr.zones().raw) == 2
+        assert mgr.zones().raw[0].role == "user"
+        assert mgr.zones().raw[0].content == "hello"
+        assert mgr.zones().raw[1].role == "assistant"
+        assert mgr.zones().raw[1].content == "hi"
+
+    def test_returns_count_of_turns_seeded(self):
+        """Return value equals the number of turns added."""
+        mgr = self._make_mgr()
+        history = [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+            {"role": "user", "content": "c"},
+        ]
+
+        assert mgr.seed_from_history(history) == 3
+
+    def test_turn_numbers_assigned_sequentially(self):
+        """Seeded turns get sequential turn_number starting from 0."""
+        mgr = self._make_mgr()
+        history = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "second"},
+            {"role": "user", "content": "third"},
+        ]
+
+        mgr.seed_from_history(history)
+
+        assert [t.turn_number for t in mgr.zones().raw] == [0, 1, 2]
+
+    def test_custom_session_id(self):
+        """seed_from_history() respects session_id parameter."""
+        mgr = self._make_mgr()
+        history = [{"role": "user", "content": "hello"}]
+
+        count = mgr.seed_from_history(history, session_id="session-42")
+
+        assert count == 1
+        assert len(mgr.zones("session-42").raw) == 1
+        assert len(mgr.zones().raw) == 0  # default session untouched
+
+    # --- Idempotent ---
+
+    def test_idempotent_with_existing_raw(self):
+        """Second call returns 0 and doesn't modify zones when raw has content."""
+        mgr = self._make_mgr()
+        history = [{"role": "user", "content": "hello"}]
+
+        mgr.seed_from_history(history)
+        count = mgr.seed_from_history(history)
+
+        assert count == 0
+        assert len(mgr.zones().raw) == 1  # unchanged
+
+    def test_idempotent_with_existing_compacted(self):
+        """Returns 0 when compacted zone already has content."""
+        mgr = self._make_mgr()
+        mgr.zones().compacted = [_make_turn(0)]
+
+        count = mgr.seed_from_history([{"role": "user", "content": "hello"}])
+
+        assert count == 0
+        assert len(mgr.zones().raw) == 0  # not seeded
+
+    # --- Tool metadata preservation ---
+
+    def test_tool_calls_preserved_in_metadata(self):
+        """Assistant tool_calls are stored in ConversationTurn.metadata."""
+        mgr = self._make_mgr()
+        tool_calls = [{"id": "tc1", "function": {"name": "search"}}]
+        history = [
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+
+        mgr.seed_from_history(history)
+
+        turn = mgr.zones().raw[0]
+        assert turn.metadata is not None
+        assert turn.metadata["tool_calls"] == tool_calls
+
+    def test_tool_call_id_preserved_in_metadata(self):
+        """Tool result tool_call_id is stored in ConversationTurn.metadata."""
+        mgr = self._make_mgr()
+        history = [
+            {"role": "tool", "content": "result", "tool_call_id": "tc1"},
+        ]
+
+        mgr.seed_from_history(history)
+
+        turn = mgr.zones().raw[0]
+        assert turn.metadata is not None
+        assert turn.metadata["tool_call_id"] == "tc1"
+
+    def test_nested_metadata_preserved(self):
+        """Existing metadata dict from session history is preserved."""
+        mgr = self._make_mgr()
+        history = [
+            {
+                "role": "tool",
+                "content": "result",
+                "tool_call_id": "tc1",
+                "metadata": {"tool_name": "search", "latency_ms": 42},
+            },
+        ]
+
+        mgr.seed_from_history(history)
+
+        turn = mgr.zones().raw[0]
+        assert turn.metadata["tool_call_id"] == "tc1"
+        assert turn.metadata["tool_name"] == "search"
+        assert turn.metadata["latency_ms"] == 42
+
+    # --- Content type inference ---
+
+    def test_tool_role_gets_tool_output_content_type(self):
+        """Role 'tool' gets content_type='tool_output'."""
+        mgr = self._make_mgr()
+        history = [{"role": "tool", "content": "result", "tool_call_id": "tc1"}]
+
+        mgr.seed_from_history(history)
+
+        assert mgr.zones().raw[0].content_type == "tool_output"
+
+    def test_tool_result_role_gets_tool_output_content_type(self):
+        """Role 'tool_result' gets content_type='tool_output'."""
+        mgr = self._make_mgr()
+        history = [{"role": "tool_result", "content": "result"}]
+
+        mgr.seed_from_history(history)
+
+        assert mgr.zones().raw[0].content_type == "tool_output"
+
+    def test_user_role_gets_none_content_type(self):
+        """Non-tool roles get content_type=None."""
+        mgr = self._make_mgr()
+        history = [{"role": "user", "content": "hello"}]
+
+        mgr.seed_from_history(history)
+
+        assert mgr.zones().raw[0].content_type is None
+
+    def test_assistant_role_gets_none_content_type(self):
+        """Assistant role gets content_type=None."""
+        mgr = self._make_mgr()
+        history = [{"role": "assistant", "content": "hi"}]
+
+        mgr.seed_from_history(history)
+
+        assert mgr.zones().raw[0].content_type is None
+
+    # --- Edge cases ---
+
+    def test_empty_history_returns_zero(self):
+        """Empty list returns 0 and zones stay empty."""
+        mgr = self._make_mgr()
+
+        count = mgr.seed_from_history([])
+
+        assert count == 0
+        assert len(mgr.zones().raw) == 0
+
+    def test_none_content_becomes_empty_string(self):
+        """Message with None content is handled — content becomes ''."""
+        mgr = self._make_mgr()
+        history = [{"role": "assistant", "content": None}]
+
+        mgr.seed_from_history(history)
+
+        assert mgr.zones().raw[0].content == ""
+
+    def test_missing_content_key_becomes_empty_string(self):
+        """Message with no 'content' key is handled — content becomes ''."""
+        mgr = self._make_mgr()
+        history = [{"role": "user"}]
+
+        mgr.seed_from_history(history)
+
+        assert mgr.zones().raw[0].content == ""
