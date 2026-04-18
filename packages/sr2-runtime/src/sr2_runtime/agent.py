@@ -241,6 +241,7 @@ class Agent:
         self._heartbeat_scanner: object | None = None  # HeartbeatScanner
         self._heartbeat_store: object | None = None
         self._heartbeat_tools: list = []
+        self._runtime_plugins: list = []
         self._tool_executor.register(
             "save_memory",
             SaveMemoryTool(
@@ -341,6 +342,21 @@ class Agent:
             self._a2a_client_tools.append(tool)
 
     # --- Public API ---
+
+    @property
+    def raw_agent_yaml(self) -> dict:
+        """Raw agent YAML dict — plugins read their own config sections."""
+        return self._agent_yaml
+
+    @property
+    def memory_store(self):
+        """The active memory store instance."""
+        return self._sr2._memory_store
+
+    @property
+    def name(self) -> str:
+        """Agent name."""
+        return self._name
 
     async def handle_user_message(
         self,
@@ -481,6 +497,11 @@ class Agent:
             await scanner.start()
             logger.info("Heartbeat system started")
 
+        # Runtime plugins (sr2-pro extensions: curation, analytics, etc.)
+        self._runtime_plugins = await self._load_runtime_plugins()
+        for plugin in self._runtime_plugins:
+            await plugin.start()
+
         # MCP — wire LLM client for sampling, then connect
         self._mcp_manager.set_llm_client(self._llm)
         mcp_result = await self._mcp_manager.connect_all(self._tool_executor)
@@ -534,6 +555,13 @@ class Agent:
             except Exception as e:
                 logger.warning(f"Heartbeat scanner failed to stop: {e}")
 
+        # Stop runtime plugins
+        for plugin in self._runtime_plugins:
+            try:
+                await plugin.stop()
+            except Exception as e:
+                logger.warning(f"Runtime plugin failed to stop: {e}")
+
         for name, plugin in self._plugins.items():
             try:
                 await plugin.stop()
@@ -558,6 +586,24 @@ class Agent:
     def register_tool(self, tool_name: str, handler) -> None:
         """Register a tool handler."""
         self._tool_executor.register(tool_name, handler)
+
+    # --- Runtime plugin discovery ---
+
+    async def _load_runtime_plugins(self) -> list:
+        """Discover and initialize runtime plugins via entry points."""
+        import importlib.metadata
+
+        plugins = []
+        for ep in importlib.metadata.entry_points(group="sr2.runtime_plugins"):
+            try:
+                register_fn = ep.load()
+                plugin = register_fn(self)
+                if plugin is not None:
+                    plugins.append(plugin)
+                    logger.info(f"Runtime plugin '{ep.name}' loaded")
+            except Exception as e:
+                logger.debug(f"Runtime plugin '{ep.name}' skipped: {e}")
+        return plugins
 
     # --- Core trigger handler ---
 

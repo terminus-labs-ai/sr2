@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import re
+from datetime import datetime
 from typing import Protocol
 
 from sr2.memory.schema import Memory, MemorySearchResult
@@ -79,6 +80,38 @@ class MemoryStore(Protocol):
         include_archived: bool = False,
     ) -> list[tuple[str, str | None]]:
         """Return distinct (scope, scope_ref) pairs. Sorted by scope, scope_ref."""
+        ...
+
+    async def list_top_keys(
+        self,
+        scope_ref: str,
+        limit: int = 30,
+    ) -> list[str]:
+        """Return the most-accessed distinct keys for a scope_ref.
+
+        Used to provide key hints during extraction so the LLM reuses
+        existing keys instead of inventing synonyms. Sorted by access_count
+        descending, then key alphabetically.
+        """
+        ...
+
+    async def list_memories(
+        self,
+        *,
+        memory_types: list[str] | None = None,
+        include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
+        older_than: datetime | None = None,
+        min_access_count: int | None = None,
+        max_access_count: int | None = None,
+        limit: int = 500,
+    ) -> list[Memory]:
+        """List memories matching filter criteria.
+
+        All filters combine with AND logic. None means no filter,
+        empty list means match nothing. Returns at most `limit` memories.
+        """
         ...
 
 
@@ -204,6 +237,54 @@ class InMemoryMemoryStore:
                 continue
             pairs.add((m.scope, m.scope_ref))
         return sorted(pairs)
+
+    async def list_top_keys(
+        self,
+        scope_ref: str,
+        limit: int = 30,
+    ) -> list[str]:
+        seen: dict[str, int] = {}
+        for m in self._memories.values():
+            if m.archived or m.scope_ref != scope_ref:
+                continue
+            if m.key not in seen or m.access_count > seen[m.key]:
+                seen[m.key] = m.access_count
+        ranked = sorted(seen.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [k for k, _ in ranked[:limit]]
+
+    async def list_memories(
+        self,
+        *,
+        memory_types: list[str] | None = None,
+        include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
+        older_than: datetime | None = None,
+        min_access_count: int | None = None,
+        max_access_count: int | None = None,
+        limit: int = 500,
+    ) -> list[Memory]:
+        results: list[Memory] = []
+        for m in self._memories.values():
+            if not include_archived and m.archived:
+                continue
+            if memory_types is not None and m.memory_type not in memory_types:
+                continue
+            if scope_filter is not None and m.scope not in scope_filter:
+                continue
+            if scope_refs is not None:
+                if m.scope_ref is None or m.scope_ref not in scope_refs:
+                    continue
+            if older_than is not None and m.extracted_at >= older_than:
+                continue
+            if min_access_count is not None and m.access_count < min_access_count:
+                continue
+            if max_access_count is not None and m.access_count > max_access_count:
+                continue
+            results.append(m)
+            if len(results) >= limit:
+                break
+        return results
 
 
 class SQLiteMemoryStore:
@@ -539,6 +620,90 @@ class SQLiteMemoryStore:
         cursor = await self._conn.execute(query, params)
         rows = await cursor.fetchall()
         return [(r["scope"], r["scope_ref"]) for r in rows]
+
+    async def list_top_keys(
+        self,
+        scope_ref: str,
+        limit: int = 30,
+    ) -> list[str]:
+        if not self._conn:
+            raise RuntimeError("Not connected. Call connect() first.")
+
+        cursor = await self._conn.execute(
+            """
+            SELECT DISTINCT key, MAX(access_count) as max_access
+            FROM memories
+            WHERE scope_ref = ? AND archived = 0
+            GROUP BY key
+            ORDER BY max_access DESC, key ASC
+            LIMIT ?
+            """,
+            (scope_ref, limit),
+        )
+        rows = await cursor.fetchall()
+        return [r["key"] for r in rows]
+
+    async def list_memories(
+        self,
+        *,
+        memory_types: list[str] | None = None,
+        include_archived: bool = False,
+        scope_filter: list[str] | None = None,
+        scope_refs: list[str] | None = None,
+        older_than: datetime | None = None,
+        min_access_count: int | None = None,
+        max_access_count: int | None = None,
+        limit: int = 500,
+    ) -> list[Memory]:
+        if not self._conn:
+            raise RuntimeError("Not connected. Call connect() first.")
+
+        conditions: list[str] = []
+        params: list = []
+
+        if not include_archived:
+            conditions.append("archived = 0")
+
+        if memory_types is not None:
+            if not memory_types:
+                return []
+            placeholders = ",".join("?" for _ in memory_types)
+            conditions.append(f"memory_type IN ({placeholders})")
+            params.extend(memory_types)
+
+        if scope_filter is not None:
+            if not scope_filter:
+                return []
+            placeholders = ",".join("?" for _ in scope_filter)
+            conditions.append(f"scope IN ({placeholders})")
+            params.extend(scope_filter)
+
+        if scope_refs is not None:
+            if not scope_refs:
+                return []
+            placeholders = ",".join("?" for _ in scope_refs)
+            conditions.append(f"scope_ref IN ({placeholders})")
+            params.extend(scope_refs)
+
+        if older_than is not None:
+            conditions.append("extracted_at < ?")
+            params.append(older_than.isoformat())
+
+        if min_access_count is not None:
+            conditions.append("access_count >= ?")
+            params.append(min_access_count)
+
+        if max_access_count is not None:
+            conditions.append("access_count <= ?")
+            params.append(max_access_count)
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+        query = f"SELECT * FROM memories WHERE {where} LIMIT ?"
+        params.append(limit)
+
+        cursor = await self._conn.execute(query, params)
+        rows = await cursor.fetchall()
+        return [self._row_to_memory(r) for r in rows]
 
     @staticmethod
     def _row_to_memory(row) -> Memory:
