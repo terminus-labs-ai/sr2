@@ -125,6 +125,7 @@ For the core/pro boundary definition (what goes in sr2 vs sr2-pro), see `~/git/s
 6. **Memory conflict resolution** — Detects conflicting memories with configurable resolution strategies (latest-wins-archive, keep-both-tagged)
 7. **Dynamic heartbeats** — Agents can schedule future callbacks to themselves via `schedule_heartbeat`/`cancel_heartbeat` tools, with context carry-over and idempotent keys
 8. **Bridge proxy** — Reverse proxy mode applies SR2 context optimization to external callers (Claude Code, LangChain) without requiring modifications to the caller
+9. **Runtime plugin discovery** — `Agent._load_runtime_plugins()` scans `sr2.runtime_plugins` entry points at startup, enabling pro extensions (like memory curation) to hook into the agent lifecycle without modifying free-tier code
 
 ## Directory Structure
 
