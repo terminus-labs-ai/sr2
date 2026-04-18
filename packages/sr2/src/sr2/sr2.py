@@ -285,6 +285,13 @@ class SR2:
 
         self._bridge = ContextBridge()
 
+    def reload_interface(self, name: str) -> PipelineConfig:
+        """Invalidate cached config for *name* and re-load from disk.
+
+        Delegates to InterfaceRouter.reload_interface().
+        """
+        return self._router.reload_interface(name)
+
     async def process(
         self,
         interface_name: str,
@@ -384,6 +391,29 @@ class SR2:
         if current_context:
             self._retriever.update_context(current_context)
 
+        # Seed conversation zones from session history (idempotent)
+        seeded = self._conversation.seed_from_history(session_turns, session_id)
+        if seeded:
+            logger.info(
+                "SR2.process: seeded %d turns into zones for session=%s",
+                seeded, session_id,
+            )
+
+        # Run proactive compaction + summarization before compilation
+        self._conversation.run_compaction(
+            session_id,
+            token_budget=self._token_budget,
+            current_tokens=self._conversation.zones(session_id).total_tokens,
+        )
+
+        # Run summarization to collapse compacted turns into summaries.
+        # Force when compacted zone has many turns — the turn count itself
+        # can overwhelm the LLM even if individual turns are small.
+        zones = self._conversation.zones(session_id)
+        force_summarize = len(zones.compacted) > self._conversation.raw_window * 4
+        if zones.compacted:
+            await self._conversation.run_summarization(session_id, force=force_summarize)
+
         # Compile context
         ctx = ResolverContext(
             agent_config=agent_context,
@@ -396,9 +426,12 @@ class SR2:
         compiled = await self._engine.compile(config, ctx)
         logger.info(f"SR2.process: context compiled for {interface_name}")
 
-        # Build messages
-        messages = self._bridge.build_messages(
-            compiled, session_turns, str(trigger_input) if trigger_input else None
+        # Build messages from zones (compacted/summarized history)
+        zones = self._conversation.zones(session_id)
+        messages = self._bridge.build_messages_from_zones(
+            compiled, zones,
+            current_input=str(trigger_input) if trigger_input else None,
+            skip_session_layer="session",
         )
 
         # Build tool state machine from pipeline config
@@ -1247,23 +1280,8 @@ class SR2:
             return None
 
         # Seed conversation manager from session history if zones are empty
-        zones = self._conversation.zones(session_id)
         history = ctx.agent_config.get("session_history", [])
-        if not zones.raw and not zones.compacted and history:
-            for turn_num, msg in enumerate(history):
-                msg_role = msg.get("role", "unknown")
-                # Infer content_type from role so compaction rules can match
-                content_type = None
-                if msg_role == "tool":
-                    content_type = "tool_output"
-                turn = ConversationTurn(
-                    turn_number=turn_num,
-                    role=msg_role,
-                    content=msg.get("content", ""),
-                    content_type=content_type,
-                    metadata=msg.get("metadata"),
-                )
-                self._conversation.add_turn(turn, session_id)
+        self._conversation.seed_from_history(history, session_id)
 
         # Phase 1: Run compaction
         session_prefix = self._engine.session_prefix_tokens(session_layer_name)

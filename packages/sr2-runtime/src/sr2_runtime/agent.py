@@ -23,6 +23,13 @@ from sr2_runtime.tool_executor import (
     SaveMemoryTool,
     ToolExecutor,
 )
+from sr2_runtime.toolbox import Toolbox, ToolboxEntry
+from sr2_runtime.tools.config_tools import (
+    EditConfigTool,
+    InspectSchemaTool,
+    ReadConfigTool,
+    RollbackConfigTool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +257,36 @@ class Agent:
             key_schema=getattr(self._sr2._extractor, "_key_schema", []),
         )
         self._tool_executor.register("recall_memory", self._recall_memory_tool)
+
+        # Toolbox — self-modification tools accessible via meta-tool
+        from pathlib import Path
+
+        self._toolbox = Toolbox()
+        config_dir = Path(config.config_dir)
+        for entry in [
+            ToolboxEntry(
+                "read_config",
+                "Read current YAML config for an interface",
+                ReadConfigTool(config_dir),
+            ),
+            ToolboxEntry(
+                "edit_config",
+                "Modify interface config with validation + hot-reload",
+                EditConfigTool(config_dir, self._sr2),
+            ),
+            ToolboxEntry(
+                "inspect_schema",
+                "Show valid fields/types/defaults for a config section",
+                InspectSchemaTool(),
+            ),
+            ToolboxEntry(
+                "rollback_config",
+                "Restore a previous config version",
+                RollbackConfigTool(config_dir, self._sr2),
+            ),
+        ]:
+            self._toolbox.register(entry)
+        self._tool_executor.register(Toolbox.TOOL_NAME, self._toolbox)
 
         # MCP — from agent.yaml
         self._mcp_manager = MCPManager()
@@ -1070,6 +1107,11 @@ class Agent:
                 },
             }
             schemas.append(schema)
+
+        # Toolbox: inject meta-tool schema + full-tier tool schemas
+        if hasattr(self, "_toolbox") and self._toolbox._tools:
+            schemas.append(self._toolbox.tool_definition)
+            schemas.extend(self._toolbox.get_full_tier_schemas())
 
         # Compress schemas to reduce token usage
         schemas = [self._compress_tool_schema(s) for s in schemas]
