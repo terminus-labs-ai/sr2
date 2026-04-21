@@ -49,7 +49,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default=os.environ.get("LOG_LEVEL", "INFO"),
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     parser.add_argument(

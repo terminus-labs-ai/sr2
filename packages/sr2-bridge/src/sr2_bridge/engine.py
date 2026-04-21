@@ -66,6 +66,9 @@ class BridgeEngine:
         if self._bridge_config.session.persistence:
             self._session_store = BridgeSessionStore(db_path=self._bridge_config.memory.db_path)
 
+        # Cache last optimized result per session for duplicate request handling
+        self._last_optimized: dict[str, tuple[str | None, list[dict]]] = {}
+
         # Metrics tracking
         self._postprocess_error_count: int = 0
         self._last_summarization_duration: float | None = None
@@ -98,6 +101,87 @@ class BridgeEngine:
                 system, messages, session, adapter, agent_name=agent_name,
             )
 
+    @staticmethod
+    def _normalize_for_hash(msg: dict) -> str:
+        """Normalize a message for hashing.
+
+        Strips volatile fields that Claude Code changes between turns:
+        - cache_control markers (added/moved between requests)
+        - <system-reminder> blocks (content may include timestamps or
+          change slightly between turns; tracked separately by the engine)
+        """
+        import re
+
+        normalized = dict(msg)
+        content = normalized.get("content", "")
+
+        if isinstance(content, list):
+            clean_blocks = []
+            for block in content:
+                if isinstance(block, dict):
+                    b = {k: v for k, v in block.items() if k != "cache_control"}
+                    if b.get("type") == "text" and "text" in b:
+                        b["text"] = re.sub(
+                            r"<system-reminder>.*?</system-reminder>",
+                            "",
+                            b["text"],
+                            flags=re.DOTALL,
+                        ).strip()
+                    if b.get("type") == "text" and not b.get("text"):
+                        continue
+                    clean_blocks.append(b)
+                else:
+                    clean_blocks.append(block)
+            normalized["content"] = clean_blocks
+        elif isinstance(content, str):
+            normalized["content"] = re.sub(
+                r"<system-reminder>.*?</system-reminder>",
+                "",
+                content,
+                flags=re.DOTALL,
+            ).strip()
+
+        return json.dumps(normalized, sort_keys=True, default=str)
+
+    @staticmethod
+    def _hash_message(msg: dict) -> str:
+        """Compute MD5 hash for a normalized message."""
+        return hashlib.md5(
+            BridgeEngine._normalize_for_hash(msg).encode()
+        ).hexdigest()
+
+    def _detect_history_change(
+        self,
+        incoming_hashes: list[str],
+        session: BridgeSession,
+    ) -> str:
+        """Compare per-message hashes to detect what changed.
+
+        Returns one of:
+        - "first_request": no stored hashes yet
+        - "normal": prior messages match, new messages appended
+        - "compaction": prior message hashes differ (Claude Code compacted)
+        - "reset": message count decreased significantly (user did /clear)
+        """
+        stored = session.message_hashes
+
+        if not stored:
+            return "first_request"
+
+        incoming_count = len(incoming_hashes)
+        stored_count = len(stored)
+
+        # Significant decrease → reset (user did /clear)
+        if incoming_count < stored_count:
+            return "reset"
+
+        # Compare all stored hashes against their positions in incoming
+        for i in range(stored_count):
+            if i >= incoming_count or incoming_hashes[i] != stored[i]:
+                return "compaction"
+
+        return "normal"
+
     async def _optimize_locked(
         self,
         system: str | None,
@@ -106,54 +190,108 @@ class BridgeEngine:
         adapter: BridgeAdapter,
         agent_name: str | None = None,
     ) -> tuple[str | None, list[dict]]:
-        """Actual optimization logic, called under per-session lock."""
-        session_id = session.session_id
-        current_count = len(messages)
-        current_hash = hashlib.md5(
-            json.dumps(messages, sort_keys=True, default=str).encode()
-        ).hexdigest()
+        """Actual optimization logic, called under per-session lock.
 
-        if (
-            current_count == session.last_message_count
-            and current_hash == session.last_message_hash
-        ):
-            # Parallel request with identical content -- skip optimization
-            logger.debug(
-                "Session %s: same message count (%d) and hash, passing through",
+        Uses per-message hash comparison to detect Claude Code compaction.
+        On normal turns: processes only new messages.
+        On compaction: preserves ConversationManager history, processes only
+        the new user message from the compacted request.
+        """
+        session_id = session.session_id
+
+        # Hash each incoming message individually
+        incoming_hashes = [self._hash_message(m) for m in messages]
+        change_type = self._detect_history_change(incoming_hashes, session)
+
+        # Duplicate request detection (all hashes match including last).
+        # Return the last optimized result if available, otherwise forward as-is.
+        if change_type == "normal" and len(incoming_hashes) == len(session.message_hashes):
+            cached = self._last_optimized.get(session_id)
+            if cached:
+                logger.info(
+                    "DECISION: Session %s: DUPLICATE — all %d message hashes match, "
+                    "returning cached optimized result.",
+                    session_id,
+                    len(incoming_hashes),
+                )
+                return cached
+            logger.info(
+                "DECISION: Session %s: DUPLICATE — all %d message hashes match, "
+                "no cached result, forwarding original.",
                 session_id,
-                current_count,
+                len(incoming_hashes),
             )
             return None, messages
 
-        if (
-            current_count == session.last_message_count
-            and current_hash != session.last_message_hash
-        ):
-            # Same count but different content — messages were edited.
+        if change_type == "reset":
             logger.info(
-                "Session %s: message content changed (count %d, hash %s -> %s), resetting",
+                "DECISION: Session %s: RESET — message count decreased (%d -> %d).",
                 session_id,
-                current_count,
-                session.last_message_hash,
-                current_hash,
+                len(session.message_hashes),
+                len(messages),
             )
             self._reset_session(session)
-
-        if current_count < session.last_message_count:
+            # Process all messages as fresh
+            new_messages = messages
+        elif change_type == "compaction":
             logger.info(
-                "Session %s: message count decreased (%d -> %d), resetting",
+                "DECISION: Session %s: COMPACTION DETECTED — prior message hashes differ. "
+                "Preserving ConversationManager history, extracting only new message.",
                 session_id,
-                session.last_message_count,
-                current_count,
             )
-            self._reset_session(session)
+            # Don't reset ConversationManager — it has clean history.
+            # Extract only the LAST message (new user input).
+            new_messages = messages[-1:] if messages else []
+        else:
+            # "first_request" or "normal" — process new messages
+            new_messages = messages[len(session.message_hashes):]
 
-        # Convert new messages to turns via adapter (engine never sees wire format)
-        new_messages = messages[session.last_message_count :]
+        # Convert new messages to turns
         new_turns = adapter.messages_to_turns(new_messages, session.turn_counter)
         session.turn_counter += len(new_turns)
-        session.last_message_count = current_count
-        session.last_message_hash = current_hash
+
+        # Update stored hashes
+        if change_type == "reset":
+            session.message_hashes = list(incoming_hashes)
+        elif change_type == "compaction":
+            # Replace stored hashes with incoming (compacted) hashes
+            session.message_hashes = list(incoming_hashes)
+        else:
+            # Normal/first: extend with new hashes
+            session.message_hashes = list(incoming_hashes)
+
+        # Backward compat: keep count/hash in sync
+        session.last_message_count = len(messages)
+        session.last_message_hash = hashlib.md5(
+            json.dumps(messages, sort_keys=True, default=str).encode()
+        ).hexdigest()
+
+        # Collect and deduplicate system-reminder blocks from extracted turns
+        has_new_reminders = False
+        total_extracted = 0
+        total_deduped = 0
+        for turn in new_turns:
+            if turn.metadata and "extracted_system_reminders" in turn.metadata:
+                blocks = turn.metadata.pop("extracted_system_reminders")
+                total_extracted += len(blocks)
+                for block in blocks:
+                    block_hash = hashlib.sha256(block.encode()).hexdigest()
+                    if block_hash not in session.system_reminder_hashes:
+                        session.system_reminder_hashes.add(block_hash)
+                        session.system_reminder_content.append(block)
+                        has_new_reminders = True
+                    else:
+                        total_deduped += 1
+        if total_extracted:
+            logger.info(
+                "DECISION: Session %s: REMINDER EXTRACTION — found %d block(s), "
+                "%d new, %d deduplicated, %d total unique in session.",
+                session_id,
+                total_extracted,
+                total_extracted - total_deduped,
+                total_deduped,
+                len(session.system_reminder_hashes),
+            )
 
         # Extract retrieval query from latest user message
         retrieval_query = self._extract_retrieval_query(messages)
@@ -173,17 +311,44 @@ class BridgeEngine:
         if result.summarization_result:
             self._last_summarization_duration = elapsed
 
-        # Check if anything was actually modified
+        # Check if compaction/summarization happened
         has_compaction = result.compaction_result and result.compaction_result.turns_compacted > 0
         has_summarization = result.summarization_result is not None
+
+        # Deferred injection: only inject stored reminders when compaction or
+        # summarization has modified the conversation. Pre-compaction, reminders
+        # live naturally in user messages and the system prompt stays stable.
+        if (has_compaction or has_summarization) and session.system_reminder_content:
+            reminder_text = "\n\n".join(session.system_reminder_content)
+            if result.system_injection:
+                result.system_injection = f"{result.system_injection}\n\n{reminder_text}"
+            else:
+                result.system_injection = reminder_text
+            logger.info(
+                "DECISION: Session %s: DEFERRED INJECTION — compaction/summarization triggered, "
+                "injecting %d system-reminder block(s) into system_injection.",
+                session_id,
+                len(session.system_reminder_content),
+            )
+
         has_injection = result.system_injection is not None
 
+        logger.info(
+            "DECISION: Session %s: OPTIMIZE CHECK — compaction=%s, summarization=%s, "
+            "injection=%s (reminders=%d). Will %s.",
+            session_id,
+            has_compaction,
+            has_summarization,
+            has_injection,
+            len(session.system_reminder_content),
+            "REBUILD messages" if (has_compaction or has_summarization or has_injection) else "PASSTHROUGH original",
+        )
+
         if not has_compaction and not has_summarization and not has_injection:
-            # Nothing changed — pass through original messages byte-identical
-            # to preserve Anthropic's prompt cache.
             tokens_est = sum(len(str(m.get("content", ""))) // 4 for m in messages)
             self._last_request_tokens[session_id] = (tokens_est, tokens_est)
             await self._persist_session(session)
+            self._last_optimized[session_id] = (None, messages)
             return None, messages
 
         # Convert turns back to wire format via adapter
@@ -217,6 +382,7 @@ class BridgeEngine:
         # Persist session state after optimization
         await self._persist_session(session)
 
+        self._last_optimized[session_id] = (result.system_injection, optimized)
         return result.system_injection, optimized
 
     async def _persist_session(self, session: BridgeSession) -> None:
@@ -291,6 +457,7 @@ class BridgeEngine:
         session.last_message_hash = ""
         session.turn_counter = 0
         session.turns = []
+        session.message_hashes = []
 
     def destroy_session(self, session_id: str) -> None:
         """Clean up ConversationManager state and session lock for a session."""

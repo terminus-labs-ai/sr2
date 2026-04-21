@@ -4,10 +4,27 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from sr2.compaction.engine import ConversationTurn
 
 from sr2_bridge.adapters._utils import _classify_tool_name, _truncate
+
+_SYSTEM_REMINDER_RE = re.compile(
+    r"<system-reminder>(.*?)</system-reminder>",
+    re.DOTALL,
+)
+
+
+def _extract_system_reminders(content: str) -> list[str]:
+    """Extract <system-reminder> inner content without modifying the input.
+
+    Returns list of inner content strings (tags stripped from results only).
+    The original content string is NOT modified.
+    """
+    if "<system-reminder>" not in content:
+        return []
+    return [m.strip() for m in _SYSTEM_REMINDER_RE.findall(content)]
 
 logger = logging.getLogger(__name__)
 
@@ -247,9 +264,17 @@ class AnthropicAdapter:
                 if has_tool_result and not has_text:
                     effective_role = "tool_result"
 
-            meta = {"_original_message": msg}
+            # Extract system-reminder blocks from user messages (extract-only, no stripping).
+            # Content stays intact — reminders live naturally in conversation messages.
+            extracted_reminders: list[str] = []
+            if role == "user":
+                extracted_reminders = _extract_system_reminders(content_str)
+
+            meta: dict = {"_original_message": msg}
             if tool_name:
                 meta["tool_name"] = tool_name
+            if extracted_reminders:
+                meta["extracted_system_reminders"] = extracted_reminders
 
             turn = ConversationTurn(
                 turn_number=counter,

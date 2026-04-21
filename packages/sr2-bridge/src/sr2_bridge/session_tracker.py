@@ -32,6 +32,13 @@ class BridgeSession:
     turn_counter: int = 0
     turns: list[ConversationTurn] = field(default_factory=list)
 
+    # Per-message MD5 hashes for compaction detection
+    message_hashes: list[str] = field(default_factory=list)
+
+    # System-reminder dedup state
+    system_reminder_hashes: set[str] = field(default_factory=set)
+    system_reminder_content: list[str] = field(default_factory=list)
+
     def touch(self) -> None:
         self.last_seen = time.time()
         self.request_count += 1

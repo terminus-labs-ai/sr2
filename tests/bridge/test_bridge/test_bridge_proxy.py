@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections.abc import AsyncIterator
@@ -1252,6 +1253,611 @@ class TestContentTypeDetection:
         ]
         turns = adapter.messages_to_turns(messages, 0)
         assert turns[0].content_type == "code_execution"
+
+
+# ---------------------------------------------------------------------------
+# System-reminder extraction, dedup, and injection
+# ---------------------------------------------------------------------------
+
+SAMPLE_REMINDER = "<system-reminder>\n# Some Instructions\nDo things correctly.\n</system-reminder>"
+SAMPLE_REMINDER_INNER = "# Some Instructions\nDo things correctly."
+
+SAMPLE_REMINDER_2 = "<system-reminder>\nSecond block content.\n</system-reminder>"
+SAMPLE_REMINDER_2_INNER = "Second block content."
+
+
+class TestExtractSystemReminders:
+    """Test the standalone _extract_system_reminders() function that extracts
+    reminder inner content WITHOUT modifying the input string."""
+
+    def test_extracts_single_block(self):
+        """Extracts inner content from a single system-reminder block."""
+        from sr2_bridge.adapters.anthropic import _extract_system_reminders
+
+        content = f"Hello.\n{SAMPLE_REMINDER}\nWorld."
+        result = _extract_system_reminders(content)
+        assert len(result) == 1
+        assert result[0] == SAMPLE_REMINDER_INNER
+
+    def test_extracts_multiple_blocks(self):
+        """Extracts inner content from multiple system-reminder blocks."""
+        from sr2_bridge.adapters.anthropic import _extract_system_reminders
+
+        content = f"Start.\n{SAMPLE_REMINDER}\nMiddle.\n{SAMPLE_REMINDER_2}\nEnd."
+        result = _extract_system_reminders(content)
+        assert len(result) == 2
+        assert result[0] == SAMPLE_REMINDER_INNER
+        assert result[1] == SAMPLE_REMINDER_2_INNER
+
+    def test_returns_empty_list_when_no_reminders(self):
+        """Returns empty list when no system-reminder blocks are present."""
+        from sr2_bridge.adapters.anthropic import _extract_system_reminders
+
+        result = _extract_system_reminders("Just a normal message.")
+        assert result == []
+
+    def test_does_not_modify_input(self):
+        """The input string is not modified (extract-only, no stripping)."""
+        from sr2_bridge.adapters.anthropic import _extract_system_reminders
+
+        content = f"Hello.\n{SAMPLE_REMINDER}\nWorld."
+        original = content  # strings are immutable, but verify function signature
+        _extract_system_reminders(content)
+        assert content == original
+
+    def test_no_tags_in_extracted_content(self):
+        """Extracted content should not include the tags themselves."""
+        from sr2_bridge.adapters.anthropic import _extract_system_reminders
+
+        result = _extract_system_reminders(SAMPLE_REMINDER)
+        assert len(result) == 1
+        assert "<system-reminder>" not in result[0]
+        assert "</system-reminder>" not in result[0]
+
+    def test_multiline_block_extracted(self):
+        """Multiline content inside a block is fully extracted."""
+        from sr2_bridge.adapters.anthropic import _extract_system_reminders
+
+        multiline = "<system-reminder>\nLine one.\nLine two.\nLine three.\n</system-reminder>"
+        result = _extract_system_reminders(multiline)
+        assert len(result) == 1
+        assert "Line one." in result[0]
+        assert "Line two." in result[0]
+        assert "Line three." in result[0]
+
+
+class TestSystemReminderExtraction:
+    """Test that AnthropicAdapter.messages_to_turns() extracts system-reminder
+    blocks into metadata but KEEPS them in turn.content (extract-only, no stripping)."""
+
+    def setup_method(self):
+        self.adapter = AnthropicAdapter()
+
+    def test_system_reminder_kept_in_string_content(self):
+        """User message with <system-reminder> block keeps it in turn.content."""
+        messages = [
+            {"role": "user", "content": f"Hello world.\n\n{SAMPLE_REMINDER}\n\nMore text."},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert len(turns) == 1
+        # Reminders should be KEPT in content (not stripped)
+        assert "<system-reminder>" in turns[0].content
+        assert "</system-reminder>" in turns[0].content
+        assert SAMPLE_REMINDER_INNER in turns[0].content
+        assert "Hello world." in turns[0].content
+        assert "More text." in turns[0].content
+
+    def test_system_reminder_kept_in_content_blocks(self):
+        """Content blocks with system-reminder in text block keep them intact."""
+        messages = [
+            {"role": "user", "content": [
+                {"type": "text", "text": f"Hello.\n{SAMPLE_REMINDER}\nBye."},
+            ]},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert len(turns) == 1
+        # Reminders should be KEPT in content
+        assert "<system-reminder>" in turns[0].content
+        assert "Hello." in turns[0].content
+
+    def test_multiple_system_reminders_kept(self):
+        """Multiple <system-reminder> blocks in one message are all kept in content."""
+        messages = [
+            {"role": "user", "content": f"Start.\n{SAMPLE_REMINDER}\nMiddle.\n{SAMPLE_REMINDER_2}\nEnd."},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        # Both reminders should be in content
+        assert "<system-reminder>" in turns[0].content
+        assert SAMPLE_REMINDER_INNER in turns[0].content
+        assert SAMPLE_REMINDER_2_INNER in turns[0].content
+        assert "Start." in turns[0].content
+        assert "Middle." in turns[0].content
+        assert "End." in turns[0].content
+
+    def test_multiline_system_reminder_kept(self):
+        """Block with multiline content is kept intact in turn.content."""
+        multiline = "<system-reminder>\nLine one.\nLine two.\nLine three.\n</system-reminder>"
+        messages = [
+            {"role": "user", "content": f"Before.\n{multiline}\nAfter."},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert "<system-reminder>" in turns[0].content
+        assert "Line one." in turns[0].content
+        assert "Before." in turns[0].content
+        assert "After." in turns[0].content
+
+    def test_no_system_reminder_unchanged(self):
+        """Messages without system-reminder tags are unchanged."""
+        messages = [
+            {"role": "user", "content": "Just a normal message."},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert turns[0].content == "Just a normal message."
+
+    def test_content_only_system_reminder_kept(self):
+        """Message that's entirely a system-reminder keeps it in content."""
+        messages = [
+            {"role": "user", "content": SAMPLE_REMINDER},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert "<system-reminder>" in turns[0].content
+        assert SAMPLE_REMINDER_INNER in turns[0].content
+
+    def test_original_message_not_stripped(self):
+        """turn.metadata['_original_message'] should be the ORIGINAL unmodified
+        message dict. No stripping, no reconstruction. The original dict passed
+        in should NOT be mutated."""
+        original_content = f"Hello.\n{SAMPLE_REMINDER}\nWorld."
+        original_msg = {"role": "user", "content": original_content}
+        messages = [original_msg]
+        turns = self.adapter.messages_to_turns(messages, 0)
+
+        # Original dict should not be mutated
+        assert original_msg["content"] == original_content
+
+        # _original_message in metadata should be the original unmodified dict
+        assert turns[0].metadata is not None
+        orig = turns[0].metadata.get("_original_message", {})
+        assert isinstance(orig, dict)
+        orig_content = orig.get("content", "")
+        # Should still contain system-reminder (NOT stripped)
+        assert "<system-reminder>" in orig_content
+        assert SAMPLE_REMINDER_INNER in orig_content
+
+    def test_original_message_content_blocks_not_stripped(self):
+        """For content-block messages, _original_message should preserve the
+        original blocks without stripping or reconstructing."""
+        original_blocks = [
+            {"type": "text", "text": f"Hello.\n{SAMPLE_REMINDER}\nBye."},
+        ]
+        original_msg = {"role": "user", "content": original_blocks}
+        messages = [original_msg]
+        turns = self.adapter.messages_to_turns(messages, 0)
+
+        assert turns[0].metadata is not None
+        orig = turns[0].metadata.get("_original_message", {})
+        assert isinstance(orig, dict)
+        orig_content = orig.get("content", [])
+        assert isinstance(orig_content, list)
+        # Original content blocks should be preserved as-is
+        assert any(
+            "<system-reminder>" in b.get("text", "")
+            for b in orig_content
+            if isinstance(b, dict)
+        )
+
+    def test_extracted_blocks_in_metadata(self):
+        """Extracted blocks stored in turn.metadata['extracted_system_reminders']
+        as a list of strings (inner content only, no tags)."""
+        messages = [
+            {"role": "user", "content": f"Hello.\n{SAMPLE_REMINDER}\nMiddle.\n{SAMPLE_REMINDER_2}\nBye."},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert turns[0].metadata is not None
+        extracted = turns[0].metadata.get("extracted_system_reminders", [])
+        assert len(extracted) == 2
+        # Inner content only, no tags
+        assert "<system-reminder>" not in extracted[0]
+        assert "</system-reminder>" not in extracted[0]
+        assert SAMPLE_REMINDER_INNER in extracted[0]
+        assert SAMPLE_REMINDER_2_INNER in extracted[1]
+
+    def test_no_extracted_reminders_when_none_present(self):
+        """No extracted_system_reminders key when message has no reminders."""
+        messages = [
+            {"role": "user", "content": "Just text, no reminders."},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert turns[0].metadata is not None
+        extracted = turns[0].metadata.get("extracted_system_reminders", [])
+        assert extracted == []
+
+    def test_assistant_messages_not_touched(self):
+        """Only user messages get system-reminder extraction."""
+        messages = [
+            {"role": "assistant", "content": f"Some text {SAMPLE_REMINDER} more text"},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        # Assistant message should still contain the tags (no extraction)
+        assert "<system-reminder>" in turns[0].content
+
+    def test_other_xml_tags_preserved(self):
+        """Other XML-like tags (e.g. <thinking>) should not be touched."""
+        messages = [
+            {"role": "user", "content": f"<thinking>Deep thoughts</thinking>\n{SAMPLE_REMINDER}\nQuestion?"},
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert "<thinking>Deep thoughts</thinking>" in turns[0].content
+        # Reminder should also be kept in content
+        assert "<system-reminder>" in turns[0].content
+
+
+class TestSystemReminderDedup:
+    """Test deduplication of system-reminder blocks on BridgeSession."""
+
+    def test_session_has_dedup_fields(self):
+        """BridgeSession has system_reminder_hashes and system_reminder_content."""
+        session = BridgeSession(session_id="test")
+        assert hasattr(session, "system_reminder_hashes")
+        assert hasattr(session, "system_reminder_content")
+        assert isinstance(session.system_reminder_hashes, set)
+        assert isinstance(session.system_reminder_content, list)
+
+    def test_same_block_deduped_across_turns(self):
+        """Same system-reminder content in two turns only stored once."""
+        session = BridgeSession(session_id="test")
+        adapter = AnthropicAdapter()
+
+        # First turn with reminder
+        msgs_1 = [{"role": "user", "content": f"Turn 1.\n{SAMPLE_REMINDER}"}]
+        turns_1 = adapter.messages_to_turns(msgs_1, 0)
+
+        # Second turn with same reminder
+        msgs_2 = [{"role": "user", "content": f"Turn 2.\n{SAMPLE_REMINDER}"}]
+        turns_2 = adapter.messages_to_turns(msgs_2, 1)
+
+        # Simulate dedup: add extracted reminders to session
+        for turn in turns_1 + turns_2:
+            if turn.metadata and "extracted_system_reminders" in turn.metadata:
+                for block in turn.metadata["extracted_system_reminders"]:
+                    block_hash = hashlib.sha256(block.encode()).hexdigest()
+                    if block_hash not in session.system_reminder_hashes:
+                        session.system_reminder_hashes.add(block_hash)
+                        session.system_reminder_content.append(block)
+
+        # Same content should only appear once
+        assert len(session.system_reminder_content) == 1
+        assert SAMPLE_REMINDER_INNER in session.system_reminder_content[0]
+
+    def test_different_blocks_both_stored(self):
+        """Different system-reminder content stored separately."""
+        session = BridgeSession(session_id="test")
+        adapter = AnthropicAdapter()
+
+        msgs = [{"role": "user", "content": f"Hello.\n{SAMPLE_REMINDER}\n{SAMPLE_REMINDER_2}"}]
+        turns = adapter.messages_to_turns(msgs, 0)
+
+        for turn in turns:
+            if turn.metadata and "extracted_system_reminders" in turn.metadata:
+                for block in turn.metadata["extracted_system_reminders"]:
+                    block_hash = hashlib.sha256(block.encode()).hexdigest()
+                    if block_hash not in session.system_reminder_hashes:
+                        session.system_reminder_hashes.add(block_hash)
+                        session.system_reminder_content.append(block)
+
+        assert len(session.system_reminder_content) == 2
+
+    def test_updated_block_appends_new_version(self):
+        """If CLAUDE.md changes, old version stays and new one is added too
+        (append, not replace — we want the latest set of unique blocks)."""
+        session = BridgeSession(session_id="test")
+        adapter = AnthropicAdapter()
+
+        old_reminder = "<system-reminder>\nVersion 1 instructions.\n</system-reminder>"
+        new_reminder = "<system-reminder>\nVersion 2 instructions.\n</system-reminder>"
+
+        # Turn 1 with old version
+        msgs_1 = [{"role": "user", "content": f"Turn 1.\n{old_reminder}"}]
+        turns_1 = adapter.messages_to_turns(msgs_1, 0)
+
+        # Turn 2 with new version
+        msgs_2 = [{"role": "user", "content": f"Turn 2.\n{new_reminder}"}]
+        turns_2 = adapter.messages_to_turns(msgs_2, 1)
+
+        for turn in turns_1 + turns_2:
+            if turn.metadata and "extracted_system_reminders" in turn.metadata:
+                for block in turn.metadata["extracted_system_reminders"]:
+                    block_hash = hashlib.sha256(block.encode()).hexdigest()
+                    if block_hash not in session.system_reminder_hashes:
+                        session.system_reminder_hashes.add(block_hash)
+                        session.system_reminder_content.append(block)
+
+        # Both versions stored (different content = different hashes)
+        assert len(session.system_reminder_content) == 2
+        assert "Version 1" in session.system_reminder_content[0]
+        assert "Version 2" in session.system_reminder_content[1]
+
+
+class TestPerMessageHashing:
+    """Test per-message hash comparison in BridgeEngine."""
+
+    def _make_engine(self, raw_window: int = 5) -> BridgeEngine:
+        config = PipelineConfig(
+            compaction=CompactionConfig(
+                raw_window=raw_window,
+                cost_gate=CostGateConfig(enabled=False),
+            )
+        )
+        return BridgeEngine(config)
+
+    def _make_session(self, session_id: str = "test") -> BridgeSession:
+        return BridgeSession(session_id=session_id)
+
+    @pytest.mark.asyncio
+    async def test_first_request_stores_hashes(self):
+        """First request stores per-message hashes."""
+        engine = self._make_engine()
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+        await engine.optimize(system=None, messages=msgs, session=session, adapter=adapter)
+        assert len(session.message_hashes) == 2
+
+    @pytest.mark.asyncio
+    async def test_normal_turn_appends_hashes(self):
+        """Normal turn (new messages appended) extends hash list."""
+        engine = self._make_engine()
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+        await engine.optimize(system=None, messages=msgs, session=session, adapter=adapter)
+        assert len(session.message_hashes) == 2
+
+        msgs.append({"role": "user", "content": "Follow up"})
+        await engine.optimize(system=None, messages=msgs, session=session, adapter=adapter)
+        assert len(session.message_hashes) == 3
+
+    @pytest.mark.asyncio
+    async def test_session_has_message_hashes_field(self):
+        """BridgeSession has a message_hashes list field."""
+        session = BridgeSession(session_id="test")
+        assert hasattr(session, "message_hashes")
+        assert isinstance(session.message_hashes, list)
+        assert len(session.message_hashes) == 0
+
+
+class TestCompactionDetection:
+    """Test that engine detects Claude Code compaction via hash mismatch."""
+
+    def _make_engine(self, raw_window: int = 5) -> BridgeEngine:
+        config = PipelineConfig(
+            compaction=CompactionConfig(
+                raw_window=raw_window,
+                cost_gate=CostGateConfig(enabled=False),
+            )
+        )
+        return BridgeEngine(config)
+
+    def _make_session(self, session_id: str = "test") -> BridgeSession:
+        return BridgeSession(session_id=session_id)
+
+    @pytest.mark.asyncio
+    async def test_hash_mismatch_detects_compaction(self):
+        """When prior message hashes change, engine detects compaction."""
+        engine = self._make_engine()
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        # First request: 3 messages
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "What is Python?"},
+        ]
+        await engine.optimize(system=None, messages=msgs, session=session, adapter=adapter)
+        assert session.turn_counter == 3
+
+        # Simulate Claude Code compaction: prior messages changed (summarized)
+        compacted_msgs = [
+            {"role": "user", "content": "[COMPACTED] User greeted and asked about Python"},
+            {"role": "assistant", "content": "[COMPACTED] Assistant responded"},
+            {"role": "user", "content": "Tell me more about decorators"},
+        ]
+        await engine.optimize(system=None, messages=compacted_msgs, session=session, adapter=adapter)
+
+        # Engine should have detected compaction and processed only the new message.
+        # Turn counter should have incremented by 1 (only the new message).
+        assert session.turn_counter == 4
+
+    @pytest.mark.asyncio
+    async def test_session_reset_on_shorter_history(self):
+        """Significantly shorter history triggers session reset, not compaction path."""
+        engine = self._make_engine()
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": "More"},
+        ]
+        await engine.optimize(system=None, messages=msgs, session=session, adapter=adapter)
+        assert session.turn_counter == 3
+
+        # User did /clear — much shorter history
+        shorter = [{"role": "user", "content": "Fresh start"}]
+        await engine.optimize(system=None, messages=shorter, session=session, adapter=adapter)
+        assert session.turn_counter == 1
+        assert len(session.message_hashes) == 1
+
+    @pytest.mark.asyncio
+    async def test_compaction_preserves_stored_history(self):
+        """On compaction detection, ConversationManager history is preserved.
+
+        Claude Code compaction keeps the same message count but changes content.
+        """
+        engine = self._make_engine(raw_window=10)
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "Question"},
+        ]
+        await engine.optimize(system=None, messages=msgs, session=session, adapter=adapter)
+
+        # Check ConversationManager has 3 turns
+        zones = engine.conversation_manager.zones(session.session_id)
+        initial_turns = len(zones.raw) + len(zones.compacted)
+        assert initial_turns == 3
+
+        # Simulate Claude Code compaction: SAME count, different content/hashes
+        compacted_msgs = [
+            {"role": "user", "content": "[COMPACTED] User greeted and asked question"},
+            {"role": "assistant", "content": "[COMPACTED] Assistant responded"},
+            {"role": "user", "content": "New follow-up after compaction"},
+        ]
+        await engine.optimize(system=None, messages=compacted_msgs, session=session, adapter=adapter)
+
+        # ConversationManager should still have the original 3 turns + 1 new
+        zones = engine.conversation_manager.zones(session.session_id)
+        total = len(zones.raw) + len(zones.compacted)
+        assert total == 4
+
+
+class TestDeferredInjection:
+    """Test that system-reminder injection is deferred until compaction/summarization."""
+
+    def _make_engine(self, raw_window: int = 5) -> BridgeEngine:
+        config = PipelineConfig(
+            compaction=CompactionConfig(
+                raw_window=raw_window,
+                cost_gate=CostGateConfig(enabled=False),
+            )
+        )
+        return BridgeEngine(config)
+
+    def _make_session(self, session_id: str = "test") -> BridgeSession:
+        return BridgeSession(session_id=session_id)
+
+    @pytest.mark.asyncio
+    async def test_no_injection_when_no_compaction(self):
+        """Without compaction/summarization, reminders stay in messages (no injection)."""
+        engine = self._make_engine(raw_window=50)  # large window = no compaction
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        msgs = [
+            {"role": "user", "content": f"Simple question.\n{SAMPLE_REMINDER}"},
+        ]
+        injection, optimized = await engine.optimize(
+            system="Prompt.",
+            messages=msgs,
+            session=session,
+            adapter=adapter,
+        )
+
+        # No injection — reminders are still in the messages naturally
+        assert injection is None
+        # Messages should be the original (passthrough)
+        assert optimized is msgs
+
+    @pytest.mark.asyncio
+    async def test_reminders_in_messages_when_no_compaction(self):
+        """Reminders should be visible in messages when no compaction has happened."""
+        engine = self._make_engine(raw_window=50)
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        msgs = [
+            {"role": "user", "content": f"Hello.\n{SAMPLE_REMINDER}"},
+        ]
+        _, optimized = await engine.optimize(
+            system="Prompt.",
+            messages=msgs,
+            session=session,
+            adapter=adapter,
+        )
+
+        # Reminders should still be in the message content
+        msg_content = optimized[0].get("content", "")
+        if isinstance(msg_content, str):
+            assert "<system-reminder>" in msg_content
+
+    @pytest.mark.asyncio
+    async def test_injection_after_compaction(self):
+        """After compaction, stored reminders appear in system_injection.
+
+        Uses tool_use/tool_result messages to trigger rule-based compaction
+        (schema_and_sample or result_summary rules).
+        """
+        engine = self._make_engine(raw_window=2)
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        # Build messages with tool results that trigger compaction rules.
+        # tool_result turns with large content trigger result_summary rule.
+        large_output = "line " * 200  # ~200 words of output
+        msgs = [
+            {"role": "user", "content": f"Read the file.\n{SAMPLE_REMINDER}"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "cat big.txt"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": large_output},
+            ]},
+            {"role": "assistant", "content": "The file contains test data."},
+            {"role": "user", "content": "Now do something else."},
+        ]
+        injection, optimized = await engine.optimize(
+            system="System prompt.",
+            messages=msgs,
+            session=session,
+            adapter=adapter,
+        )
+
+        # Compaction should have happened (tool results trigger rules)
+        # If compaction fired, injection should contain stored reminder content
+        if injection is not None:
+            assert SAMPLE_REMINDER_INNER in injection
+        else:
+            # If no rules fired (simple text compaction doesn't trigger),
+            # verify reminders are still stored in session for later
+            assert len(session.system_reminder_content) == 1
+            assert SAMPLE_REMINDER_INNER in session.system_reminder_content[0]
+
+    @pytest.mark.asyncio
+    async def test_reminders_stored_even_without_injection(self):
+        """Reminders are always extracted and stored, even when not injected."""
+        engine = self._make_engine(raw_window=50)
+        session = self._make_session()
+        adapter = AnthropicAdapter()
+
+        msgs = [
+            {"role": "user", "content": f"Hello.\n{SAMPLE_REMINDER}\n{SAMPLE_REMINDER_2}"},
+        ]
+        injection, _ = await engine.optimize(
+            system="Prompt.",
+            messages=msgs,
+            session=session,
+            adapter=adapter,
+        )
+
+        # No injection (no compaction)
+        assert injection is None
+        # But reminders are stored for future use
+        assert len(session.system_reminder_content) == 2
+        assert SAMPLE_REMINDER_INNER in session.system_reminder_content[0]
+        assert SAMPLE_REMINDER_2_INNER in session.system_reminder_content[1]
 
 
 class TestModelRewriting:

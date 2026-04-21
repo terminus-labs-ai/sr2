@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 
@@ -64,6 +65,69 @@ def _extract_agent_name(headers: dict[str, str]) -> str | None:
         return session_id[idx + len(marker):]
 
     return None
+
+
+def _dump_request(
+    direction: str,
+    session_id: str,
+    body: dict,
+    headers: dict | None = None,
+    note: str = "",
+) -> None:
+    """Dump full request for debugging. direction = INCOMING or OUTGOING."""
+    system = body.get("system", "")
+    system_len = len(json.dumps(system)) if system else 0
+    msgs = body.get("messages", [])
+    has_reminder = "<system-reminder>" in json.dumps(msgs)
+
+    msg_summaries = []
+    for i, m in enumerate(msgs):
+        content = m.get("content", "")
+        if isinstance(content, list):
+            blocks = [
+                f"{b.get('type', '?')}({len(b.get('text', ''))}ch)"
+                if b.get("type") == "text"
+                else b.get("type", "?")
+                for b in content
+                if isinstance(b, dict)
+            ]
+            content_desc = f"[{', '.join(blocks)}]"
+        else:
+            content_desc = f"str({len(content)}ch)"
+        msg_summaries.append(f"  msg[{i}] role={m.get('role')}, content={content_desc}")
+
+    header_str = ""
+    if headers:
+        safe_headers = {
+            k: (v[:8] + "..." if k.lower() in ("x-api-key", "authorization") else v)
+            for k, v in headers.items()
+        }
+        header_str = f"\n  headers: {json.dumps(safe_headers, indent=4)}"
+
+    logger.info(
+        "\n====== %s %s ======\n"
+        "  session: %s\n"
+        "  model: %s\n"
+        "  stream: %s\n"
+        "  system_prompt_length: %d chars\n"
+        "  message_count: %d\n"
+        "  has_system_reminder_in_msgs: %s\n"
+        "%s%s\n"
+        "  %s\n"
+        "====== /%s ======",
+        direction,
+        f"({note})" if note else "",
+        session_id,
+        body.get("model", "?"),
+        body.get("stream", "not set"),
+        system_len,
+        len(msgs),
+        has_reminder,
+        "\n".join(msg_summaries),
+        header_str,
+        note or "",
+        direction,
+    )
 
 
 def _log_token_reduction(
@@ -129,6 +193,44 @@ async def _build_sync_response(
         headers,
         query_params=query_params or None,
     )
+
+    # Log full response
+    try:
+        resp_body = json.loads(response.content)
+        resp_text = ""
+        for block in resp_body.get("content", []):
+            if isinstance(block, dict) and block.get("type") == "text":
+                resp_text += block.get("text", "")
+        usage = resp_body.get("usage", {})
+        logger.info(
+            "\n====== RESPONSE (non-streaming) ======\n"
+            "  session: %s\n"
+            "  status: %d\n"
+            "  model: %s\n"
+            "  stop_reason: %s\n"
+            "  usage: input=%s, output=%s, cache_creation=%s, cache_read=%s\n"
+            "  response_text_length: %d chars\n"
+            "  preview: %s\n"
+            "====== /RESPONSE ======",
+            session_id,
+            response.status_code,
+            resp_body.get("model", "?"),
+            resp_body.get("stop_reason", "?"),
+            usage.get("input_tokens", "?"),
+            usage.get("output_tokens", "?"),
+            usage.get("cache_creation_input_tokens", "?"),
+            usage.get("cache_read_input_tokens", "?"),
+            len(resp_text),
+            resp_text[:200].replace("\n", " ") + ("..." if len(resp_text) > 200 else ""),
+        )
+    except Exception:
+        logger.info(
+            "RESPONSE (non-streaming): session=%s, status=%d, body_length=%d",
+            session_id,
+            response.status_code,
+            len(response.content),
+        )
+
     if response.status_code >= 400:
         logger.warning(
             "Session %s: upstream returned %d: %s",
@@ -245,16 +347,9 @@ def create_bridge_app(
         session = session_tracker.get(session_id)
 
         # Log incoming request
+        _dump_request("INCOMING", session_id, body, headers)
         if request_logger:
             request_logger.log_incoming(session_id, system, messages, body)
-
-        logger.debug(
-            "Session %s: %d messages, stream=%s, agent=%s",
-            session_id,
-            len(messages),
-            is_streaming,
-            agent_name or "(default)",
-        )
 
         # Apply system prompt transform (before SR2 injection)
         if bridge_config.system_prompt.resolved_content:
@@ -265,7 +360,30 @@ def create_bridge_app(
                 request_logger.log_transformed_system(session_id, original_system, system)
 
         # Rewrite model if configured
+        original_model = body.get("model", "")
         _rewrite_model(body, bridge_config.forwarding)
+
+        # Fast/small model requests (haiku, flash, mini) are Claude Code's
+        # internal pre-processing (summarization, token counting). Bypass
+        # SR2 optimization entirely — just forward with system prompt
+        # transform and model rewrite applied. This prevents the haiku
+        # preflight from polluting per-message hash state.
+        if _is_fast_model(original_model):
+            logger.info(
+                "Session %s: fast model bypass (%s), forwarding without optimization",
+                session_id,
+                original_model,
+            )
+            if is_streaming:
+                return _build_streaming_response(
+                    forwarder, engine, anthropic_adapter, body, headers,
+                    session, query_params=request.url.query, agent_name=agent_name,
+                )
+            else:
+                return await _build_sync_response(
+                    forwarder, session_id, body, headers,
+                    query_params=request.url.query,
+                )
 
         # Optimize context
         try:
@@ -283,6 +401,7 @@ def create_bridge_app(
 
         # Rebuild body with optimized messages
         optimized_body = anthropic_adapter.rebuild_body(body, optimized_messages, system_injection)
+        _dump_request("OUTGOING", session_id, optimized_body, note=f"injection={'yes' if system_injection else 'no'}")
         _log_token_reduction(session_id, messages, optimized_messages)
 
         # Log outgoing body
@@ -484,6 +603,8 @@ async def _stream_and_capture(
 ):
     """Stream SSE from upstream, passthrough each chunk, accumulate response text."""
     accumulated: list[str] = []
+    chunk_count = 0
+    data_chunks = 0
 
     async for chunk in forwarder.forward_streaming(
         upstream_path,
@@ -492,12 +613,33 @@ async def _stream_and_capture(
         query_params=query_params or None,
     ):
         yield chunk
+        chunk_count += 1
+        decoded = chunk.decode("utf-8", errors="replace").strip()
+        if decoded.startswith("data: "):
+            data_chunks += 1
+            if chunk_count <= 10 or "text_delta" in decoded:
+                logger.debug("SSE chunk #%d: %s", chunk_count, decoded[:200])
         text = adapter.parse_sse_text(chunk)
         if text:
             accumulated.append(text)
 
+    logger.info("SSE stream ended: %d total chunks, %d data chunks, %d text extracted",
+                chunk_count, data_chunks, len(accumulated))
+
+    # Log streaming response completion
+    full_text = "".join(accumulated) if accumulated else ""
+    logger.info(
+        "\n====== RESPONSE (streaming) ======\n"
+        "  session: %s\n"
+        "  accumulated_text_length: %d chars\n"
+        "  preview: %s\n"
+        "====== /RESPONSE ======",
+        session.session_id,
+        len(full_text),
+        full_text[:200].replace("\n", " ") + ("..." if len(full_text) > 200 else ""),
+    )
+
     # Post-process after stream completes (fire-and-forget with error logging)
     if accumulated:
-        full_text = "".join(accumulated)
         task = asyncio.create_task(engine.post_process(session, full_text, agent_name=agent_name))
         task.add_done_callback(_log_task_exception)
