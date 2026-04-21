@@ -41,3 +41,26 @@ def _classify_tool_name(
             return content_type
     # Default: any tool output we don't specifically classify
     return "tool_output"
+
+
+_FILE_PATH_KEYS = ("file_path", "path", "filename", "file")
+
+
+def _extract_file_path(
+    tool_name: str,
+    arguments: dict,
+    overrides: dict[str, str] | None = None,
+) -> str | None:
+    """Extract file path from tool arguments if the tool reads files.
+
+    Returns the path string if the tool is classified as file_content and
+    the arguments contain a recognizable file path key, else None.
+    """
+    content_type = _classify_tool_name(tool_name, overrides)
+    if content_type != "file_content":
+        return None
+    for key in _FILE_PATH_KEYS:
+        val = arguments.get(key)
+        if val and isinstance(val, str):
+            return val
+    return None

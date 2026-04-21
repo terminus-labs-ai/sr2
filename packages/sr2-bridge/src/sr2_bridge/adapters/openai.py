@@ -7,7 +7,7 @@ import logging
 
 from sr2.compaction.engine import ConversationTurn
 
-from sr2_bridge.adapters._utils import _classify_tool_name, _truncate
+from sr2_bridge.adapters._utils import _classify_tool_name, _extract_file_path, _truncate
 
 logger = logging.getLogger(__name__)
 
@@ -186,18 +186,26 @@ class OpenAIAdapter:
         turns = []
         counter = turn_counter_start
 
-        # Build tool_call_id -> function_name map from all messages
+        # Build tool_call_id -> function_name and tool_call_id -> args maps
         # (assistant tool_calls precede tool messages that reference them)
         tool_name_map: dict[str, str] = {}
+        tool_args_map: dict[str, dict] = {}
         for msg in messages:
             if msg.get("role") == "assistant":
                 tool_calls = msg.get("tool_calls")
                 if tool_calls and isinstance(tool_calls, list):
                     for tc in tool_calls:
                         tc_id = tc.get("id", "")
-                        fn_name = tc.get("function", {}).get("name", "")
+                        fn = tc.get("function", {})
+                        fn_name = fn.get("name", "")
                         if tc_id and fn_name:
                             tool_name_map[tc_id] = fn_name
+                        fn_args_str = fn.get("arguments", "")
+                        if tc_id and fn_args_str:
+                            try:
+                                tool_args_map[tc_id] = json.loads(fn_args_str)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
 
         for msg in messages:
             role = msg.get("role", "user")
@@ -254,6 +262,21 @@ class OpenAIAdapter:
             meta: dict = {"_original_message": msg}
             if tool_name:
                 meta["tool_name"] = tool_name
+                # Extract file_path for file-reading tools
+                if role == "tool":
+                    tool_call_id = msg.get("tool_call_id", "")
+                    args = tool_args_map.get(tool_call_id, {})
+                elif tool_calls and isinstance(tool_calls, list):
+                    fn_args_str = tool_calls[0].get("function", {}).get("arguments", "")
+                    try:
+                        args = json.loads(fn_args_str) if fn_args_str else {}
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                else:
+                    args = {}
+                file_path = _extract_file_path(tool_name, args, self._tool_type_overrides)
+                if file_path:
+                    meta["file_path"] = file_path
 
             turn = ConversationTurn(
                 turn_number=counter,

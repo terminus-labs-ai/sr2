@@ -119,6 +119,15 @@ def build_components(raw_config: dict):
     pipeline_raw = raw_config.get("pipeline", {})
     pipeline_config = PipelineConfig(**pipeline_raw)
 
+    # Bridge defaults to hybrid compaction: rules for low-value content,
+    # LLM for high-value content (file reads, command output). Bridge mode
+    # has no recovery path for compacted content — hybrid preserves
+    # semantic content where it matters.
+    compaction_raw = pipeline_raw.get("compaction", {})
+    if "strategy" not in compaction_raw:
+        pipeline_config.compaction.strategy = "hybrid"
+        logger.info("Bridge compaction: defaulting to 'hybrid' strategy")
+
     # Shared API key cache — updated from proxied request headers
     key_cache = APIKeyCache()
 

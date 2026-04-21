@@ -8,7 +8,7 @@ import re
 
 from sr2.compaction.engine import ConversationTurn
 
-from sr2_bridge.adapters._utils import _classify_tool_name, _truncate
+from sr2_bridge.adapters._utils import _classify_tool_name, _extract_file_path, _truncate
 
 _SYSTEM_REMINDER_RE = re.compile(
     r"<system-reminder>(.*?)</system-reminder>",
@@ -185,9 +185,10 @@ class AnthropicAdapter:
         turns = []
         counter = turn_counter_start
 
-        # Build tool_use_id -> tool_name map from all messages (assistant tool_use
-        # blocks precede user tool_result blocks that reference them).
+        # Build tool_use_id -> tool_name and tool_use_id -> input maps from all
+        # messages (assistant tool_use blocks precede user tool_result blocks).
         tool_name_map: dict[str, str] = {}
+        tool_input_map: dict[str, dict] = {}
         for msg in messages:
             c = msg.get("content", "")
             if isinstance(c, list):
@@ -197,6 +198,9 @@ class AnthropicAdapter:
                         tname = block.get("name", "")
                         if tid and tname:
                             tool_name_map[tid] = tname
+                        tinput = block.get("input")
+                        if tid and isinstance(tinput, dict):
+                            tool_input_map[tid] = tinput
 
         for msg in messages:
             role = msg.get("role", "user")
@@ -236,16 +240,28 @@ class AnthropicAdapter:
                 content_str = str(content)
                 content_type = None
 
-            # Extract tool name for metadata (used by compaction recovery hints)
+            # Extract tool name and file path for metadata
             tool_name = None
+            file_path = None
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict):
                         if block.get("type") == "tool_use":
                             tool_name = block.get("name")
+                            tool_input = block.get("input")
+                            if tool_name and isinstance(tool_input, dict):
+                                file_path = _extract_file_path(
+                                    tool_name, tool_input, self._tool_type_overrides
+                                )
                             break
                         if block.get("type") == "tool_result":
-                            tool_name = tool_name_map.get(block.get("tool_use_id", ""))
+                            tuid = block.get("tool_use_id", "")
+                            tool_name = tool_name_map.get(tuid)
+                            if tool_name:
+                                args = tool_input_map.get(tuid, {})
+                                file_path = _extract_file_path(
+                                    tool_name, args, self._tool_type_overrides
+                                )
                             break
 
             # Anthropic wraps tool_result blocks in role="user" messages.
@@ -273,6 +289,8 @@ class AnthropicAdapter:
             meta: dict = {"_original_message": msg}
             if tool_name:
                 meta["tool_name"] = tool_name
+            if file_path:
+                meta["file_path"] = file_path
             if extracted_reminders:
                 meta["extracted_system_reminders"] = extracted_reminders
 

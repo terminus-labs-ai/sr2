@@ -722,16 +722,23 @@ class Agent:
         is_ephemeral = trigger.session_lifecycle == "ephemeral"
         # Build tool_results for compaction: each tool call result becomes
         # a ConversationTurn with content_type="tool_output"
-        _tool_results = [
-            {
+        _tool_results = []
+        for tc in loop_result.tool_calls:
+            if not tc.result:
+                continue
+            meta: dict = {"tool_name": tc.tool_name}
+            if tc.arguments:
+                for key in ("file_path", "path", "filename", "file"):
+                    val = tc.arguments.get(key)
+                    if val and isinstance(val, str):
+                        meta["file_path"] = val
+                        break
+            _tool_results.append({
                 "turn_number": session.turn_count,
                 "content": tc.result,
                 "content_type": "tool_output",
-                "metadata": {"tool_name": tc.tool_name},
-            }
-            for tc in loop_result.tool_calls
-            if tc.result
-        ]
+                "metadata": meta,
+            })
 
         self._pending_post_process = asyncio.create_task(
             self._sr2.post_process(
