@@ -197,6 +197,69 @@ class TestAnthropicAdapter:
         assert rebuilt[0] is original_messages[0]
         assert rebuilt[1] is original_messages[1]
 
+    def test_orphaned_tool_use_flattened(self):
+        """Assistant tool_use whose tool_result was compacted should be flattened."""
+        assistant_original = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me search."},
+                {"type": "tool_use", "id": "tool_1", "name": "search", "input": {"q": "test"}},
+                {"type": "tool_use", "id": "tool_2", "name": "read", "input": {"path": "/a"}},
+            ],
+        }
+        assistant_turn = ConversationTurn(
+            turn_number=0,
+            role="assistant",
+            content="Let me search.\n[tool_use: search(...)]\n[tool_use: read(...)]",
+            metadata={"_original_message": assistant_original},
+        )
+        compacted_result = ConversationTurn(
+            turn_number=1,
+            role="tool_result",
+            content="[tool_result: search]\nFound 3 results.\n[tool_result: read]\nFile contents.",
+            compacted=True,
+        )
+        messages = self.adapter.turns_to_messages(
+            [assistant_turn, compacted_result], []
+        )
+        assert messages[0]["role"] == "assistant"
+        assert isinstance(messages[0]["content"], str)
+        assert messages[1]["role"] == "user"
+        assert isinstance(messages[1]["content"], str)
+
+    def test_live_tool_use_preserved(self):
+        """Assistant tool_use with live tool_result should be preserved."""
+        assistant_original = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me search."},
+                {"type": "tool_use", "id": "tool_1", "name": "search", "input": {"q": "test"}},
+            ],
+        }
+        assistant_turn = ConversationTurn(
+            turn_number=0,
+            role="assistant",
+            content="Let me search.\n[tool_use: search(...)]",
+            metadata={"_original_message": assistant_original},
+        )
+        result_original = {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "tool_1", "content": "Found 3 results."},
+            ],
+        }
+        result_turn = ConversationTurn(
+            turn_number=1,
+            role="tool_result",
+            content="[tool_result: search]\nFound 3 results.",
+            metadata={"_original_message": result_original},
+        )
+        messages = self.adapter.turns_to_messages(
+            [assistant_turn, result_turn], [assistant_original, result_original]
+        )
+        assert messages[0] is assistant_original
+        assert messages[1] is result_original
+
 
 class TestOpenAIAdapter:
     """Test OpenAI wire-format adapter."""
@@ -488,6 +551,72 @@ class TestOpenAIAdapter:
         )
         # Both should preserve originals
         assert messages[0] is assistant_original
+        assert messages[1] is tool_original
+
+    def test_orphaned_tool_calls_stripped(self):
+        """Assistant tool_calls whose tool response was compacted should be stripped."""
+        assistant_original = {
+            "role": "assistant",
+            "content": "Let me check.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        }
+        assistant_turn = ConversationTurn(
+            turn_number=0,
+            role="assistant",
+            content="Let me check.\n[tool_call: search({})]",
+            metadata={"_original_message": assistant_original},
+        )
+        compacted_tool = ConversationTurn(
+            turn_number=1,
+            role="user",
+            content="[tool_result: search]\nresults",
+            compacted=True,
+        )
+        messages = self.adapter.turns_to_messages(
+            [assistant_turn, compacted_tool], []
+        )
+        assert messages[0]["role"] == "assistant"
+        assert "tool_calls" not in messages[0]
+        assert messages[0]["content"] == "Let me check."
+        assert messages[1]["role"] == "user"
+
+    def test_live_tool_calls_preserved(self):
+        """Assistant tool_calls with live tool response should be preserved."""
+        assistant_original = {
+            "role": "assistant",
+            "content": "Let me check.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        }
+        assistant_turn = ConversationTurn(
+            turn_number=0,
+            role="assistant",
+            content="Let me check.\n[tool_call: search({})]",
+            metadata={"_original_message": assistant_original},
+        )
+        tool_original = {"role": "tool", "tool_call_id": "call_1", "content": "results"}
+        tool_turn = ConversationTurn(
+            turn_number=1,
+            role="user",
+            content="[tool_result: search]\nresults",
+            metadata={"_original_message": tool_original},
+        )
+        messages = self.adapter.turns_to_messages(
+            [assistant_turn, tool_turn], [assistant_original, tool_original]
+        )
+        assert messages[0] is assistant_original
+        assert "tool_calls" in messages[0]
         assert messages[1] is tool_original
 
     def test_roundtrip_preserves_content(self):

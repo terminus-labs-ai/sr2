@@ -136,6 +136,10 @@ class AnthropicAdapter:
         body = dict(original_body)
         body["messages"] = optimized_messages
 
+        # Strip fields that Anthropic-compatible endpoints (vLLM, etc.) may reject.
+        for key in ("context_management",):
+            body.pop(key, None)
+
         if system_injection:
             existing_system = body.get("system")
             if isinstance(existing_system, list):
@@ -327,12 +331,31 @@ class AnthropicAdapter:
         For compacted turns, emits plain text content. For raw turns that
         still have their original structure, preserves it.
 
-        Validates tool_use/tool_result pairing: if a compacted turn replaced
-        a tool_use block with plain text, any subsequent tool_result referencing
-        the missing tool_use_id is also flattened to plain text. Anthropic
-        rejects orphaned tool_result blocks.
+        Validates tool_use/tool_result pairing in both directions:
+        - Forward: if a tool_use was compacted, subsequent tool_result
+          referencing it is flattened.
+        - Reverse: if a tool_result was compacted, the preceding assistant
+          message with tool_use blocks is flattened.
+        Anthropic rejects orphaned blocks in either direction.
         """
         messages = []
+
+        # Pre-scan: collect tool_use_ids that have live (non-compacted)
+        # tool_result blocks referencing them.
+        live_tool_result_ids: set[str] = set()
+        for turn in turns:
+            if turn.compacted:
+                continue
+            original = turn.metadata.get("_original_message") if turn.metadata else None
+            if not original:
+                continue
+            msg_content = original.get("content", "")
+            if isinstance(msg_content, list):
+                for block in msg_content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        ref_id = block.get("tool_use_id", "")
+                        if ref_id:
+                            live_tool_result_ids.add(ref_id)
 
         # Collect tool_use_ids that are present in the output as actual
         # content blocks (not compacted to plain text).
@@ -352,6 +375,25 @@ class AnthropicAdapter:
 
                 msg_content = original.get("content", "")
                 if isinstance(msg_content, list):
+                    # Check assistant messages for tool_use blocks whose
+                    # tool_result was compacted away.
+                    has_orphan_tool_use = False
+                    if wire_role == "assistant":
+                        for block in msg_content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                tid = block.get("id", "")
+                                if tid and tid not in live_tool_result_ids:
+                                    has_orphan_tool_use = True
+                                    break
+
+                    if has_orphan_tool_use:
+                        messages.append({"role": wire_role, "content": turn.content})
+                        logger.debug(
+                            "Flattened turn %d: orphaned tool_use (tool_result was compacted/summarized)",
+                            turn.turn_number,
+                        )
+                        continue
+
                     # Check if this message has tool_result blocks referencing
                     # tool_use_ids that were compacted away.
                     has_orphan = False
@@ -363,7 +405,6 @@ class AnthropicAdapter:
                                 break
 
                     if has_orphan:
-                        # Flatten to plain text to avoid Anthropic 400
                         messages.append({"role": wire_role, "content": turn.content})
                         logger.debug(
                             "Flattened turn %d: orphaned tool_result (tool_use was compacted/summarized)",

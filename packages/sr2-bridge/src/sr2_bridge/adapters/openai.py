@@ -300,12 +300,28 @@ class OpenAIAdapter:
         For compacted turns, emits plain text content. For raw turns that
         still have their original structure, preserves it.
 
-        Validates tool_calls/tool pairing: if a compacted turn replaced
-        an assistant message with tool_calls, any subsequent tool message
-        referencing a missing tool_call_id is also flattened to plain text.
-        OpenAI rejects orphaned tool messages.
+        Validates tool_calls/tool pairing in both directions:
+        - Forward: if an assistant tool_calls was compacted, subsequent tool
+          messages referencing it are flattened.
+        - Reverse: if a tool response was compacted, the preceding assistant
+          message's tool_calls field is stripped.
+        OpenAI rejects orphaned messages in either direction.
         """
         messages = []
+
+        # Pre-scan: collect tool_call_ids that have live (non-compacted)
+        # tool role messages referencing them.
+        live_tool_response_ids: set[str] = set()
+        for turn in turns:
+            if turn.compacted:
+                continue
+            original = turn.metadata.get("_original_message") if turn.metadata else None
+            if not original:
+                continue
+            if original.get("role") == "tool":
+                tc_id = original.get("tool_call_id", "")
+                if tc_id:
+                    live_tool_response_ids.add(tc_id)
 
         # Collect tool_call_ids that are present in the output as actual
         # tool_calls (not compacted to plain text).
@@ -341,10 +357,23 @@ class OpenAIAdapter:
                         )
                         continue
 
-                # Register tool_call_ids from assistant messages with tool_calls
+                # Register tool_call_ids from assistant messages with tool_calls,
+                # but strip tool_calls if their responses were compacted.
                 if orig_role == "assistant":
                     tool_calls = original.get("tool_calls")
                     if tool_calls and isinstance(tool_calls, list):
+                        has_orphan = any(
+                            tc.get("id", "") and tc["id"] not in live_tool_response_ids
+                            for tc in tool_calls
+                        )
+                        if has_orphan:
+                            stripped = {k: v for k, v in original.items() if k != "tool_calls"}
+                            messages.append(stripped)
+                            logger.debug(
+                                "Stripped tool_calls from turn %d: orphaned (tool response was compacted/summarized)",
+                                turn.turn_number,
+                            )
+                            continue
                         for tc in tool_calls:
                             tc_id = tc.get("id", "")
                             if tc_id:
