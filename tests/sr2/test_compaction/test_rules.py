@@ -136,7 +136,7 @@ class TestResultSummaryRule:
     """Tests for ResultSummaryRule."""
 
     def test_exit_code_zero(self):
-        """Exit code 0 shows checkmark."""
+        """Exit code 0 shows checkmark on its own line."""
         inp = CompactionInput(
             content="test passed\nall good\nno errors",
             content_type="code_execution",
@@ -149,9 +149,11 @@ class TestResultSummaryRule:
         assert output.was_compacted is True
         assert "\u2713" in output.content
         assert "Exit 0" in output.content
+        lines = output.content.split("\n")
+        assert "Exit 0" in lines[0]
 
     def test_exit_code_nonzero(self):
-        """Exit code 1 shows X mark."""
+        """Exit code 1 shows X mark on its own line."""
         inp = CompactionInput(
             content="error occurred\ntraceback...\nfailed",
             content_type="code_execution",
@@ -163,9 +165,30 @@ class TestResultSummaryRule:
 
         assert "\u2717" in output.content
         assert "Exit 1" in output.content
+        lines = output.content.split("\n")
+        assert "Exit 1" in lines[0]
+
+    def test_multiline_output_preserved(self):
+        """Output lines are preserved as separate lines, not joined with spaces."""
+        inp = CompactionInput(
+            content="line one\nline two\nline three",
+            content_type="code_execution",
+            tokens=50,
+            metadata={"exit_code": 0},
+        )
+        rule = ResultSummaryRule()
+        output = rule.compact(inp, {"max_output_lines": 3})
+
+        lines = output.content.split("\n")
+        # Line 0: header with exit code
+        assert "Exit 0" in lines[0]
+        # Lines 1-3: preserved output lines
+        assert "line one" in lines[1]
+        assert "line two" in lines[2]
+        assert "line three" in lines[3]
 
     def test_output_truncated(self):
-        """Output truncated to max_output_lines."""
+        """Output truncated to max_output_lines with truncation notice on its own line."""
         content = "\n".join(f"line {i}" for i in range(20))
         inp = CompactionInput(
             content=content, content_type="code_execution", tokens=200,
@@ -175,6 +198,10 @@ class TestResultSummaryRule:
         output = rule.compact(inp, {"max_output_lines": 2})
 
         assert "more lines" in output.content
+        lines = output.content.split("\n")
+        # Header, 2 output lines, truncation notice = 4 lines
+        assert len(lines) == 4
+        assert "18 more lines" in lines[3]
 
     def test_recovery_hint_from_result_path(self):
         """recovery_hint comes from metadata.result_path."""

@@ -1255,6 +1255,77 @@ class TestContentTypeDetection:
         assert turns[0].content_type == "code_execution"
 
 
+class TestExitCodeExtraction:
+    """Test exit_code extraction from Anthropic tool_result blocks."""
+
+    def test_successful_bash_result_has_exit_code_zero(self):
+        """tool_result with is_error absent -> exit_code 0."""
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "file1.txt\nfile2.txt"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[1].metadata.get("exit_code") == 0
+
+    def test_error_bash_result_has_exit_code_one(self):
+        """tool_result with is_error: true -> exit_code 1."""
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "false"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "error", "is_error": True},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[1].metadata.get("exit_code") == 1
+
+    def test_explicit_is_error_false_has_exit_code_zero(self):
+        """tool_result with is_error: false -> exit_code 0."""
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "shell", "input": {"cmd": "echo hi"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "hi", "is_error": False},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert turns[1].metadata.get("exit_code") == 0
+
+    def test_non_code_execution_tool_has_no_exit_code(self):
+        """tool_result for non-code_execution tool has no exit_code in metadata."""
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "/foo.py"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "file contents"},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert "exit_code" not in turns[1].metadata
+
+    def test_tool_use_turn_has_no_exit_code(self):
+        """tool_use turns (assistant) never have exit_code."""
+        adapter = AnthropicAdapter()
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+            ]},
+        ]
+        turns = adapter.messages_to_turns(messages, 0)
+        assert "exit_code" not in turns[0].metadata
+
+
 # ---------------------------------------------------------------------------
 # System-reminder extraction, dedup, and injection
 # ---------------------------------------------------------------------------
@@ -1956,3 +2027,207 @@ class TestEngineShutdown:
         await engine.shutdown()  # should not raise
         # Can call shutdown multiple times safely
         await engine.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# _extract_file_path unit tests
+# ---------------------------------------------------------------------------
+
+class TestExtractFilePath:
+    """Unit tests for the _extract_file_path helper in adapters._utils."""
+
+    def test_file_path_key(self):
+        """File-reading tool with 'file_path' key returns the path."""
+        from sr2_bridge.adapters._utils import _extract_file_path
+
+        result = _extract_file_path("Read", {"file_path": "/src/main.py"})
+        assert result == "/src/main.py"
+
+    def test_path_key(self):
+        """File-reading tool with 'path' key returns the path."""
+        from sr2_bridge.adapters._utils import _extract_file_path
+
+        result = _extract_file_path("cat", {"path": "/etc/hosts"})
+        assert result == "/etc/hosts"
+
+    def test_filename_key(self):
+        """File-reading tool with 'filename' key returns the path."""
+        from sr2_bridge.adapters._utils import _extract_file_path
+
+        result = _extract_file_path("view_file", {"filename": "/tmp/data.json"})
+        assert result == "/tmp/data.json"
+
+    def test_non_file_tool_returns_none(self):
+        """Non-file tool (e.g. 'bash') returns None even if it has a 'path' arg."""
+        from sr2_bridge.adapters._utils import _extract_file_path
+
+        result = _extract_file_path("bash", {"path": "/some/dir"})
+        assert result is None
+
+    def test_empty_arguments_returns_none(self):
+        """Empty arguments dict returns None."""
+        from sr2_bridge.adapters._utils import _extract_file_path
+
+        result = _extract_file_path("Read", {})
+        assert result is None
+
+    def test_non_string_path_returns_none(self):
+        """Non-string path value returns None."""
+        from sr2_bridge.adapters._utils import _extract_file_path
+
+        result = _extract_file_path("Read", {"file_path": 42})
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Anthropic adapter file_path integration tests
+# ---------------------------------------------------------------------------
+
+class TestAnthropicAdapterFilePath:
+    """Integration tests for file_path population in Anthropic messages_to_turns."""
+
+    def setup_method(self):
+        self.adapter = AnthropicAdapter()
+
+    def test_tool_use_with_file_path(self):
+        """tool_use block with name='Read' populates file_path in metadata."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tu_1",
+                        "name": "Read",
+                        "input": {"file_path": "/src/main.py"},
+                    },
+                ],
+            },
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert turns[0].metadata["file_path"] == "/src/main.py"
+
+    def test_tool_result_inherits_file_path(self):
+        """tool_result block referencing a Read tool_use gets file_path via lookup."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tu_1",
+                        "name": "Read",
+                        "input": {"file_path": "/src/main.py"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": "file contents here",
+                    },
+                ],
+            },
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert turns[1].metadata["file_path"] == "/src/main.py"
+
+    def test_non_file_tool_no_file_path(self):
+        """tool_use block with name='bash' does NOT populate file_path."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tu_1",
+                        "name": "bash",
+                        "input": {"command": "ls"},
+                    },
+                ],
+            },
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert "file_path" not in turns[0].metadata
+
+
+# ---------------------------------------------------------------------------
+# OpenAI adapter file_path integration tests
+# ---------------------------------------------------------------------------
+
+class TestOpenAIAdapterFilePath:
+    """Integration tests for file_path population in OpenAI messages_to_turns."""
+
+    def setup_method(self):
+        self.adapter = OpenAIAdapter()
+
+    def test_tool_call_with_file_path(self):
+        """Assistant tool_call for 'cat' populates file_path in metadata."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "cat",
+                            "arguments": json.dumps({"file_path": "/app.py"}),
+                        },
+                    },
+                ],
+            },
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert turns[0].metadata["file_path"] == "/app.py"
+
+    def test_tool_message_inherits_file_path(self):
+        """Tool message referencing a 'cat' tool_call gets file_path via lookup."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "cat",
+                            "arguments": json.dumps({"file_path": "/app.py"}),
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "print('hello world')",
+            },
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert turns[1].metadata["file_path"] == "/app.py"
+
+    def test_non_file_tool_no_file_path(self):
+        """Assistant tool_call for 'bash' does NOT populate file_path."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": json.dumps({"command": "ls"}),
+                        },
+                    },
+                ],
+            },
+        ]
+        turns = self.adapter.messages_to_turns(messages, 0)
+        assert "file_path" not in turns[0].metadata

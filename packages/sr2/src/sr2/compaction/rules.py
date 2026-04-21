@@ -148,11 +148,11 @@ class ResultSummaryRule:
         status = "\u2713" if str(exit_code) == "0" else "\u2717"
         summary_parts = [f"\u2192 {status} Exit {exit_code}."]
         if truncated:
-            summary_parts.append(" ".join(truncated))
+            summary_parts.append("\n".join(truncated))
         if len(lines) > max_lines:
             summary_parts.append(f"... ({len(lines) - max_lines} more lines)")
 
-        content = " ".join(summary_parts)
+        content = "\n".join(summary_parts)
         return CompactionOutput(
             content=content,
             tokens=len(content) // 4,

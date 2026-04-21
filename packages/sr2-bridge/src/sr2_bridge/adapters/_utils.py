@@ -43,6 +43,24 @@ def _classify_tool_name(
     return "tool_output"
 
 
+def _extract_exit_code(tool_result_block: dict) -> int | None:
+    """Extract exit code from a tool result block (Anthropic format).
+
+    Returns 0 for success, 1 for error, None if indeterminate.
+    """
+    if not isinstance(tool_result_block, dict):
+        return None
+    if tool_result_block.get("type") != "tool_result":
+        return None
+    is_error = tool_result_block.get("is_error")
+    if is_error is True:
+        return 1
+    if is_error is False:
+        return 0
+    # Absent is_error — treat as success (Anthropic default)
+    return 0
+
+
 _FILE_PATH_KEYS = ("file_path", "path", "filename", "file")
 
 

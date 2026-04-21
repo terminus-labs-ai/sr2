@@ -8,7 +8,12 @@ import re
 
 from sr2.compaction.engine import ConversationTurn
 
-from sr2_bridge.adapters._utils import _classify_tool_name, _extract_file_path, _truncate
+from sr2_bridge.adapters._utils import (
+    _classify_tool_name,
+    _extract_exit_code,
+    _extract_file_path,
+    _truncate,
+)
 
 _SYSTEM_REMINDER_RE = re.compile(
     r"<system-reminder>(.*?)</system-reminder>",
@@ -240,9 +245,10 @@ class AnthropicAdapter:
                 content_str = str(content)
                 content_type = None
 
-            # Extract tool name and file path for metadata
+            # Extract tool name, file path, and exit code for metadata
             tool_name = None
             file_path = None
+            exit_code = None
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict):
@@ -262,6 +268,9 @@ class AnthropicAdapter:
                                 file_path = _extract_file_path(
                                     tool_name, args, self._tool_type_overrides
                                 )
+                            # Extract exit code for code_execution results
+                            if content_type == "code_execution":
+                                exit_code = _extract_exit_code(block)
                             break
 
             # Anthropic wraps tool_result blocks in role="user" messages.
@@ -291,6 +300,8 @@ class AnthropicAdapter:
                 meta["tool_name"] = tool_name
             if file_path:
                 meta["file_path"] = file_path
+            if exit_code is not None:
+                meta["exit_code"] = exit_code
             if extracted_reminders:
                 meta["extracted_system_reminders"] = extracted_reminders
 
