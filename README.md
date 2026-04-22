@@ -60,8 +60,6 @@ uv sync --all-extras
 
 # Or install individual packages
 pip install -e packages/sr2                # Core library only
-pip install -e packages/sr2-runtime        # Agent runtime (depends on sr2)
-pip install -e packages/sr2-bridge         # Bridge proxy (depends on sr2)
 ```
 
 ## Quick Start
@@ -250,66 +248,32 @@ Context breakdown (managed):
 
 SR2 is a **library**, not a framework. It compiles context — your code owns the LLM call, tool execution, and agent loop.
 
-The repo includes an **agent runtime** (`packages/sr2-runtime/`) that wires the library into a working agent with an LLM loop, session management, Telegram/HTTP/timer plugins, and MCP tool integration. Use it as-is or as a reference for your own integration.
-
 ```
 packages/
-├── sr2/                   # Core context engineering library (PyPI: sr2)
-│   └── src/sr2/
-│       ├── config/        #   Config models, loader, validation, schema gen
-│       ├── pipeline/      #   Engine, router, conversation manager, post-processor
-│       ├── resolvers/     #   Content resolvers (config, input, session, retrieval, etc.)
-│       ├── cache/         #   Cache policies and registry
-│       ├── compaction/    #   Rule-based content compaction
-│       ├── summarization/ #   LLM-powered conversation summarization
-│       ├── memory/        #   Extraction, retrieval, conflicts, resolution
-│       ├── degradation/   #   Circuit breaker and degradation ladder
-│       ├── tools/         #   Tool definitions, state machine, masking strategies
-│       ├── metrics/       #   Collector and pluggable exporter registry
-│       ├── tokenization/  #   Pluggable tokenizers (heuristic, tiktoken)
-│       ├── normalization/ #   LLM response cleaning (thinking blocks, markdown, JSON)
-│       ├── eval/          #   Multi-turn evaluation framework and benchmarking
-│       └── a2a/           #   Agent-to-Agent protocol support
-│
-├── sr2-runtime/           # Agent runtime (PyPI: sr2-runtime, depends on sr2)
-│   └── src/sr2_runtime/
-│       ├── agent.py       #   Main Agent class
-│       ├── cli.py         #   CLI entry point (sr2-agent)
-│       ├── llm/           #   LLM client, agentic loop, streaming
-│       ├── mcp/           #   MCP client and transports
-│       ├── plugins/       #   Interface plugins (http, telegram, timer, a2a, single-shot)
-│       ├── session/       #   Session lifecycle management
-│       └── heartbeat/     #   Scheduled agent callbacks
-│
-└── sr2-bridge/            # Context optimization proxy (PyPI: sr2-bridge, depends on sr2)
-    └── src/sr2_bridge/
-│
+└── sr2/                   # Core context engineering library (PyPI: sr2)
+    └── src/sr2/
+        ├── config/        #   Config models, loader, validation, schema gen
+        ├── pipeline/      #   Engine, router, conversation manager, post-processor
+        ├── resolvers/     #   Content resolvers (config, input, session, retrieval, etc.)
+        ├── cache/         #   Cache policies and registry
+        ├── compaction/    #   Rule-based content compaction
+        ├── summarization/ #   LLM-powered conversation summarization
+        ├── memory/        #   Extraction, retrieval, conflicts, resolution
+        ├── degradation/   #   Circuit breaker and degradation ladder
+        ├── tools/         #   Tool definitions, state machine, masking strategies
+        ├── metrics/       #   Collector and pluggable exporter registry
+        ├── tokenization/  #   Pluggable tokenizers (heuristic, tiktoken)
+        ├── normalization/ #   LLM response cleaning (thinking blocks, markdown, JSON)
+        ├── eval/          #   Multi-turn evaluation framework and benchmarking
+        └── a2a/           #   Agent-to-Agent protocol support
+
 configs/               # Example configs
 │   ├── defaults.yaml  #   Library defaults
 │   └── agents/edi/    #   Example agent
-│
-tests/                 # 1,292 tests
-│   ├── sr2/           #   Core library tests
-│   ├── runtime/       #   Runtime tests
-│   └── bridge/        #   Bridge tests
+
+tests/                 # Tests
+    └── sr2/           #   Core library tests
 ```
-
-## Running the Bridge
-
-The bridge optimizes context for external LLM callers like Claude Code.
-
-```bash
-# Install bridge
-pip install -e packages/sr2-bridge
-
-# Terminal 1: start the bridge (zero-config)
-sr2-bridge
-
-# Terminal 2: point Claude Code at the bridge
-ANTHROPIC_BASE_URL=http://localhost:9200 claude
-```
-
-The bridge compacts tool outputs, summarizes old conversation turns, and forwards optimized requests to the real API. See the [Bridge Guide](docs/guide-bridge.md) for configuration and details.
 
 ## Running the Example Agent
 
@@ -381,7 +345,6 @@ SR2 works with any LLM framework — it compiles context, your framework handles
 - **[Custom Resolvers](docs/guide-custom-resolvers.md)** — Build pluggable content sources (5 patterns + examples)
 - **[Circuit Breakers](docs/guide-circuit-breakers.md)** — Graceful degradation when layers fail
 - **[Agent-to-Agent](docs/guide-a2a.md)** — Multi-agent workflows and service composition
-- **[Bridge](docs/guide-bridge.md)** — Context optimization proxy for Claude Code and external LLM callers
 - **[Heartbeats](docs/guide-heartbeats.md)** — Scheduling agent callbacks for async tasks and retries
 - **[Evaluation Harness](docs/guide-eval-harness.md)** — Multi-turn benchmarking framework and evaluation
 - **[Observability](docs/observability.md)** — Prometheus and OpenTelemetry setup

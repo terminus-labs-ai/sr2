@@ -3,9 +3,6 @@
 Single source of truth: the Pydantic models in models.py define the config.
 This module generates human-readable docs and machine-readable schema from them.
 
-This module lives outside both sr2 and runtime packages because it imports
-from both — it's a cross-cutting documentation tool, not a runtime dependency.
-
 Usage:
     python -m schema_gen --format md > docs/configuration.md
     python -m schema_gen --format json > schema.json
@@ -30,19 +27,6 @@ from sr2.config.models import (
     LLMConfig,
     LLMModelOverride,
 )
-from sr2_runtime.config import (
-    AgentYAMLConfig,
-    RuntimeConfig,
-    RuntimeDatabaseConfig,
-    RuntimeLLMConfig,
-    RuntimeLoopConfig,
-    RuntimeSessionConfig,
-    InterfaceConfig,
-    LLMModelConfig,
-    MCPServerConfig,
-    ModelParams,
-    StreamContentConfig,
-)
 
 
 # Hierarchical config sections for documentation.
@@ -65,55 +49,14 @@ CONFIG_SECTIONS: list[tuple[str, type | None, int]] = [
     ("Degradation", DegradationConfig, 3),
     ("Layers", LayerConfig, 3),
     ("Content Item", ContentItemConfig, 4),
-    # --- Runtime Config (agent.yaml) ---
-    ("Runtime Config", None, 2),
-    ("Top-Level", RuntimeConfig, 3),
-    ("Database", RuntimeDatabaseConfig, 3),
-    ("LLM", RuntimeLLMConfig, 3),
-    ("LLM Model", LLMModelConfig, 4),
-    ("Model Parameters", ModelParams, 4),
-    ("Loop", RuntimeLoopConfig, 3),
-    ("Session Defaults", RuntimeSessionConfig, 3),
-    ("Stream Content", StreamContentConfig, 3),
-    # --- Interfaces & Plugins ---
-    ("Interfaces & Plugins", None, 2),
-    ("Interface", InterfaceConfig, 3),
-    ("MCP Server", MCPServerConfig, 3),
 ]
 
 
 def generate_json_schema() -> dict:
-    """Generate combined JSON Schema for agent.yaml.
-
-    Merges PipelineConfig (pipeline fields) and AgentYAMLConfig (runtime,
-    interfaces, mcp_servers, sessions) into a single schema. This reflects
-    the real agent.yaml structure where pipeline fields coexist with runtime
-    fields via Pydantic's extra="allow".
-    """
-    pipeline_schema = PipelineConfig.model_json_schema()
-    agent_schema = AgentYAMLConfig.model_json_schema()
-
-    # Start from the agent schema (runtime, interfaces, mcp_servers, etc.)
-    # and merge in pipeline properties so the combined schema covers both.
-    merged = dict(agent_schema)
-    merged_props = dict(merged.get("properties", {}))
-    merged_defs = dict(merged.get("$defs", {}))
-
-    # Add pipeline properties that aren't already in the agent schema
-    for prop_name, prop_info in pipeline_schema.get("properties", {}).items():
-        if prop_name not in merged_props:
-            merged_props[prop_name] = prop_info
-
-    # Merge $defs from both schemas
-    for def_name, def_info in pipeline_schema.get("$defs", {}).items():
-        if def_name not in merged_defs:
-            merged_defs[def_name] = def_info
-
-    merged["properties"] = merged_props
-    merged["$defs"] = merged_defs
-    merged["title"] = "AgentConfig"
-
-    return merged
+    """Generate JSON Schema for PipelineConfig."""
+    schema = PipelineConfig.model_json_schema()
+    schema["title"] = "PipelineConfig"
+    return schema
 
 
 def generate_yaml_schema() -> str:
@@ -156,7 +99,6 @@ def generate_markdown() -> str:
     lines.append("")
     lines.extend(_document_compaction_rules())
     lines.extend(_document_cache_policies())
-    lines.extend(_document_runtime_config())
 
     return "\n".join(lines)
 
@@ -366,20 +308,6 @@ def _document_cache_policies() -> list[str]:
     ]
 
 
-def _document_runtime_config() -> list[str]:
-    """Document runtime-specific reference material not covered by auto-generated model docs."""
-    return [
-        "### Session Lifecycles",
-        "",
-        "| Lifecycle | Behavior | Persisted | Use Case |",
-        "|---|---|---|---|",
-        "| `persistent` | Survives across triggers. Compaction/summarization apply. | ✅ PostgreSQL | User conversations |",
-        "| `ephemeral` | Fresh per trigger. Destroyed after processing. | ❌ In-memory | Heartbeats, A2A calls |",
-        "| `rolling` | Persistent but capped at `max_turns`. Oldest dropped. | ✅ PostgreSQL | Monitoring, log watchers |",
-        "",
-    ]
-
-
 def generate_defaults_yaml() -> str:
     """Generate a comprehensive defaults.yaml showing every config option.
 
@@ -388,12 +316,10 @@ def generate_defaults_yaml() -> str:
     uncommented; fields without defaults (required, no value) are commented out
     with a placeholder.
     """
-    # Get actual default values from instantiated models
     pipeline_defaults = PipelineConfig().model_dump()
-    agent_defaults = AgentYAMLConfig().model_dump()
 
     lines: list[str] = [
-        "# SR2 - Comprehensive Configuration Defaults",
+        "# SR2 - Pipeline Configuration Defaults",
         "# Auto-generated from Pydantic models. Do not edit by hand.",
         "# Re-generate with: uv run python -m schema_gen --format defaults",
         "#",
@@ -402,13 +328,6 @@ def generate_defaults_yaml() -> str:
         "",
     ]
 
-    # --- Pipeline Config section ---
-    lines.append("#" + "=" * 69)
-    lines.append("# Pipeline Config")
-    lines.append("#" + "=" * 69)
-    lines.append("")
-    lines.append("pipeline:")
-
     pipeline_schema = PipelineConfig.model_json_schema()
     pipeline_defs = pipeline_schema.get("$defs", {})
     _emit_section(
@@ -416,29 +335,10 @@ def generate_defaults_yaml() -> str:
         pipeline_schema.get("properties", {}),
         pipeline_defaults,
         pipeline_defs,
-        indent=1,
-        skip_fields={"extends"},
-    )
-
-    # --- Runtime Config section ---
-    lines.append("")
-    lines.append("#" + "=" * 69)
-    lines.append("# Runtime Config (agent.yaml)")
-    lines.append("#" + "=" * 69)
-    lines.append("")
-
-    agent_schema = AgentYAMLConfig.model_json_schema()
-    agent_defs = agent_schema.get("$defs", {})
-    _emit_section(
-        lines,
-        agent_schema.get("properties", {}),
-        agent_defaults,
-        agent_defs,
         indent=0,
         skip_fields={"extends"},
     )
 
-    # Remove trailing blank lines
     while lines and lines[-1] == "":
         lines.pop()
     lines.append("")

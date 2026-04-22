@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 # Matches ${VAR} and ${VAR:-default}
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}:]+?)(?::-(.*?))?\}")
 
-# Fields from LLMModelOverride that we allow through from sr2_runtime.llm
+# Fields from LLMModelOverride that are allowed through
 _LLM_OVERRIDE_FIELDS = set(LLMModelOverride.model_fields.keys())
 
 

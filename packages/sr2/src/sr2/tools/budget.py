@@ -1,6 +1,6 @@
 """Tool schema compression and token budget enforcement.
 
-Extracted from sr2_runtime.agent so the logic is reusable outside the runtime
+Tool schema budget enforcement — compress and enforce token limits on tool schemas.
 and testable without the full agent stack.
 """
 

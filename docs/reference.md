@@ -59,43 +59,6 @@ docker run -d -p 3000:8080 \
 
 Open [http://localhost:3000](http://localhost:3000) and select the `sr2-edi` model. Or use the `docker compose` setup — see the `open-webui` service in `docker-compose.yaml`.
 
-## Run the Bridge
-
-```bash
-# Zero-config (defaults: port 9200, upstream api.anthropic.com)
-uv run sr2-bridge
-
-# With config file
-uv run sr2-bridge bridge.yaml
-
-# CLI overrides
-uv run sr2-bridge bridge.yaml --port 9300 --host 0.0.0.0 --upstream https://custom-api.example.com
-
-# Options
-#   --port PORT              Override listen port
-#   --host HOST              Override bind host
-#   --upstream URL           Override upstream API URL
-#   --log-level DEBUG        Verbose logging
-```
-
-Then point your LLM caller at the bridge:
-
-```bash
-ANTHROPIC_BASE_URL=http://localhost:9200 claude
-```
-
-### Bridge Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/messages` | POST | Main proxy — optimize context, forward, stream back |
-| `/v1/messages/count_tokens` | POST | Passthrough (no optimization) |
-| `/{path}` | ANY | Catchall passthrough for other API endpoints |
-| `/health` | GET | Health check (uptime, active sessions, upstream URL) |
-| `/metrics` | GET | Prometheus-format metrics |
-
-See [Bridge Guide](guide-bridge.md) for full configuration and troubleshooting.
-
 ## Generate Config Schema / Docs
 
 ```bash
@@ -174,8 +137,6 @@ Deep merge, more specific wins. Use `extends:` to reference parent config.
 | `configs/agents/edi/agent.yaml` | Agent config (system prompt, tools, LLM, plugins) |
 | `configs/agents/edi/interfaces/` | Per-interface pipeline configs |
 | `packages/sr2/src/sr2/` | Core context engineering library |
-| `packages/sr2-runtime/src/sr2_runtime/` | Agent runtime (CLI, LLM loop, plugins, sessions) |
-| `packages/sr2-bridge/src/sr2_bridge/` | Bridge proxy (context optimization for external callers) |
 | `tests/` | Unit + integration tests |
 
 ## Creating a New Agent
@@ -224,7 +185,6 @@ runtime:
   heartbeat:
     enabled: false                   # Enable schedule_heartbeat / cancel_heartbeat tools
     poll_interval_seconds: 30        # Scanner poll frequency (min: 5)
-    max_context_turns: 10            # Turns carried from source session
     session_lifecycle: ephemeral     # Session lifecycle for heartbeat sessions
     pipeline: null                   # Custom pipeline config path (optional)
     max_pending_per_agent: 100       # Max queued heartbeats

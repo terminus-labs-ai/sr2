@@ -116,7 +116,6 @@ That's the minimal case. In production you'd add memory retrieval, conversation 
 - **Graceful degradation** — Per-layer circuit breakers keep the agent running when layers fail.
 - **Per-interface configs** — Different token budgets and strategies per trigger type (chat, heartbeat, A2A).
 - **Memory system** — Extract, store, and retrieve structured memories with conflict resolution.
-- **Bridge proxy** — Optimize context for external LLM callers (Claude Code, LangChain) via reverse proxy.
 - **Tool state machine** — Dynamic tool masking with named states and transitions.
 - **Pluggable tokenizers** — Heuristic (fast) or tiktoken (accurate).
 
@@ -138,8 +137,6 @@ Real multi-turn sessions against Claude Opus — SR2 pipeline vs naive concatena
 | Package | Description |
 |---------|-------------|
 | `sr2` | Core context engineering library |
-| `sr2-runtime` | Agent runtime with LLM loop, sessions, plugins |
-| `sr2-bridge` | Context optimization reverse proxy |
 | `sr2-pro` | PostgreSQL + pgvector, OpenTelemetry, Prometheus, alerts |
 
 ## Next Steps

@@ -24,20 +24,15 @@ class TestGenerateJsonSchema:
         assert "$defs" in schema
 
     def test_validates_defaults_yaml(self):
-        """Generated defaults.yaml should load into both PipelineConfig and AgentYAMLConfig."""
+        """Generated defaults.yaml should load into PipelineConfig."""
         with open(DEFAULTS_PATH) as f:
             raw = yaml.safe_load(f)
-        # Pipeline fields are now nested under pipeline:
-        pipeline_raw = raw.get("pipeline", {})
         pipeline_fields = {
-            k: v for k, v in pipeline_raw.items()
+            k: v for k, v in raw.items()
             if v is not None and k in PipelineConfig.model_fields
         }
         config = PipelineConfig(**pipeline_fields)
         assert config.token_budget == 32000
-        # Verify runtime fields are present in the raw YAML
-        assert "runtime" in raw
-        assert "agent_name" in raw
 
 
 class TestGenerateMarkdown:
@@ -139,21 +134,12 @@ class TestGenerateDefaultsYaml:
 
     def test_contains_pipeline_section(self):
         output = generate_defaults_yaml()
-        assert "# Pipeline Config" in output
-        assert "pipeline:" in output
-        assert "  token_budget: 32000" in output
-        assert "  pre_rot_threshold: 0.25" in output
-
-    def test_contains_runtime_section(self):
-        output = generate_defaults_yaml()
-        assert "# Runtime Config (agent.yaml)" in output
-        assert "runtime:" in output
-        assert "database:" in output
-        assert "pool_min: 2" in output
+        assert "token_budget: 32000" in output
+        assert "pre_rot_threshold: 0.25" in output
 
     def test_contains_kv_cache_defaults(self):
         output = generate_defaults_yaml()
-        assert "  kv_cache:" in output
+        assert "kv_cache:" in output
         assert "strategy: append_only" in output
         assert "compaction_timing: post_llm_async" in output
 
@@ -173,15 +159,15 @@ class TestGenerateDefaultsYaml:
     def test_commented_required_fields(self):
         """Required fields without defaults should be commented out."""
         output = generate_defaults_yaml()
-        # MCPServerConfig.name and .url are required
-        assert "# - name: <required>" in output
-        assert "#   url: <required>" in output
+        # CompactionRuleConfig.type and .strategy are required
+        assert "# - type: <required>" in output
+        assert "#   strategy: <required>" in output
 
     def test_optional_fields_show_null(self):
         """Optional fields (with None default) should show null."""
         output = generate_defaults_yaml()
-        # MCPServerConfig.tools is Optional[list[str]] with default None
-        assert "#   tools: null" in output
+        assert "system_prompt: null" in output
+        assert "pull_exporter: null" in output
 
     def test_array_example_shows_schema_defaults(self):
         """Commented array examples should use schema defaults, not placeholders."""
@@ -190,24 +176,6 @@ class TestGenerateDefaultsYaml:
         assert "max_compacted_tokens: 80" in output
         # CompactionRuleConfig.recovery_hint defaults to false
         assert "recovery_hint: false" in output
-
-    def test_runtime_llm_models(self):
-        output = generate_defaults_yaml()
-        assert "claude-sonnet-4-20250514" in output
-        assert "claude-haiku-4-5-20251001" in output
-        assert "text-embedding-3-small" in output
-
-    def test_mcp_servers_section(self):
-        output = generate_defaults_yaml()
-        assert "mcp_servers:" in output
-
-    def test_interfaces_section(self):
-        output = generate_defaults_yaml()
-        assert "# interfaces:" in output
-
-    def test_sessions_section(self):
-        output = generate_defaults_yaml()
-        assert "# sessions:" in output
 
     def test_pipeline_fields_parseable_after_stripping_comments(self):
         """The uncommented pipeline fields should be valid YAML loadable by PipelineConfig."""
@@ -222,7 +190,7 @@ class TestGenerateDefaultsYaml:
         yaml_str = "\n".join(uncommented_lines)
         parsed = yaml.safe_load(yaml_str)
         assert isinstance(parsed, dict)
-        assert parsed["pipeline"]["token_budget"] == 32000
+        assert parsed["token_budget"] == 32000
 
     def test_defaults_yaml_file_matches_generator(self):
         """configs/defaults.yaml should match the generator output."""

@@ -1,429 +1,297 @@
-# SR2 - Comprehensive Configuration Defaults
+# SR2 - Pipeline Configuration Defaults
 # Auto-generated from Pydantic models. Do not edit by hand.
 # Re-generate with: uv run python -m schema_gen --format defaults
 #
 # Fields with defaults are shown uncommented.
 # Fields without defaults (required) are commented out with placeholders.
 
-#=====================================================================
-# Pipeline Config
-#=====================================================================
+# Override the agent-level system prompt for this interface/pipeline.
+system_prompt: null
+# Total token budget for the context window. The pipeline distributes this
+# budget across layers. Higher values allow more context but increase cost and
+# latency.
+token_budget: 32000
+# Fraction of token budget that triggers pre-emptive context rotation. When
+# remaining budget drops below this fraction, summarization and compaction are
+# triggered proactively to avoid hitting the hard limit.
+pre_rot_threshold: 0.25
+# Per-interface LLM overrides
+# llm:
 
-pipeline:
-  # Override the agent-level system prompt for this interface/pipeline.
-  system_prompt: null
-  # Total token budget for the context window. The pipeline distributes this
-  # budget across layers. Higher values allow more context but increase cost and
-  # latency.
-  token_budget: 32000
-  # Fraction of token budget that triggers pre-emptive context rotation. When
-  # remaining budget drops below this fraction, summarization and compaction are
-  # triggered proactively to avoid hitting the hard limit.
-  pre_rot_threshold: 0.25
-  # Per-interface LLM overrides
-  # llm:
+# KV-cache optimization settings
+kv_cache:
+  # KV-cache optimization strategy. 'append_only' keeps a stable prefix for
+  # cache reuse. 'maximize_prefix_reuse' reorders layers for maximum prefix hit.
+  # 'no_cache_optimization' disables cache-aware ordering.
+  strategy: append_only
+  # When to run compaction. 'post_llm_async' runs after LLM response without
+  # blocking. 'immediate' runs synchronously before next turn. 'disabled' turns
+  # off compaction entirely.
+  compaction_timing: post_llm_async
+  # When to trigger summarization. 'natural_breakpoint' summarizes at topic
+  # shifts or pauses. 'token_threshold' summarizes when token usage exceeds the
+  # configured threshold. 'disabled' turns off summarization.
+  summarization_timing: natural_breakpoint
+  # When to refresh retrieved memories. 'on_topic_shift' refreshes when intent
+  # detection flags a topic change. 'every_n_turns' refreshes at a fixed
+  # interval. 'session_start_only' loads memories once at session start.
+  # 'disabled' turns off memory refresh.
+  memory_refresh: on_topic_shift
+  # Only used if memory_refresh=every_n_turns
+  memory_refresh_interval: 10
 
-  # KV-cache optimization settings
-  kv_cache:
-    # KV-cache optimization strategy. 'append_only' keeps a stable prefix for
-    # cache reuse. 'maximize_prefix_reuse' reorders layers for maximum prefix
-    # hit. 'no_cache_optimization' disables cache-aware ordering.
-    strategy: append_only
-    # When to run compaction. 'post_llm_async' runs after LLM response without
-    # blocking. 'immediate' runs synchronously before next turn. 'disabled'
-    # turns off compaction entirely.
-    compaction_timing: post_llm_async
-    # When to trigger summarization. 'natural_breakpoint' summarizes at topic
-    # shifts or pauses. 'token_threshold' summarizes when token usage exceeds
-    # the configured threshold. 'disabled' turns off summarization.
-    summarization_timing: natural_breakpoint
-    # When to refresh retrieved memories. 'on_topic_shift' refreshes when intent
-    # detection flags a topic change. 'every_n_turns' refreshes at a fixed
-    # interval. 'session_start_only' loads memories once at session start.
-    # 'disabled' turns off memory refresh.
-    memory_refresh: on_topic_shift
-    # Only used if memory_refresh=every_n_turns
-    memory_refresh_interval: 10
-
-  # Content compaction settings
-  compaction:
-    # Enable compaction. When True, verbose tool outputs and file contents are
-    # replaced with compact references. Compacted content can be re-fetched by
-    # the agent using just-in-time retrieval tools.
+# Content compaction settings
+compaction:
+  # Enable compaction. When True, verbose tool outputs and file contents are
+  # replaced with compact references. Compacted content can be re-fetched by the
+  # agent using just-in-time retrieval tools.
+  enabled: true
+  # Keep last N turns in full detail
+  raw_window: 5
+  # Don't compact below this token count
+  min_content_size: 100
+  # Cache-cost-aware compaction gating. When enabled, each turn is evaluated
+  # against prompt caching economics before compaction is applied.
+  cost_gate:
+    # Enable cost-aware compaction gating. When True, each compaction candidate
+    # is evaluated against cache invalidation costs before being compacted.
     enabled: true
-    # Keep last N turns in full detail
-    raw_window: 5
-    # Don't compact below this token count
-    min_content_size: 100
-    # Cache-cost-aware compaction gating. When enabled, each turn is evaluated
-    # against prompt caching economics before compaction is applied.
-    cost_gate:
-      # Enable cost-aware compaction gating. When True, each compaction
-      # candidate is evaluated against cache invalidation costs before being
-      # compacted.
-      enabled: true
-      # Fallback model name for LiteLLM pricing lookup when the request model is
-      # unknown (e.g., 'claude-sonnet-4-6').
-      fallback_model: claude-sonnet-4-6-20250514
-      # Custom per-token pricing in $/MTok. Expected keys: 'input',
-      # 'cache_write', 'cache_read'. Takes priority over LiteLLM lookup.
-      custom_pricing: null
-      # Minimum net dollar savings required for compaction to be allowed. Set to
-      # 0 to allow any cost-positive compaction.
-      min_net_savings_usd: 0.01
-      # Expected number of future turns in the session. Savings from compaction
-      # compound over each subsequent API call — this multiplier reflects that.
-      # Higher values favor compaction; lower values are conservative.
-      expected_remaining_turns: 10
+    # Fallback model name for LiteLLM pricing lookup when the request model is
+    # unknown (e.g., 'claude-sonnet-4-6').
+    fallback_model: claude-sonnet-4-6-20250514
+    # Custom per-token pricing in $/MTok. Expected keys: 'input', 'cache_write',
+    # 'cache_read'. Takes priority over LiteLLM lookup.
+    custom_pricing: null
+    # Minimum net dollar savings required for compaction to be allowed. Set to 0
+    # to allow any cost-positive compaction.
+    min_net_savings_usd: 0.01
+    # Expected number of future turns in the session. Savings from compaction
+    # compound over each subsequent API call — this multiplier reflects that.
+    # Higher values favor compaction; lower values are conservative.
+    expected_remaining_turns: 10
 
-    # Compaction rules. Each rule matches a content_type and applies a strategy.
-    # Available strategies: schema_and_sample, reference, result_summary,
-    # supersede, collapse.
-    rules: []
-    # Example entry:
-      # - type: <required>
-      #   strategy: <required>
-      #   max_compacted_tokens: 80
-      #   recovery_hint: false
+  # Compaction rules. Each rule matches a content_type and applies a strategy.
+  # Available strategies: schema_and_sample, reference, result_summary,
+  # supersede, collapse.
+  rules: []
+  # Example entry:
+    # - type: <required>
+    #   strategy: <required>
+    #   max_compacted_tokens: 80
+    #   recovery_hint: false
 
-    # Compaction strategy. 'rule_based' uses content-type rules only. 'llm' uses
-    # an LLM to produce structured analysis + narrative summary. 'hybrid'
-    # applies rule-based first, then LLM for remaining uncompacted turns.
-    strategy: rule_based
-    # Model to use for LLM compaction strategy. Defaults to the pipeline's fast
-    # model.
-    llm_compaction_model: null
-    # Maximum tokens for LLM compaction output (analysis + summary).
-    llm_compaction_max_tokens: 1000
-    # Budget-pressure-aware compaction optimizer. When enabled, takes precedence
+  # Compaction strategy. 'rule_based' uses content-type rules only. 'llm' uses
+  # an LLM to produce structured analysis + narrative summary. 'hybrid' applies
+  # rule-based first, then LLM for remaining uncompacted turns.
+  strategy: rule_based
+  # Model to use for LLM compaction strategy. Defaults to the pipeline's fast
+  # model.
+  llm_compaction_model: null
+  # Maximum tokens for LLM compaction output (analysis + summary).
+  llm_compaction_max_tokens: 1000
+  # Budget-pressure-aware compaction optimizer. When enabled, takes precedence
+  # over cost_gate for compaction decisions.
+  budget_optimizer:
+    # Enable budget-aware compaction optimization. When True, takes precedence
     # over cost_gate for compaction decisions.
-    budget_optimizer:
-      # Enable budget-aware compaction optimization. When True, takes precedence
-      # over cost_gate for compaction decisions.
-      enabled: true
-      # Budget utilization fraction above which compaction becomes increasingly
-      # aggressive. Below this, only cost-positive compactions run.
-      pressure_threshold: 0.8
-      # Budget utilization fraction above which all cost checks are bypassed. If
-      # still over after compacting outside raw_window, raw_window turns become
-      # eligible.
-      force_threshold: 0.95
-      # Fallback model name for LiteLLM pricing lookup when the request model is
-      # unknown.
-      fallback_model: claude-sonnet-4-6-20250514
-      # Custom per-token pricing in $/MTok. Expected keys: 'input',
-      # 'cache_write', 'cache_read'. Takes priority over LiteLLM lookup.
-      custom_pricing: null
-      # Minimum net dollar savings at zero pressure. Reduced toward zero as
-      # pressure rises. Set to 0 to allow any cost-positive compaction.
-      min_net_savings_usd: 0.0
-      # Expected number of future turns. Savings compound over each subsequent
-      # API call — this multiplier reflects that.
-      expected_remaining_turns: 10
-      # Run actual compaction rules to estimate output size before deciding.
-      # When False, falls back to original_tokens // 4 heuristic.
-      dry_run: true
-
-
-  # Conversation summarization settings
-  summarization:
-    # Enable automatic summarization. When True, older conversation history is
-    # summarized to reclaim token budget while preserving key information.
     enabled: true
-    # What triggers summarization. 'token_threshold' triggers when token usage
-    # exceeds the threshold fraction. 'topic_shift' triggers on detected topic
-    # changes. 'manual' only triggers via explicit API call.
-    trigger: token_threshold
-    threshold: 0.75
-    # Model identifier for summarization
-    model: fast
-    # Number of most recent turns to exclude from summarization. These turns are
-    # always kept in full detail regardless of token pressure.
-    preserve_recent_turns: 3
-    # Format for generated summaries. 'structured' produces categorized bullet
-    # points (decisions, issues, preferences). 'prose' produces a narrative
-    # paragraph.
-    output_format: structured
-    # How summaries are injected into context. 'flat' inserts the full summary
-    # as a single block. 'selective' inserts only the sections relevant to the
-    # current topic (requires intent detection).
-    injection: flat
-    # Categories of information to always preserve in summaries. These
-    # categories are extracted and retained even under heavy token pressure.
-    preserve: [decisions_and_reasoning, unresolved_issues, user_preferences_expressed, key_facts_and_data, error_context]
-    # Categories of information to discard during summarization. Content
-    # matching these categories is dropped to save tokens.
-    discard: [successful_routine_actions, redundant_confirmations, exploration_dead_ends]
-    # Maximum token budget for the compacted zone before summarization triggers.
-    # Summarization fires when compacted_tokens > threshold *
-    # compacted_max_tokens. For heavy-traffic proxies (e.g. Claude Code), raise
-    # to 50000-100000.
-    compacted_max_tokens: 6000
+    # Budget utilization fraction above which compaction becomes increasingly
+    # aggressive. Below this, only cost-positive compactions run.
+    pressure_threshold: 0.8
+    # Budget utilization fraction above which all cost checks are bypassed. If
+    # still over after compacting outside raw_window, raw_window turns become
+    # eligible.
+    force_threshold: 0.95
+    # Fallback model name for LiteLLM pricing lookup when the request model is
+    # unknown.
+    fallback_model: claude-sonnet-4-6-20250514
+    # Custom per-token pricing in $/MTok. Expected keys: 'input', 'cache_write',
+    # 'cache_read'. Takes priority over LiteLLM lookup.
+    custom_pricing: null
+    # Minimum net dollar savings at zero pressure. Reduced toward zero as
+    # pressure rises. Set to 0 to allow any cost-positive compaction.
+    min_net_savings_usd: 0.0
+    # Expected number of future turns. Savings compound over each subsequent API
+    # call — this multiplier reflects that.
+    expected_remaining_turns: 10
+    # Run actual compaction rules to estimate output size before deciding. When
+    # False, falls back to original_tokens // 4 heuristic.
+    dry_run: true
 
-  # Retrieval-augmented context settings
-  retrieval:
-    # Enable retrieval-augmented context. When True, relevant memories and
-    # documents are retrieved and injected into the context window.
-    enabled: true
-    # Retrieval strategy. 'hybrid' combines semantic and keyword search.
-    # 'semantic' uses embedding similarity only. 'keyword' uses BM25/keyword
-    # matching. 'scoped' restricts retrieval to the current topic scope.
-    strategy: hybrid
-    # Maximum number of retrieved items to include in context.
-    top_k: 10
-    # Maximum total tokens allocated for retrieved content. Results are
-    # truncated to fit within this budget.
-    max_tokens: 4000
 
-  # Intent detection and topic shift settings
-  intent_detection:
-    # Enable intent detection. When True, user messages are classified to detect
-    # topic shifts, which can trigger memory refresh and selective
-    # summarization.
-    enabled: true
-    model: fast
+# Conversation summarization settings
+summarization:
+  # Enable automatic summarization. When True, older conversation history is
+  # summarized to reclaim token budget while preserving key information.
+  enabled: true
+  # What triggers summarization. 'token_threshold' triggers when token usage
+  # exceeds the threshold fraction. 'topic_shift' triggers on detected topic
+  # changes. 'manual' only triggers via explicit API call.
+  trigger: token_threshold
+  threshold: 0.75
+  # Model identifier for summarization
+  model: fast
+  # Number of most recent turns to exclude from summarization. These turns are
+  # always kept in full detail regardless of token pressure.
+  preserve_recent_turns: 3
+  # Format for generated summaries. 'structured' produces categorized bullet
+  # points (decisions, issues, preferences). 'prose' produces a narrative
+  # paragraph.
+  output_format: structured
+  # How summaries are injected into context. 'flat' inserts the full summary as
+  # a single block. 'selective' inserts only the sections relevant to the
+  # current topic (requires intent detection).
+  injection: flat
+  # Categories of information to always preserve in summaries. These categories
+  # are extracted and retained even under heavy token pressure.
+  preserve: [decisions_and_reasoning, unresolved_issues, user_preferences_expressed, key_facts_and_data, error_context]
+  # Categories of information to discard during summarization. Content matching
+  # these categories is dropped to save tokens.
+  discard: [successful_routine_actions, redundant_confirmations, exploration_dead_ends]
+  # Maximum token budget for the compacted zone before summarization triggers.
+  # Summarization fires when compacted_tokens > threshold *
+  # compacted_max_tokens. For heavy-traffic proxies (e.g. Claude Code), raise to
+  # 50000-100000.
+  compacted_max_tokens: 6000
 
-  # Tool visibility and masking settings
-  tool_masking:
-    # Tool masking strategy. 'allowed_list' only exposes allowed tools.
-    # 'prefill' uses assistant prefill to guide tool selection. 'logit_mask'
-    # applies logit bias to suppress disallowed tools. 'none' exposes all tools.
-    strategy: allowed_list
-    # Initial tool state name. References a named state in the tool masking
-    # configuration that defines which tools are available at conversation
-    # start.
-    initial_state: default
+# Retrieval-augmented context settings
+retrieval:
+  # Enable retrieval-augmented context. When True, relevant memories and
+  # documents are retrieved and injected into the context window.
+  enabled: true
+  # Retrieval strategy. 'hybrid' combines semantic and keyword search.
+  # 'semantic' uses embedding similarity only. 'keyword' uses BM25/keyword
+  # matching. 'scoped' restricts retrieval to the current topic scope.
+  strategy: hybrid
+  # Maximum number of retrieved items to include in context.
+  top_k: 10
+  # Maximum total tokens allocated for retrieved content. Results are truncated
+  # to fit within this budget.
+  max_tokens: 4000
 
-  # Tool visibility states. Each state defines allowed/denied tools.
-  tool_states:
-    - name: default
-      description: ""
-      allowed_tools: all
-      denied_tools: []
+# Intent detection and topic shift settings
+intent_detection:
+  # Enable intent detection. When True, user messages are classified to detect
+  # topic shifts, which can trigger memory refresh and selective summarization.
+  enabled: true
+  model: fast
 
-  # Rules for transitioning between tool states.
-  tool_transitions: []
+# Tool visibility and masking settings
+tool_masking:
+  # Tool masking strategy. 'allowed_list' only exposes allowed tools. 'prefill'
+  # uses assistant prefill to guide tool selection. 'logit_mask' applies logit
+  # bias to suppress disallowed tools. 'none' exposes all tools.
+  strategy: allowed_list
+  # Initial tool state name. References a named state in the tool masking
+  # configuration that defines which tools are available at conversation start.
+  initial_state: default
+
+# Tool visibility states. Each state defines allowed/denied tools.
+tool_states:
+  - name: default
+    description: ""
+    allowed_tools: all
+    denied_tools: []
+
+# Rules for transitioning between tool states.
+tool_transitions: []
+# Example entry:
+  # - from_state: <required>
+  #   to_state: <required>
+  #   trigger: agent_intent
+  #   condition: ""
+
+# Max tokens to allocate for tool schemas. If set, schemas are truncated to fit
+# within this budget. None = no limit (all schemas sent as-is). Truncation
+# strategy: drop descriptions, then drop parameters, then drop entire tools.
+tool_schema_max_tokens: null
+# Tool call parameter validation and repair settings
+tool_validation:
+  # Enable tool output validation. When True, LLM tool call parameters are
+  # validated against their JSON schemas before execution.
+  enabled: true
+  # Strict mode rejects any invalid parameters. Lenient mode (default) attempts
+  # to repair common errors (type coercion, default injection, extra field
+  # stripping).
+  strict: false
+  # When validation fails, re-prompt the LLM with errors to fix the tool call.
+  retry: false
+  # Maximum number of retry attempts when validation fails.
+  max_retries: 1
+
+# Circuit breaker and degradation settings
+degradation:
+  # Number of consecutive failures before the circuit breaker opens. When open,
+  # requests are short-circuited to prevent cascading failures.
+  circuit_breaker_threshold: 3
+  # Minutes to wait before retrying after the circuit breaker opens. After this
+  # cooldown, the circuit enters half-open state and allows a trial request.
+  circuit_breaker_cooldown_minutes: 5
+
+# Memory extraction settings
+memory:
+  # Whether to automatically extract memories from conversation turns. When
+  # False, memories can still be saved explicitly via save_memory tool.
+  extract: true
+  # Memory store backend name. Built-in: 'memory' (in-memory), 'sqlite'.
+  # Additional backends (e.g. 'postgres') available via plugins like sr2-pro.
+  store: memory
+  # Keyword arguments passed to the memory store constructor. E.g. {'db_path':
+  # '/tmp/sr2.db'} for SQLite, {'dsn': 'postgresql://...'} for PostgreSQL.
+  # store_kwargs:
+  #   <name>: {}
+
+  # Scope configuration for memory isolation and sharing. When absent, all
+  # memories are accessible (backward compatible).
+  # scope:
+
+  # Key prefix schema for memory extraction. Guides the LLM to use consistent,
+  # dot-notation keys.
+  key_schema: []
   # Example entry:
-    # - from_state: <required>
-    #   to_state: <required>
-    #   trigger: agent_intent
-    #   condition: ""
+    # - prefix: <required>
+    #   description: ""
+    #   examples: []
 
-  # Max tokens to allocate for tool schemas. If set, schemas are truncated to
-  # fit within this budget. None = no limit (all schemas sent as-is). Truncation
-  # strategy: drop descriptions, then drop parameters, then drop entire tools.
-  tool_schema_max_tokens: null
-  # Tool call parameter validation and repair settings
-  tool_validation:
-    # Enable tool output validation. When True, LLM tool call parameters are
-    # validated against their JSON schemas before execution.
-    enabled: true
-    # Strict mode rejects any invalid parameters. Lenient mode (default)
-    # attempts to repair common errors (type coercion, default injection, extra
-    # field stripping).
-    strict: false
-    # When validation fails, re-prompt the LLM with errors to fix the tool call.
-    retry: false
-    # Maximum number of retry attempts when validation fails.
-    max_retries: 1
+  # Maximum number of turns to process per extraction run. Limits LLM calls per
+  # pipeline invocation.
+  extraction_batch_size: 5
+  # Number of existing keys to include as reuse hints in the extraction prompt.
+  # Reduces synonym key invention. 0 disables hints.
+  key_hint_limit: 30
+  # Enable mutual exclusion for extraction. When True, concurrent pipeline
+  # invocations skip extraction if one is already running.
+  extraction_mutex: true
 
-  # Circuit breaker and degradation settings
-  degradation:
-    # Number of consecutive failures before the circuit breaker opens. When
-    # open, requests are short-circuited to prevent cascading failures.
-    circuit_breaker_threshold: 3
-    # Minutes to wait before retrying after the circuit breaker opens. After
-    # this cooldown, the circuit enters half-open state and allows a trial
-    # request.
-    circuit_breaker_cooldown_minutes: 5
+# Session notes — compaction-immune agent working memory
+session_notes:
+  # Enable session notes — compaction-immune agent working memory. When enabled,
+  # the agent can store structured notes that survive compaction and
+  # summarization, preserving working context across long conversations.
+  enabled: true
+  # Maximum total tokens for session notes. Oldest notes are dropped when the
+  # cap is exceeded.
+  max_tokens: 2000
 
-  # Memory extraction settings
-  memory:
-    # Whether to automatically extract memories from conversation turns. When
-    # False, memories can still be saved explicitly via save_memory tool.
-    extract: true
-    # Memory store backend name. Built-in: 'memory' (in-memory), 'sqlite'.
-    # Additional backends (e.g. 'postgres') available via plugins like sr2-pro.
-    store: memory
-    # Keyword arguments passed to the memory store constructor. E.g. {'db_path':
-    # '/tmp/sr2.db'} for SQLite, {'dsn': 'postgresql://...'} for PostgreSQL.
-    # store_kwargs:
-    #   <name>: {}
+# Observability plugin settings (exporters, alerts)
+observability:
+  # Push exporter plugin names to activate (e.g. ['otel']). Each must be
+  # registered via sr2.push_exporters entry point.
+  push_exporters: []
+  # Pull exporter plugin name for /metrics endpoint (e.g. 'prometheus'). Must be
+  # registered via sr2.pull_exporters entry point.
+  pull_exporter: null
+  # Alert engine plugin name (e.g. 'rule_based'). Must be registered via
+  # sr2.alerts entry point.
+  alert_engine: null
 
-    # Scope configuration for memory isolation and sharing. When absent, all
-    # memories are accessible (backward compatible).
-    # scope:
-
-    # Key prefix schema for memory extraction. Guides the LLM to use consistent,
-    # dot-notation keys.
-    key_schema: []
-    # Example entry:
-      # - prefix: <required>
-      #   description: ""
-      #   examples: []
-
-    # Maximum number of turns to process per extraction run. Limits LLM calls
-    # per pipeline invocation.
-    extraction_batch_size: 5
-    # Number of existing keys to include as reuse hints in the extraction
-    # prompt. Reduces synonym key invention. 0 disables hints.
-    key_hint_limit: 30
-    # Enable mutual exclusion for extraction. When True, concurrent pipeline
-    # invocations skip extraction if one is already running.
-    extraction_mutex: true
-
-  # Session notes — compaction-immune agent working memory
-  session_notes:
-    # Enable session notes — compaction-immune agent working memory. When
-    # enabled, the agent can store structured notes that survive compaction and
-    # summarization, preserving working context across long conversations.
-    enabled: true
-    # Maximum total tokens for session notes. Oldest notes are dropped when the
-    # cap is exceeded.
-    max_tokens: 2000
-
-  # Observability plugin settings (exporters, alerts)
-  observability:
-    # Push exporter plugin names to activate (e.g. ['otel']). Each must be
-    # registered via sr2.push_exporters entry point.
-    push_exporters: []
-    # Pull exporter plugin name for /metrics endpoint (e.g. 'prometheus'). Must
-    # be registered via sr2.pull_exporters entry point.
-    pull_exporter: null
-    # Alert engine plugin name (e.g. 'rule_based'). Must be registered via
-    # sr2.alerts entry point.
-    alert_engine: null
-
-  # Context window layers, ordered from most stable to least stable
-  layers: []
-  # Example entry:
-    # - name: <required>
-    #   cache_policy: immutable
-    #   contents: []
-    #   priority: 0
-    #   preserve: false
-    #   min_tokens: 0
-
-
-#=====================================================================
-# Runtime Config (agent.yaml)
-#=====================================================================
-
-# Agent display name.
-agent_name: null
-# System prompt for the LLM.
-system_prompt: ""
-# Pipeline configuration.
-# pipeline:
-#   <name>: {}
-
-runtime:
-  database:
-    # PostgreSQL connection string. Supports ${VAR} env var substitution.
-    url: null
-    # Minimum connection pool size.
-    pool_min: 2
-    # Maximum connection pool size.
-    pool_max: 10
-
-  llm:
-    # Main LLM model configuration.
-    model:
-      # Model identifier.
-      name: claude-sonnet-4-20250514
-      # API base URL.
-      api_base: null
-      # Max tokens per response.
-      max_tokens: 4096
-      # Enable streaming for this model.
-      stream: false
-      # Sampling parameters.
-      # model_params:
-
-
-    # Fast model for extraction, summarization, intent detection.
-    fast_model:
-      # Model identifier.
-      name: claude-haiku-4-5-20251001
-      # API base URL.
-      api_base: null
-      # Max tokens per response.
-      max_tokens: 1000
-      # Enable streaming for this model.
-      stream: false
-      # Sampling parameters.
-      # model_params:
-
-
-    # Embedding model for memory retrieval.
-    embedding:
-      # Model identifier.
-      name: text-embedding-3-small
-      # API base URL.
-      api_base: null
-      # Max tokens per response.
-      max_tokens: 4096
-      # Enable streaming for this model.
-      stream: false
-      # Sampling parameters.
-      # model_params:
-
-
-
-  loop:
-    # Max tool-call loop iterations before stopping.
-    max_iterations: 25
-
-  # Default session settings.
-  session:
-    # Default max turns for sessions not explicitly configured.
-    max_turns: 200
-    # Default idle timeout in minutes before session cleanup.
-    idle_timeout_minutes: 60
-
-  stream_content:
-    # Stream tool invocation status.
-    tool_status: true
-    # Stream tool result content.
-    tool_results: false
-
-  heartbeat:
-    # Enable heartbeat scheduling.
-    enabled: false
-    # How often the scanner checks for due heartbeats.
-    poll_interval_seconds: 30
-    # Max pending heartbeats per agent.
-    max_pending_per_agent: 100
-
-
-# Interface plugin definitions.
-# interfaces:
-#   <name>:
-#     # Plugin type: telegram | timer | http | a2a
-#     plugin: <required>
-#     # Session config for this interface.
-#     session: null
-#     # Path to pipeline config (relative to config_dir).
-#     pipeline: null
-
-# Named session configurations.
-# sessions:
-#   <name>: {}
-
-# MCP server connections.
-mcp_servers: []
+# Context window layers, ordered from most stable to least stable
+layers: []
 # Example entry:
   # - name: <required>
-  #   url: <required>
-  #   transport: stdio
-  #   tools: null
-  #   headers: null
-  #   env: null
-  #   args: null
-  #   roots: null
-  #   resources: null
-  #   expose_resources_as_tools: false
-  #   prompts: null
-  #   expose_prompts_as_tools: false
-  #   sampling: <required>
+  #   cache_policy: immutable
+  #   contents: []
+  #   priority: 0
+  #   preserve: false
+  #   min_tokens: 0
 

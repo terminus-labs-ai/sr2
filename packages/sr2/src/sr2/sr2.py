@@ -1178,7 +1178,7 @@ class SR2:
             self._exporter = exporter_cls(self._collector)
         return self._exporter.export()
 
-    # --- Proxy API (used by sr2-bridge) ---
+    # --- Proxy API (used by sr2-relay) ---
 
     async def proxy_optimize(
         self,

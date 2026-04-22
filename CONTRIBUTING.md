@@ -78,17 +78,8 @@ packages/
 │   ├── metrics/           Prometheus/OTel exporters
 │   └── a2a/               Agent-to-Agent protocol
 │
-├── sr2-runtime/src/sr2_runtime/  # Agent runtime (PyPI: sr2-runtime)
-│   ├── agent.py           Main Agent class
-│   ├── cli.py             CLI entry point (sr2-agent)
-│   ├── llm/               LiteLLM wrapper, loop
-│   ├── plugins/           Telegram, HTTP, timer, A2A
-│   └── session/           Session management
-│
-└── sr2-bridge/src/sr2_bridge/    # Bridge proxy (PyPI: sr2-bridge)
-│
 configs/           # Example configs
-tests/             # 1,191 tests
+tests/             # Core library tests
 examples/          # Runnable examples
 ```
 

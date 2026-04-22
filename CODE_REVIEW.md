@@ -8,9 +8,9 @@ For context on why these matter, see [DEVELOPMENT.md](DEVELOPMENT.md) and [TESTI
 
 ## Architecture
 
-- [ ] **Correct package**: Code is in the right package (core vs runtime vs bridge). See [DEVELOPMENT.md § Module Boundaries](DEVELOPMENT.md#module-boundaries).
-- [ ] **Dependency direction**: No imports from runtime/bridge into core. No cross-imports between runtime and bridge.
-- [ ] **No internal imports**: Other packages import only from public API (`sr2.*`, `sr2_runtime.*`), never `sr2.pipeline.engine._serialize_layer`.
+- [ ] **Correct package**: Code belongs in sr2 core (context management) or in sr2-relay/sr2-spectre (separate repos).
+- [ ] **Dependency direction**: No upward imports — sr2 core has no knowledge of relay or spectre.
+- [ ] **No internal imports**: Consumers import only from public API (`sr2.*`), never `sr2.pipeline.engine._serialize_layer`.
 - [ ] **Entry points for extensions**: Out-of-tree functionality uses entry-point registration, not direct imports into core.
 
 ## Design Patterns

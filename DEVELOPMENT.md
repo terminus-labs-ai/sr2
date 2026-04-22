@@ -13,22 +13,17 @@ For setup instructions, see [CONTRIBUTING.md](CONTRIBUTING.md). For testing guid
 | Package | Responsibility | Depends On |
 |---------|---------------|------------|
 | `sr2` (core) | Context compilation library — pipeline, resolvers, memory, compaction, summarization, degradation, tools, metrics, config | Nothing (standalone) |
-| `sr2-runtime` | Agent harness — LLM loop, plugins, sessions, heartbeats, HTTP server, tool execution | `sr2` |
-| `sr2-bridge` | HTTP proxy — intercepts LLM calls, injects SR2 context, adapters for providers | `sr2` |
+| `sr2-relay` *(separate repo)* | Context-aware LLM API — library + HTTP server, wraps sr2 | `sr2` |
+| `sr2-spectre` *(separate repo)* | Full agent runtime — tools, plugins, sessions, heartbeats | `sr2-relay` |
 
 ### Dependency Direction
 
 ```
-sr2 (core)
-  ^         ^
-  |         |
-sr2-runtime sr2-bridge
+sr2-spectre → sr2-relay → sr2 (core)
 ```
 
 **Rules:**
-- Core (`sr2`) must **never** import from `sr2-runtime` or `sr2-bridge`.
-- Runtime and bridge may import from core's public API only (`sr2.*`).
-- Runtime and bridge must **never** import from each other.
+- Core (`sr2`) must **never** import from `sr2-relay` or `sr2-spectre`.
 - Out-of-tree extensions (premium, third-party) integrate via **entry points** — never direct imports into core.
 
 ### Where Does This Code Go?
@@ -37,11 +32,9 @@ sr2-runtime sr2-bridge
 |----------|-------------|
 | Compiles, transforms, or manages context | `sr2` (core) |
 | Defines a protocol for extensibility | `sr2` (core) |
-| Runs an agent loop, handles LLM calls | `sr2-runtime` |
-| Exposes HTTP/WebSocket/CLI interfaces | `sr2-runtime` (plugins) |
-| Manages sessions or conversation state | `sr2-runtime` (session/) |
-| Intercepts/proxies LLM API calls | `sr2-bridge` |
-| Adapts a specific LLM provider's API | `sr2-bridge` (adapters/) |
+| Makes LLM calls, manages SR2 sessions | `sr2-relay` |
+| Runs an agent loop, executes tools | `sr2-spectre` |
+| Exposes HTTP/WebSocket/CLI interfaces | `sr2-spectre` (plugins) |
 | Implements a production-scale backend | Out-of-tree extension via entry points |
 | Adds observability exporters | Out-of-tree extension via entry points |
 
@@ -212,27 +205,9 @@ my_store = "my_package.store:register_stores"
 
 3. All methods must be async. Required methods: `save`, `get`, `get_by_key`, `search_vector`, `search_keyword`, `delete`, `archive`, `count`, `list_scope_refs`
 
-### Adding a New Runtime Plugin
+### Adding a New Agent Plugin
 
-1. Create `packages/sr2-runtime/src/sr2_runtime/plugins/my_plugin.py`
-2. Implement `BasePlugin`:
-
-```python
-from sr2_runtime.plugins.base import BasePlugin
-
-class MyPlugin(BasePlugin):
-    name = "my_plugin"
-
-    async def start(self, agent):
-        """Called when agent starts. Set up listeners, routes, etc."""
-        ...
-
-    async def stop(self):
-        """Called on shutdown. Clean up resources."""
-        ...
-```
-
-3. Register in the plugin registry
+Agent plugins (HTTP, Telegram, timer, etc.) live in `sr2-spectre` (separate repo). See `sr2-spectre` for the plugin protocol and registry.
 
 ---
 
