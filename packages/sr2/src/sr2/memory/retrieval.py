@@ -33,7 +33,7 @@ class HybridRetriever:
         self._store = store
         self._embed = embedding_callable
         self._strategy = strategy
-        self._scope_config = scope_config
+        self.__scope_config = scope_config
         self._current_context = current_context
         self._top_k = top_k
         self._recency_decay = recency_decay_days
@@ -53,16 +53,24 @@ class HybridRetriever:
         # IDs of memories accessed in the last retrieve() call, for deferred touch
         self._pending_touch_ids: list[str] = []
 
-    def _build_scope_params(self) -> tuple[list[str] | None, list[str] | None]:
+    @property
+    def scope_config(self) -> MemoryScopeConfig | None:
+        """Public read access to the instance's scope configuration."""
+        return self.__scope_config
+
+    def _build_scope_params(
+        self, scope_config: MemoryScopeConfig | None = None
+    ) -> tuple[list[str] | None, list[str] | None]:
         """Build scope_filter and scope_refs from config and context."""
-        if not self._scope_config:
+        cfg = scope_config if scope_config is not None else self.__scope_config
+        if not cfg:
             return None, None
 
-        scope_filter = list(self._scope_config.allowed_read)
+        scope_filter = list(cfg.allowed_read)
         scope_refs: list[str] = []
 
-        if "private" in scope_filter and self._scope_config.agent_name:
-            scope_refs.append(f"agent:{self._scope_config.agent_name}")
+        if "private" in scope_filter and cfg.agent_name:
+            scope_refs.append(f"agent:{cfg.agent_name}")
         if "project" in scope_filter:
             project_id = (self._current_context or {}).get("project_id")
             if project_id:
@@ -75,6 +83,8 @@ class HybridRetriever:
         query: str,
         top_k: int | None = None,
         max_tokens: int | None = None,
+        scope_override: MemoryScopeConfig | None = None,
+        skip_touch: bool = False,
     ) -> list[MemorySearchResult]:
         """Retrieve relevant memories using the configured strategy.
 
@@ -83,12 +93,20 @@ class HybridRetriever:
         3. Apply recency and frequency boosts
         4. Sort by final score
         5. Return top_k results (optionally capped by token count)
+
+        Args:
+            query: Search query string.
+            top_k: Override instance top_k for this call.
+            max_tokens: Cap results by token budget.
+            scope_override: Use this scope config instead of the instance's scope
+                config for this call only. Does not mutate instance state.
+            skip_touch: If True, do not add result IDs to _pending_touch_ids.
         """
         k = top_k or self._top_k
         t0 = time.perf_counter()
         candidates: dict[str, MemorySearchResult] = {}
 
-        scope_filter, scope_refs = self._build_scope_params()
+        scope_filter, scope_refs = self._build_scope_params(scope_override)
 
         # Semantic search
         if self._strategy in ("hybrid", "semantic") and self._embed:
@@ -131,7 +149,8 @@ class HybridRetriever:
             results = self._cap_by_tokens(results, max_tokens)
 
         # Record IDs for deferred touch (called after pipeline is stable)
-        self._pending_touch_ids = [r.memory.id for r in results]
+        if not skip_touch:
+            self._pending_touch_ids = [r.memory.id for r in results]
 
         # Update instrumentation stats
         self.last_latency_ms = (time.perf_counter() - t0) * 1000

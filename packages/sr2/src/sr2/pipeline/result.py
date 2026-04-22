@@ -4,6 +4,31 @@ import time
 
 
 @dataclass
+class ActualTokenUsage:
+    """Actual token counts reported by the LLM provider after a call."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    loop_iterations: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def cache_hit_rate(self) -> float:
+        if self.input_tokens == 0:
+            return 0.0
+        return self.cached_tokens / self.input_tokens
+
+    @property
+    def uncached_input_tokens(self) -> int:
+        """Input tokens that were NOT served from cache (new computation)."""
+        return max(0, self.input_tokens - self.cached_tokens)
+
+
+@dataclass
 class StageResult:
     stage_name: str
     status: Literal["success", "degraded", "failed"]

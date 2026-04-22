@@ -358,28 +358,24 @@ class RecallMemoryTool:
             ]
         else:
             # Query-based search via retriever
-            # Temporarily override retriever scope for this search
-            original_scope = self._retriever._scope_config
+            scope_override = None
             if scope_filter is not None:
                 from sr2.config.models import MemoryScopeConfig
 
-                self._retriever._scope_config = MemoryScopeConfig(
+                scope_override = MemoryScopeConfig(
                     allowed_read=scope_filter,
                     allowed_write=self._scope_config.allowed_write
                     if self._scope_config
                     else ["private"],
                     agent_name=self._scope_config.agent_name if self._scope_config else None,
                 )
-            try:
-                results = await self._retriever.retrieve(
-                    query=query,
-                    top_k=top_k * 2 if key_prefix else top_k,
-                    max_tokens=2000,
-                )
-            finally:
-                self._retriever._scope_config = original_scope
-                # Clear pending touches — recall_memory is read-only
-                self._retriever._pending_touch_ids = []
+            results = await self._retriever.retrieve(
+                query=query,
+                top_k=top_k * 2 if key_prefix else top_k,
+                max_tokens=2000,
+                scope_override=scope_override,
+                skip_touch=True,
+            )
 
             # Post-filter by key_prefix if both query and prefix specified
             if key_prefix:

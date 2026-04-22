@@ -254,7 +254,7 @@ class Agent:
         self._recall_memory_tool = RecallMemoryTool(
             retriever=self._sr2._retriever,
             memory_store=self._sr2._memory_store,
-            scope_config=self._sr2._retriever._scope_config,
+            scope_config=self._sr2._retriever.scope_config,
             key_schema=getattr(self._sr2._extractor, "_key_schema", []),
         )
         self._tool_executor.register("recall_memory", self._recall_memory_tool)
@@ -476,7 +476,7 @@ class Agent:
             schedule_tool = ScheduleHeartbeatTool(
                 store=hb_store,
                 agent_name=self._name,
-                max_context_turns=self._heartbeat_config.max_context_turns,
+                max_context_turns=self._sr2.get_raw_window("heartbeat"),
                 session_resolver=lambda: self._current_session_id,
                 session_turns_resolver=lambda: self._current_session_turns,
                 interface_resolver=lambda: self._current_interface_name,

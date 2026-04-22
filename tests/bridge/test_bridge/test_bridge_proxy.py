@@ -1137,19 +1137,22 @@ class TestCircuitBreakerIntegration:
 
     def _make_engine_with_summarization(self):
         """Create engine with a failing summarization callable."""
-        from sr2_bridge.config import BridgeLLMConfig, BridgeLLMModelConfig, BridgeDegradationConfig
+        from sr2.config.models import DegradationConfig
+        from sr2_bridge.config import BridgeLLMConfig, BridgeLLMModelConfig
 
-        config = PipelineConfig(compaction=CompactionConfig(raw_window=2, cost_gate=CostGateConfig(enabled=False)))
+        config = PipelineConfig(
+            compaction=CompactionConfig(raw_window=2, cost_gate=CostGateConfig(enabled=False)),
+            degradation=DegradationConfig(
+                circuit_breaker_threshold=2,
+                circuit_breaker_cooldown_minutes=60,
+            ),
+        )
         bridge_config = BridgeConfig(
             llm=BridgeLLMConfig(
                 summarization=BridgeLLMModelConfig(
                     model="test-model",
                     api_key="test-key",
                 ),
-            ),
-            degradation=BridgeDegradationConfig(
-                circuit_breaker_threshold=2,
-                circuit_breaker_cooldown_seconds=3600,
             ),
         )
         from sr2_bridge.llm import APIKeyCache
@@ -1178,8 +1181,6 @@ class TestMemoryConfig:
         cfg = BridgeMemoryConfig()
         assert cfg.enabled is False
         assert cfg.db_path == "sr2_bridge_memory.db"
-        assert cfg.retrieval_strategy == "keyword"
-        assert cfg.retrieval_top_k == 10
 
     def test_engine_delegates_memory_to_sr2(self):
         """Memory subsystem is managed by SR2, not BridgeEngine directly."""

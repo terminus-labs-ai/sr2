@@ -268,9 +268,6 @@ class HeartbeatConfig(BaseModel):
     poll_interval_seconds: int = Field(
         default=30, ge=5, description="How often the scanner checks for due heartbeats."
     )
-    max_context_turns: int = Field(
-        default=10, ge=0, description="Max turns from source session to carry into heartbeat."
-    )
     max_pending_per_agent: int = Field(
         default=100, ge=1, description="Max pending heartbeats per agent."
     )

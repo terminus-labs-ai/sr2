@@ -124,6 +124,12 @@ class MetricNames:
     MEMORY_CONFLICTS_DETECTED = "sr2_memory_conflicts_detected"
     MEMORY_STORE_SIZE = "sr2_memory_store_size"
 
+    # Actual LLM usage (ground truth from provider)
+    ACTUAL_INPUT_TOKENS = "sr2_actual_input_tokens"
+    ACTUAL_OUTPUT_TOKENS = "sr2_actual_output_tokens"
+    ACTUAL_CACHED_TOKENS = "sr2_actual_cached_tokens"
+    TOKEN_ESTIMATE_DRIFT = "sr2_token_estimate_drift"
+
 
 @dataclass
 class MetricThreshold:

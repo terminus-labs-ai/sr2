@@ -9,7 +9,7 @@ from sr2.memory.extraction import MemoryExtractor
 from sr2.memory.resolution import ConflictResolver
 from sr2.memory.retrieval import HybridRetriever
 from sr2.pipeline.conversation import ConversationManager
-from sr2.pipeline.result import PipelineResult, StageResult
+from sr2.pipeline.result import ActualTokenUsage, PipelineResult, StageResult
 from sr2.summarization.engine import SummarizationResult
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,8 @@ class PostLLMProcessor:
         # Budget info for optimizer (set by SR2 facade after process())
         self._token_budget: int | None = None
         self._current_tokens: int | None = None
+        # Actual usage from LLM provider (set via set_actual_usage())
+        self._actual_usage: ActualTokenUsage | None = None
 
     async def process(
         self,
@@ -224,13 +226,26 @@ class PostLLMProcessor:
         self._token_budget = token_budget
         self._current_tokens = current_tokens
 
+    def set_actual_usage(self, usage: ActualTokenUsage) -> None:
+        """Set actual token usage from the LLM provider for this turn.
+
+        Used by _run_compaction to make cache-economics decisions
+        with ground-truth numbers instead of estimates.
+        """
+        self._actual_usage = usage
+
     async def _run_compaction(self, session_id: str, model_hint: str | None = None) -> None:
+        # Use actual current_tokens if available, fall back to estimate
+        current_tokens = self._current_tokens
+        if self._actual_usage is not None:
+            current_tokens = self._actual_usage.input_tokens
+
         self.last_compaction_result = self._conv.run_compaction(
             session_id=session_id,
             model_hint=model_hint,
             prefix_budget=self._prefix_budget,
             token_budget=self._token_budget,
-            current_tokens=self._current_tokens,
+            current_tokens=current_tokens,
         )
 
     async def _run_summarization(self, session_id: str) -> None:

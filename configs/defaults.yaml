@@ -392,8 +392,6 @@ runtime:
     enabled: false
     # How often the scanner checks for due heartbeats.
     poll_interval_seconds: 30
-    # Max turns from source session to carry into heartbeat.
-    max_context_turns: 10
     # Max pending heartbeats per agent.
     max_pending_per_agent: 100
 

@@ -95,6 +95,11 @@ class MetricCollector:
     def snapshots(self) -> list[MetricSnapshot]:
         return list(self._snapshots)
 
+    @property
+    def last_snapshot(self) -> MetricSnapshot | None:
+        """Return the most recently collected snapshot, or None if empty."""
+        return self._snapshots[-1] if self._snapshots else None
+
     def get_latest(self, n: int = 10) -> list[MetricSnapshot]:
         """Get the N most recent snapshots."""
         return self._snapshots[-n:]

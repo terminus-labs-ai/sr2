@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable
 
 from sr2.cache.policies import create_default_cache_registry
@@ -27,7 +28,7 @@ from sr2.pipeline.conversation import ConversationManager
 from sr2.pipeline.engine import PipelineEngine
 from sr2.pipeline.post_processor import PostLLMProcessor
 from sr2.pipeline.prefix_tracker import PrefixSnapshot
-from sr2.pipeline.result import PipelineResult
+from sr2.pipeline.result import ActualTokenUsage, PipelineResult
 from sr2.pipeline.router import InterfaceRouter
 from sr2.resolvers.config_resolver import ConfigResolver
 from sr2.resolvers.input_resolver import InputResolver
@@ -46,6 +47,28 @@ from sr2.tools.models import ToolDefinition, ToolManagementConfig
 from sr2.tools.state_machine import ToolStateMachine
 
 logger = logging.getLogger(__name__)
+
+
+class ProcessingMode(str, Enum):
+    """Controls how aggressively SR2 processes a request.
+
+    FULL        — All stages: compaction, summarization, scope detection,
+                  memory retrieval.  Default behavior.
+    LIGHTWEIGHT — Track turns and run memory retrieval; skip compaction and
+                  summarization.  Suitable for fast/small model preflight
+                  requests where zone mutation is undesirable.
+    PASSTHROUGH — Add turns for observability only; skip all optimization
+                  stages and return no system injection.
+    """
+
+    FULL = "full"
+    LIGHTWEIGHT = "lightweight"
+    PASSTHROUGH = "passthrough"
+
+
+class SR2ConfigurationError(Exception):
+    """Raised when SR2 config enables features but required callables are missing."""
+    pass
 
 
 @dataclass
@@ -80,6 +103,24 @@ class ProcessedContext:
 
 
 @dataclass
+class SystemPromptTransform:
+    """Metadata about a system prompt transformation applied by the bridge.
+
+    Passed to proxy_optimize() so SR2 can account for the transform
+    in token budgets, prefix tracking, and observability.
+
+    The signed delta is: transformed_tokens - original_tokens
+    - Positive: transform added tokens (budget is reduced)
+    - Negative: transform shortened prompt (budget is increased)
+    """
+
+    transform_type: str                # "prepend" | "append" | "replace" | "wrap" | "none"
+    original_tokens: int               # Token count of the original system prompt
+    transformed_tokens: int            # Token count after transform
+    content_hash: str | None = None    # Hash of the transform content (for prefix stability)
+
+
+@dataclass
 class ProxyResult:
     """Result of proxy_optimize — what the bridge needs to rebuild its response."""
 
@@ -88,6 +129,8 @@ class ProxyResult:
     compaction_result: Any | None  # CompactionResult | None
     summarization_result: Any | None  # SummarizationResult | None
     current_context: dict[str, str] | None = None
+    processing_mode: ProcessingMode = field(default=ProcessingMode.FULL)
+    system_prompt_transform_tokens: int = 0  # Signed token delta from transform
 
 
 class SR2:
@@ -199,6 +242,11 @@ class SR2:
             self._extractor._key_schema = key_schema
         self._extractor._key_hint_limit = agent_config.memory.key_hint_limit
 
+        # Wire RetrievalConfig into retriever (strategy, top_k) and cache for proxy_optimize()
+        self._retrieval_config = agent_config.retrieval
+        self._retriever._strategy = agent_config.retrieval.strategy
+        self._retriever._top_k = agent_config.retrieval.top_k
+
         # Wire scope config to retriever and extractor
         scope_config = agent_config.memory.scope
         self._scope_config_resolved = scope_config  # cached for process() and save_memory()
@@ -254,6 +302,14 @@ class SR2:
         self._session_turn_counts: dict[str, int] = {}
         self._token_savings_cumulative: dict[str, float] = {}
         self._token_budget = agent_config.token_budget
+        self._session_transform_hashes: dict[str, str] = {}  # per-session transform content hash
+
+        # Actual usage tracking (ground truth from LLM provider), keyed by session_id
+        self._last_actual_usage: dict[str, Any] = {}  # dict[str, ActualTokenUsage | None]
+        self._actual_input_tokens_history: dict[str, list] = {}  # dict[str, list[int]]
+        self._estimate_drift_history: dict[str, list] = {}  # dict[str, list[float]]
+        self._last_compiled_tokens: dict[str, Any] = {}  # dict[str, int | None]
+        self._max_usage_history = 50
 
         # Observability plugins (config-driven)
         obs = agent_config.observability
@@ -285,6 +341,40 @@ class SR2:
         from sr2.bridge import ContextBridge
 
         self._bridge = ContextBridge()
+
+        # Validate that required callables are provided for enabled features
+        self._validate_callables(config, agent_config)
+
+    def _validate_callables(self, config: SR2Config, pipeline_config: PipelineConfig) -> None:
+        """Check that required callables are present when features are enabled."""
+        errors = []
+        if pipeline_config.memory.extract and config.fast_complete is None:
+            errors.append("memory.extract is enabled but fast_complete callable is not provided")
+        if pipeline_config.summarization.enabled and config.fast_complete is None:
+            errors.append("summarization.enabled is True but fast_complete callable is not provided")
+        if pipeline_config.compaction.strategy in ("llm", "hybrid") and config.fast_complete is None:
+            errors.append(f"compaction.strategy is '{pipeline_config.compaction.strategy}' but fast_complete callable is not provided")
+        if pipeline_config.retrieval.enabled and pipeline_config.retrieval.strategy in ("hybrid", "semantic") and config.embed is None:
+            errors.append(f"retrieval.strategy is '{pipeline_config.retrieval.strategy}' but embed callable is not provided")
+        if errors:
+            raise SR2ConfigurationError("\n".join(errors))
+
+    def get_raw_window(self, interface_name: str | None = None) -> int:
+        """Return the compaction raw_window for the given interface.
+
+        Looks up the interface's PipelineConfig via the router and returns
+        its compaction.raw_window.  Falls back to the base pipeline
+        raw_window (from ConversationManager) when:
+        - interface_name is None
+        - the interface is not registered in the router
+        """
+        if interface_name is not None:
+            try:
+                config = self._router.route(interface_name)
+                return config.compaction.raw_window
+            except KeyError:
+                pass
+        return self._conversation.raw_window
 
     def reload_interface(self, name: str) -> PipelineConfig:
         """Invalidate cached config for *name* and re-load from disk.
@@ -426,6 +516,9 @@ class SR2:
         )
         compiled = await self._engine.compile(config, ctx)
         logger.info(f"SR2.process: context compiled for {interface_name}")
+
+        # Stash compiled token estimate for drift calibration in report_actual_usage()
+        self._last_compiled_tokens[session_id] = compiled.tokens
 
         # Build messages from zones (compacted/summarized history)
         zones = self._conversation.zones(session_id)
@@ -877,6 +970,17 @@ class SR2:
             else:
                 extra[MetricNames.SUMMARIZATION_FIDELITY] = 1.0 if sr.summary else 0.0
 
+        # --- Actual usage (ground truth from provider), scoped to this session ---
+        actual_usage = self._last_actual_usage.get(session_id)
+        if actual_usage is not None:
+            extra[MetricNames.ACTUAL_INPUT_TOKENS] = float(actual_usage.input_tokens)
+            extra[MetricNames.ACTUAL_OUTPUT_TOKENS] = float(actual_usage.output_tokens)
+            extra[MetricNames.ACTUAL_CACHED_TOKENS] = float(actual_usage.cached_tokens)
+
+        drift = self.estimate_drift(session_id)
+        if drift is not None:
+            extra[MetricNames.TOKEN_ESTIMATE_DRIFT] = drift
+
         snapshot = self._collector.collect(pipeline_result, interface, extra_metrics=extra)
 
         # Add labeled zone transition events to the snapshot
@@ -927,6 +1031,67 @@ class SR2:
         if self._alerts is not None:
             await self._alerts.evaluate(snapshot)
 
+    def report_actual_usage(
+        self,
+        usage: ActualTokenUsage,
+        session_id: str = "default",
+    ) -> None:
+        """Report actual token usage from the LLM provider after a loop completes.
+
+        This is the primary feedback mechanism from runtime -> SR2. It:
+        1. Records ground-truth token counts for future budget decisions.
+        2. Calibrates the estimate drift (SR2 estimate vs actual).
+        3. Updates the post-processor's budget info with actual numbers.
+
+        Must be called AFTER process() and BEFORE post_process() so that
+        compaction/summarization in post_process use calibrated numbers.
+        """
+        self._last_actual_usage[session_id] = usage
+
+        # Track actual input tokens for rolling average (per session)
+        history = self._actual_input_tokens_history.setdefault(session_id, [])
+        history.append(usage.input_tokens)
+        if len(history) > self._max_usage_history:
+            self._actual_input_tokens_history[session_id] = history[-self._max_usage_history:]
+
+        # Calibrate estimate drift: compare SR2's compiled.tokens estimate
+        # against the actual input_tokens from the provider
+        compiled_tokens = self._last_compiled_tokens.get(session_id)
+        if compiled_tokens is not None and usage.input_tokens > 0:
+            drift = (usage.input_tokens - compiled_tokens) / usage.input_tokens
+            drift_history = self._estimate_drift_history.setdefault(session_id, [])
+            drift_history.append(drift)
+            if len(drift_history) > self._max_usage_history:
+                self._estimate_drift_history[session_id] = drift_history[-self._max_usage_history:]
+
+            if abs(drift) > 0.15:
+                logger.warning(
+                    "Token estimate drift %.1f%%: SR2 estimated %d, provider reported %d input tokens",
+                    drift * 100,
+                    compiled_tokens,
+                    usage.input_tokens,
+                )
+
+        # Update post-processor budget info with actual numbers so that
+        # compaction decisions in post_process() use ground truth
+        if self._post_processor:
+            self._post_processor.set_budget_info(
+                token_budget=self._token_budget,
+                current_tokens=usage.input_tokens,
+            )
+            self._post_processor.set_actual_usage(usage)
+
+    def estimate_drift(self, session_id: str) -> float | None:
+        """Rolling average of (actual - estimated) / actual for the given session.
+
+        Positive means SR2 underestimates. Negative means SR2 overestimates.
+        Returns None if no history for this session.
+        """
+        history = self._estimate_drift_history.get(session_id)
+        if not history:
+            return None
+        return sum(history) / len(history)
+
     def compare_prefix(
         self,
         compiled_snapshot: PrefixSnapshot | None,
@@ -939,6 +1104,65 @@ class SR2:
         if compiled_snapshot is None:
             return None
         return self._engine._prefix_tracker.compare(compiled_snapshot, cached_tokens)
+
+    # --- Public API: conversation zones (replaces bridge private attribute access) ---
+
+    def get_zones(self, session_id: str = "default"):
+        """Get conversation zones for a session.
+
+        Returns the ConversationZones (summarized/compacted/raw) for the given
+        session_id. Used by the bridge for persistence and metrics.
+        """
+        return self._conversation.zones(session_id)
+
+    def get_zone_transitions(self, session_id: str = "default") -> dict[str, int]:
+        """Get cumulative zone transition counts for a session.
+
+        Returns a copy of the transition count dict so callers cannot mutate
+        internal state.
+        """
+        return self._conversation.get_zone_transitions(session_id)
+
+    def restore_zones(self, session_id: str, zones) -> None:
+        """Restore previously persisted conversation zones.
+
+        Used by the bridge at startup to reload zones from its persistence
+        layer without reaching into SR2 private attributes.
+        """
+        self._conversation.restore_zones(session_id, zones)
+
+    # --- Public API: circuit breaker / degradation ---
+
+    def is_circuit_breaker_open(self, feature: str) -> bool:
+        """Check if the circuit breaker is open for a feature.
+
+        Returns False for unknown feature names (closed by default).
+        """
+        return self._engine._circuit_breaker.is_open(feature)
+
+    def get_circuit_breaker_status(self) -> dict:
+        """Return circuit breaker status for all tracked stages.
+
+        Returns a dict of {stage_name: {"failures": int, "is_open": bool, ...}}.
+        Empty when no failures have been recorded.
+        """
+        return self._engine._circuit_breaker.status()
+
+    def get_degradation_level(self) -> str:
+        """Degradation level based on circuit breaker state.
+
+        Returns:
+            'full'            — all breakers closed
+            'compaction_only' — summarization OR memory_extraction is open
+            'passthrough'     — both summarization AND memory_extraction are open
+        """
+        summarization_open = self._engine._circuit_breaker.is_open("summarization")
+        memory_open = self._engine._circuit_breaker.is_open("memory_extraction")
+        if summarization_open and memory_open:
+            return "passthrough"
+        if summarization_open or memory_open:
+            return "compaction_only"
+        return "full"
 
     def export_metrics(self) -> str:
         """Export collected metrics in Prometheus text exposition format.
@@ -963,6 +1187,8 @@ class SR2:
         system_prompt: str | None = None,
         retrieval_query: str | None = None,
         agent_name: str | None = None,
+        processing_mode: ProcessingMode = ProcessingMode.FULL,
+        system_prompt_transform: "SystemPromptTransform | None" = None,
     ) -> "ProxyResult":
         """Optimize a pre-built turn list (proxy/bridge mode).
 
@@ -975,6 +1201,11 @@ class SR2:
             agent_name: Optional per-request override for scope_config.agent_name.
                 When set (e.g. from X-SR2-Agent-Name header), private memory
                 scopes use this identity instead of the YAML-configured default.
+            processing_mode: Controls how much SR2 processes the request.
+                FULL (default) runs all stages.  LIGHTWEIGHT skips
+                compaction/summarization but still tracks turns and retrieves
+                memory.  PASSTHROUGH adds turns for observability and returns
+                immediately with no injection.
 
         Returns a ProxyResult with zones, system injection text, and
         compaction/summarization results so the bridge can rebuild its
@@ -992,6 +1223,8 @@ class SR2:
         try:
             return await self._proxy_optimize_inner(
                 new_turns, session_id, system_prompt, retrieval_query,
+                processing_mode=processing_mode,
+                system_prompt_transform=system_prompt_transform,
             )
         finally:
             # Restore original scope config if we overrode it
@@ -1005,6 +1238,8 @@ class SR2:
         session_id: str,
         system_prompt: str | None = None,
         retrieval_query: str | None = None,
+        processing_mode: ProcessingMode = ProcessingMode.FULL,
+        system_prompt_transform: "SystemPromptTransform | None" = None,
     ) -> "ProxyResult":
         """Inner implementation of proxy_optimize (extracted for scope override safety)."""
         # Trace: begin turn
@@ -1022,29 +1257,63 @@ class SR2:
                 "tool_count": 0,
             }, session_id=session_id)
 
-        # 1. Add turns to conversation manager
+        # 1. Add turns to conversation manager — ALWAYS (even PASSTHROUGH tracks turns
+        #    for observability: zone metrics, traces, turn counts).
         for turn in new_turns:
             self._conversation.add_turn(turn, session_id)
 
-        # 2. Compaction (local, no circuit breaker needed)
-        zones = self._conversation.zones(session_id)
-        compaction_result = self._conversation.run_compaction(
-            session_id,
-            token_budget=self._token_budget,
-            current_tokens=zones.total_tokens,
-        )
-        if compaction_result and compaction_result.turns_compacted > 0:
-            logger.info(
-                "proxy_optimize: session=%s compacted %d turns (%d -> %d tokens)",
-                session_id,
-                compaction_result.turns_compacted,
-                compaction_result.original_tokens,
-                compaction_result.compacted_tokens,
+        # Early exit for PASSTHROUGH — no optimization stages, no injection.
+        if processing_mode == ProcessingMode.PASSTHROUGH:
+            zones = self._conversation.zones(session_id)
+            return ProxyResult(
+                system_injection=None,
+                zones=zones,
+                compaction_result=None,
+                summarization_result=None,
+                current_context=None,
+                processing_mode=ProcessingMode.PASSTHROUGH,
             )
 
-        # 3. Summarization (guarded by circuit breaker)
+        # 2. Compaction (local, no circuit breaker needed)
+        # Skipped in LIGHTWEIGHT mode — turns are tracked but zones are not mutated.
+        # Compute effective budget: apply signed transform delta
+        effective_budget = self._token_budget
+        if system_prompt_transform:
+            transform_delta = (
+                system_prompt_transform.transformed_tokens
+                - system_prompt_transform.original_tokens
+            )
+            effective_budget = max(0, self._token_budget - transform_delta)
+            if transform_delta != 0:
+                logger.info(
+                    "proxy_optimize: system prompt transform (%s) delta=%d tokens, "
+                    "effective budget %d -> %d",
+                    system_prompt_transform.transform_type,
+                    transform_delta,
+                    self._token_budget,
+                    effective_budget,
+                )
+
+        compaction_result = None
+        if processing_mode == ProcessingMode.FULL:
+            zones = self._conversation.zones(session_id)
+            compaction_result = self._conversation.run_compaction(
+                session_id,
+                token_budget=effective_budget,
+                current_tokens=zones.total_tokens,
+            )
+            if compaction_result and compaction_result.turns_compacted > 0:
+                logger.info(
+                    "proxy_optimize: session=%s compacted %d turns (%d -> %d tokens)",
+                    session_id,
+                    compaction_result.turns_compacted,
+                    compaction_result.original_tokens,
+                    compaction_result.compacted_tokens,
+                )
+
+        # 3. Summarization (guarded by circuit breaker) — skipped in LIGHTWEIGHT mode.
         summarization_result = None
-        if not self._engine._circuit_breaker.is_open("summarization"):
+        if processing_mode == ProcessingMode.FULL and not self._engine._circuit_breaker.is_open("summarization"):
             try:
                 summarization_result = await self._conversation.run_summarization(session_id)
                 if summarization_result:
@@ -1060,9 +1329,9 @@ class SR2:
                 logger.warning("proxy_optimize: summarization failed", exc_info=True)
                 self._engine._circuit_breaker.record_failure("summarization")
 
-        # 4. Scope detection
+        # 4. Scope detection — skipped in LIGHTWEIGHT mode (retrieval uses default scope).
         current_context: dict[str, str] | None = None
-        if self._scope_detector and not self._engine._circuit_breaker.is_open("scope_detection"):
+        if processing_mode == ProcessingMode.FULL and self._scope_detector and not self._engine._circuit_breaker.is_open("scope_detection"):
             try:
                 detected = await self._scope_detector.detect(
                     system_prompt=system_prompt,
@@ -1084,11 +1353,15 @@ class SR2:
                 logger.warning("proxy_optimize: scope detection failed", exc_info=True)
                 self._engine._circuit_breaker.record_failure("scope_detection")
 
-        # 5. Memory retrieval
+        # 5. Memory retrieval — runs in FULL and LIGHTWEIGHT; PASSTHROUGH already returned above.
         memory_injection: str | None = None
         if retrieval_query and not self._engine._circuit_breaker.is_open("memory_retrieval"):
             try:
-                results = await self._retriever.retrieve(retrieval_query)
+                results = await self._retriever.retrieve(
+                    retrieval_query,
+                    top_k=self._retrieval_config.top_k,
+                    max_tokens=self._retrieval_config.max_tokens,
+                )
                 if results:
                     memory_lines = [f"- {r.memory.key}: {r.memory.value}" for r in results]
                     memory_injection = (
@@ -1121,6 +1394,30 @@ class SR2:
         if injection_parts:
             system_injection = "\n\n".join(injection_parts)
 
+        # Trace: system prompt transform (before zones trace)
+        if self._trace and system_prompt_transform and system_prompt_transform.transform_type != "none":
+            self._trace.emit("system_prompt_transform", {
+                "transform_type": system_prompt_transform.transform_type,
+                "original_tokens": system_prompt_transform.original_tokens,
+                "transformed_tokens": system_prompt_transform.transformed_tokens,
+                "transform_tokens_delta": (
+                    system_prompt_transform.transformed_tokens
+                    - system_prompt_transform.original_tokens
+                ),
+                "content_hash": system_prompt_transform.content_hash,
+            }, session_id=session_id)
+
+        # Prefix stability: track transform content hash per session
+        if system_prompt_transform and system_prompt_transform.content_hash:
+            prev_hash = self._session_transform_hashes.get(session_id)
+            if prev_hash and prev_hash != system_prompt_transform.content_hash:
+                logger.warning(
+                    "proxy_optimize: session=%s system prompt transform content changed "
+                    "(prefix may be invalidated)",
+                    session_id,
+                )
+            self._session_transform_hashes[session_id] = system_prompt_transform.content_hash
+
         # Trace: zones
         if self._trace:
             self._trace.emit("zones", {
@@ -1134,12 +1431,22 @@ class SR2:
                 "zone_transitions": self._conversation.get_zone_transitions(session_id),
             }, session_id=session_id)
 
+        # Compute signed token delta for ProxyResult
+        transform_token_delta = 0
+        if system_prompt_transform:
+            transform_token_delta = (
+                system_prompt_transform.transformed_tokens
+                - system_prompt_transform.original_tokens
+            )
+
         return ProxyResult(
             system_injection=system_injection,
             zones=zones,
             compaction_result=compaction_result,
             summarization_result=summarization_result,
             current_context=current_context,
+            processing_mode=processing_mode,
+            system_prompt_transform_tokens=transform_token_delta,
         )
 
     async def proxy_post_process(
@@ -1149,6 +1456,7 @@ class SR2:
         turn_number: int = 0,
         current_context: dict | None = None,
         agent_name: str | None = None,
+        processing_mode: ProcessingMode = ProcessingMode.FULL,
     ) -> None:
         """Post-process after a proxied response completes.
 
@@ -1187,11 +1495,21 @@ class SR2:
                     "role": "assistant",
                 }, session_id=session_id)
 
-            await self._post_processor.process(
-                turn,
-                session_id,
-                current_context=current_context,
-            )
+            if processing_mode == ProcessingMode.PASSTHROUGH:
+                pass  # Skip all post-processing for PASSTHROUGH
+            elif processing_mode == ProcessingMode.LIGHTWEIGHT:
+                await self._post_processor.process(
+                    turn,
+                    session_id,
+                    current_context=current_context,
+                    extract_only=True,
+                )
+            else:
+                await self._post_processor.process(
+                    turn,
+                    session_id,
+                    current_context=current_context,
+                )
 
             # Trace: post-process results
             if self._trace:
