@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide takes you from zero to a working SR2 pipeline in under 5 minutes. No database, no LLM API key, no runtime — just the library.
+This guide takes you from zero to a working SR2 pipeline in under 5 minutes. No database, no LLM API key — just the library.
 
 **Requires Python 3.12+**
 
@@ -168,6 +168,5 @@ The loader merges your file with the defaults, so you only specify what you want
 - **[Compaction Guide](guide-compaction.md)** — how tool outputs get compressed
 - **[Memory Guide](guide-memory.md)** — extraction, conflict resolution, retrieval
 - **[Tool Masking Guide](guide-tool-masking.md)** — dynamic tool visibility with state machines
-- **[Bridge Guide](guide-bridge.md)** — context optimization proxy for Claude Code and external LLM callers
 - **[Observability](observability.md)** — Prometheus and OpenTelemetry setup
 - **[Troubleshooting](troubleshooting.md)** — common errors and how to fix them

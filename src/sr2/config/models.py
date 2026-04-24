@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -223,9 +223,10 @@ class CompactionConfig(BaseModel):
 
 class SummarizationConfig(BaseModel):
     enabled: bool = Field(
-        default=True,
+        default=False,
         description="Enable automatic summarization. When True, older conversation history is "
-        "summarized to reclaim token budget while preserving key information.",
+        "summarized to reclaim token budget while preserving key information. "
+        "Requires fast_complete callable.",
     )
     trigger: Literal["token_threshold", "topic_shift", "manual"] = Field(
         default="token_threshold",
@@ -287,10 +288,11 @@ class RetrievalConfig(BaseModel):
         "documents are retrieved and injected into the context window.",
     )
     strategy: Literal["hybrid", "semantic", "keyword", "scoped"] = Field(
-        default="hybrid",
-        description="Retrieval strategy. 'hybrid' combines semantic and keyword search. "
-        "'semantic' uses embedding similarity only. 'keyword' uses BM25/keyword "
-        "matching. 'scoped' restricts retrieval to the current topic scope.",
+        default="keyword",
+        description="Retrieval strategy. 'hybrid' combines semantic and keyword search "
+        "(requires embed callable). 'semantic' uses embedding similarity only "
+        "(requires embed callable). 'keyword' uses BM25/keyword matching. "
+        "'scoped' restricts retrieval to the current topic scope.",
     )
     top_k: int = Field(
         default=10,
@@ -366,28 +368,6 @@ class DegradationConfig(BaseModel):
     )
 
 
-class LLMModelOverride(BaseModel):
-    """Per-interface override for a single model. All fields optional."""
-
-    name: str | None = Field(default=None, description="Model identifier override.")
-    api_base: str | None = Field(default=None, description="API base URL override.")
-    max_tokens: int | None = Field(default=None, description="Max tokens per response override.")
-    model_params: dict[str, Any] | None = Field(
-        default=None,
-        description="Sampling parameter overrides (temperature, top_p, etc.).",
-    )
-
-
-class LLMConfig(BaseModel):
-    """Per-interface LLM overrides. All fields optional — None means use agent default."""
-
-    model: LLMModelOverride | None = Field(default=None, description="Main model override.")
-    fast_model: LLMModelOverride | None = Field(default=None, description="Fast model override.")
-    embedding: LLMModelOverride | None = Field(
-        default=None, description="Embedding model override."
-    )
-
-
 class KeySchemaEntry(BaseModel):
     prefix: str = Field(description="Key prefix, e.g. 'user.preference'")
     description: str = Field(default="", description="Human-readable description of this prefix")
@@ -455,9 +435,10 @@ class SessionNotesConfig(BaseModel):
 
 class MemoryConfig(BaseModel):
     extract: bool = Field(
-        default=True,
+        default=False,
         description="Whether to automatically extract memories from conversation turns. "
-        "When False, memories can still be saved explicitly via save_memory tool.",
+        "When False, memories can still be saved explicitly via save_memory tool. "
+        "Requires fast_complete callable.",
     )
     store: str = Field(
         default="memory",
@@ -523,10 +504,6 @@ class PipelineConfig(BaseModel):
     """Root config model. Represents a fully resolved interface config."""
 
     extends: str | None = Field(default=None, description="Parent config to inherit from")
-    system_prompt: str | None = Field(
-        default=None,
-        description="Override the agent-level system prompt for this interface/pipeline.",
-    )
     token_budget: int = Field(
         default=32000,
         ge=1000,
@@ -542,7 +519,6 @@ class PipelineConfig(BaseModel):
         "When remaining budget drops below this fraction, summarization and "
         "compaction are triggered proactively to avoid hitting the hard limit.",
     )
-    llm: LLMConfig = Field(default_factory=LLMConfig, description="Per-interface LLM overrides")
     kv_cache: KVCacheConfig = Field(
         default_factory=KVCacheConfig, description="KV-cache optimization settings"
     )

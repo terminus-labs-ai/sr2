@@ -58,7 +58,7 @@ For context on why these matter, see [DEVELOPMENT.md](DEVELOPMENT.md) and [TESTI
 - [ ] **No hardcoded values**: Magic numbers and strings are in config or constants.
 - [ ] **Error handling**: Errors are raised (config/validation) or gracefully degraded (pipeline/runtime), never silently swallowed.
 - [ ] **Naming conventions**: Classes, functions, config keys, and metric names follow project conventions (see [DEVELOPMENT.md § Naming](DEVELOPMENT.md#naming-conventions)).
-- [ ] **Lint clean**: `ruff check packages/` and `ruff format --check packages/` pass.
+- [ ] **Lint clean**: `ruff check src/` and `ruff format --check src/` pass.
 
 ## Metrics & Observability
 

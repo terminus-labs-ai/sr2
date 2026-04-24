@@ -20,7 +20,7 @@ class ToolDefinition(BaseModel):
     """A tool available to the agent."""
 
     name: str = Field(description="Unique tool name")
-    type: Literal["standard", "a2a_tool", "retrieval"] = "standard"
+    type: Literal["standard", "retrieval"] = "standard"
     description: str = Field(default="", description="Description shown to the LLM")
     parameters: list[ToolParameter] = Field(default_factory=list)
     raw_parameters: dict | None = Field(

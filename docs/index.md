@@ -15,7 +15,7 @@ SR2 treats the context window as a managed resource. Config-driven pipelines com
 ## How It Works
 
 ```
-  Trigger arrives (user message, heartbeat, A2A call)
+  Trigger arrives (user message, webhook, scheduled callback)
          │
          ▼
   ┌─────────────────┐
@@ -114,7 +114,7 @@ That's the minimal case. In production you'd add memory retrieval, conversation 
 - **Compaction rules** — Tool outputs, file contents, and code results compressed automatically.
 - **Automatic summarization** — LLM-powered summaries preserve decisions and discard routine items.
 - **Graceful degradation** — Per-layer circuit breakers keep the agent running when layers fail.
-- **Per-interface configs** — Different token budgets and strategies per trigger type (chat, heartbeat, A2A).
+- **Per-interface configs** — Different token budgets and strategies per trigger type (chat, background task, webhook).
 - **Memory system** — Extract, store, and retrieve structured memories with conflict resolution.
 - **Tool state machine** — Dynamic tool masking with named states and transitions.
 - **Pluggable tokenizers** — Heuristic (fast) or tiktoken (accurate).

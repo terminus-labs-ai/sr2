@@ -166,7 +166,6 @@ class TestGenerateDefaultsYaml:
     def test_optional_fields_show_null(self):
         """Optional fields (with None default) should show null."""
         output = generate_defaults_yaml()
-        assert "system_prompt: null" in output
         assert "pull_exporter: null" in output
 
     def test_array_example_shows_schema_defaults(self):

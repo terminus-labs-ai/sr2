@@ -2,10 +2,11 @@
 
 ## Enabling Debug Logging
 
-Most problems become obvious with debug logs. Enable them with the `--log-level` flag:
+Most problems become obvious with debug logs. Enable them by setting the log level before calling SR2:
 
-```bash
-sr2-agent configs/agents/edi --log-level DEBUG
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
 ```
 
 Key loggers to watch:
@@ -15,9 +16,6 @@ Key loggers to watch:
 | `sr2.pipeline.engine` | Layer resolution, cache hits, circuit breaker state |
 | `sr2.compaction.engine` | Which turns get compacted and why |
 | `sr2.summarization.engine` | When summarization triggers |
-| `runtime.llm.loop` | Full LLM requests and responses, tool calls |
-| `runtime.mcp.client` | MCP server connections and tool discovery |
-| `runtime.agent` | Agent startup, plugin initialization |
 
 ## Config Errors
 
@@ -103,7 +101,7 @@ An `extends:` field points to a file that doesn't exist. Check that the path is 
 extends: ../agent.yaml   # Must exist at configs/agents/myagent/agent.yaml
 ```
 
-## Runtime Errors
+## Common Errors
 
 ### `KeyError: No pipeline config found for interface 'X'`
 
@@ -171,7 +169,7 @@ pip install sr2-pro
 MCP servers are configured but the MCP SDK isn't installed:
 
 ```bash
-pip install -e "packages/sr2[mcp]"
+pip install -e ".[mcp]"
 ```
 
 ## Circuit Breakers
@@ -210,7 +208,7 @@ SR2 has a 5-level degradation ladder. When the system is under extreme stress, i
 | `raw_context` | Summarization + intent + retrieval + compaction |
 | `system_prompt_only` | Everything except core layer |
 
-The degradation ladder is triggered by the runtime when error rates spike. At `system_prompt_only`, the agent runs with just the system prompt and the latest input — minimal but functional.
+The degradation ladder activates when error rates spike. At `system_prompt_only`, the agent runs with just the system prompt and the latest input — minimal but functional.
 
 ## MCP Issues
 
@@ -288,14 +286,11 @@ By default, `identity` and `semi_stable` memories use `latest_wins_archive` — 
 
 ## FAQ
 
-**Q: Can I use SR2 without the agent runtime?**
-Yes. SR2 is a library. Import `PipelineEngine`, register resolvers, call `engine.compile()`. See the [Getting Started](getting-started.md) guide.
-
 **Q: What LLM providers does SR2 support?**
-Any provider supported by LiteLLM — OpenAI, Anthropic, Google, Ollama, Azure, and many more. The runtime uses LiteLLM for all LLM calls.
+SR2 uses LiteLLM for `fast_complete` callables — OpenAI, Anthropic, Google, Ollama, Azure, and many more. The library itself doesn't own the LLM call; your code does.
 
 **Q: Does SR2 work with LangChain / CrewAI / AutoGen?**
-SR2 is framework-agnostic. It compiles context — your framework owns the LLM call. You'd call `engine.compile()` to get the context, then pass it to your framework's LLM call.
+SR2 is framework-agnostic. It compiles context — your framework owns the LLM call. Call `engine.compile()` to get the context, then pass it to your framework's LLM call.
 
 **Q: How do I measure if KV-cache optimization is working?**
 Check the `sr2_cache_hit_rate` and `sr2_context_prefix_stable` metrics. A prefix stability of 1.0 means your cache prefix is fully reused between turns. See [Observability](observability.md).
@@ -305,6 +300,3 @@ The engine trims content from the last layers first. The first layer (typically 
 
 **Q: Can I use PostgreSQL for memory storage?**
 Yes. Install `sr2-pro` (`pip install sr2-pro`), then call `sr2.set_postgres_store(pool)`. Tables are created automatically.
-
-**Q: Can I use Open WebUI or other OpenAI-compatible clients with SR2?**
-Yes. The agent exposes `/v1/chat/completions` and `/v1/models` endpoints. Point your client at `http://localhost:8008/v1` with any API key (SR2 doesn't require auth). See the [Quick Reference](reference.md) for Open WebUI setup.

@@ -120,7 +120,7 @@ Memories are scoped (private, project, shared). A resolver must never return mem
 
 ### Adding a New Resolver
 
-1. Create `packages/sr2/src/sr2/resolvers/my_resolver.py`
+1. Create `src/sr2/resolvers/my_resolver.py`
 2. Implement the `ContentResolver` protocol:
 
 ```python
@@ -155,7 +155,7 @@ layers:
 
 ### Adding a New Compaction Rule
 
-1. Create a rule class in `packages/sr2/src/sr2/compaction/rules.py` (or a new file)
+1. Create a rule class in `src/sr2/compaction/rules.py` (or a new file)
 2. Implement the rule interface:
 
 ```python
@@ -182,7 +182,7 @@ compaction:
 
 ### Adding a New Cache Policy
 
-1. Implement the `CachePolicy` protocol in `packages/sr2/src/sr2/cache/policies.py`:
+1. Implement the `CachePolicy` protocol in `src/sr2/cache/policies.py`:
 
 ```python
 class MyPolicy:

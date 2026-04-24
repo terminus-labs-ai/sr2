@@ -15,7 +15,7 @@ SR2 treats the context window as a managed resource. It compiles context through
 ## How It Works
 
 ```
-  Trigger arrives (user message, heartbeat, A2A call)
+  Trigger arrives (user message, webhook, scheduled callback)
          │
          ▼
   ┌─────────────────┐
@@ -58,8 +58,8 @@ cd sr2
 # Install everything (recommended for development)
 uv sync --all-extras
 
-# Or install individual packages
-pip install -e packages/sr2                # Core library only
+# Or install directly
+pip install -e .                           # Core library only
 ```
 
 ## Quick Start
@@ -192,17 +192,13 @@ Config inheritance: `defaults.yaml` → `agent.yaml` → `interfaces/user_messag
 
 **Graceful degradation.** Per-layer circuit breakers. If retrieval fails 3 times in a row, the breaker opens and that layer is skipped — the agent keeps running with reduced context rather than crashing. The core layer (system prompt) is never skipped.
 
-**Per-interface pipeline configs.** A Telegram chat gets 48k tokens with full compaction/summarization. A heartbeat gets 3k tokens with everything disabled. An A2A call gets 8k tokens, stateless. Same agent, different context strategies per trigger type.
-
-**Dynamic heartbeats.** Agents can schedule future callbacks to themselves via `schedule_heartbeat` / `cancel_heartbeat` tools. Supports idempotent keys, context carry-over from the original session, and DB persistence. Use it for async monitoring, retries, or timed reminders. See [Heartbeat Guide](docs/guide-heartbeats.md).
+**Per-interface pipeline configs.** A chat gets 48k tokens with full compaction/summarization. A background task gets 3k tokens with everything disabled. Same pipeline, different context strategies per trigger type.
 
 **Memory system.** Extract structured memories from conversations, detect conflicts between new and existing memories, resolve them with configurable strategies (latest-wins-archive, keep-both-tagged), and retrieve with hybrid semantic + keyword search. Automatic scope detection assigns memories to the correct project/team context without manual configuration. SQLite backend included; PostgreSQL via [sr2-pro](https://sr2.dev/pricing).
 
 **Intent detection.** Classify user messages to detect topic shifts, enabling context-aware memory refresh and selective summarization. Foundation for LLM-based topic understanding.
 
 **Pre-emptive context rotation.** Early warning system that monitors token budget pressure and triggers proactive rotation before cache invalidation. Prevents degradation from emergency truncation.
-
-**Bridge proxy.** Optimize context for external LLM callers (Claude Code, LangChain, OpenCode) without modifying them. The bridge sits as a reverse proxy, applying compaction and summarization to requests in flight. Point Claude Code at `localhost:9200` and get 30-60% token reduction on long sessions with zero behavioral change.
 
 **Pluggable tokenizers.** Choose between fast character heuristic (default) or accurate tiktoken counting with support for specific LLM encoding schemes.
 
@@ -264,40 +260,14 @@ packages/
         ├── metrics/       #   Collector and pluggable exporter registry
         ├── tokenization/  #   Pluggable tokenizers (heuristic, tiktoken)
         ├── normalization/ #   LLM response cleaning (thinking blocks, markdown, JSON)
-        ├── eval/          #   Multi-turn evaluation framework and benchmarking
-        └── a2a/           #   Agent-to-Agent protocol support
+        └── eval/          #   Multi-turn evaluation framework and benchmarking
 
 configs/               # Example configs
-│   ├── defaults.yaml  #   Library defaults
-│   └── agents/edi/    #   Example agent
+    └── defaults.yaml  #   Library defaults
 
 tests/                 # Tests
     └── sr2/           #   Core library tests
 ```
-
-## Running the Example Agent
-
-The repo includes an example agent as a working reference.
-
-```bash
-# Install everything
-uv sync --all-extras
-
-# Run with HTTP API
-sr2-agent configs/agents/edi --http --port 8008
-
-# Open the chat UI
-open http://localhost:8008
-
-# Or talk to it via curl
-curl -X POST http://localhost:8008/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello!", "session_id": "default"}'
-```
-
-The agent also exposes OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/models`) so you can connect [Open WebUI](https://github.com/open-webui/open-webui) or any OpenAI-compatible client directly to it. See the [Quick Reference](docs/reference.md) for setup details.
-
-The example agent requires Ollama running locally (see `configs/agents/edi/agent.yaml` for model config). Swap the model strings to use any LiteLLM-supported provider.
 
 ## Development
 
@@ -309,13 +279,13 @@ uv sync --all-extras
 pytest tests/ --ignore=tests/integration/ -v
 
 # Run integration tests (requires PostgreSQL)
-docker compose -f docker-compose.test.yml up -d
+docker compose -f docker-compose.test.yaml up -d
 RUN_INTEGRATION=1 pytest tests/integration/ -v
-docker compose -f docker-compose.test.yml down
+docker compose -f docker-compose.test.yaml down
 
 # Lint
-ruff check packages/
-ruff format packages/
+ruff check src/
+ruff format src/
 
 # Generate config docs from Pydantic models
 sr2-config-docs --format md > docs/configuration.md
@@ -331,7 +301,6 @@ SR2 works with any LLM framework — it compiles context, your framework handles
 | LangChain | [examples/integrations/langchain_example.py](examples/integrations/langchain_example.py) |
 | Pydantic AI | [examples/integrations/pydantic_ai_example.py](examples/integrations/pydantic_ai_example.py) |
 | CrewAI | [examples/integrations/crewai_example.py](examples/integrations/crewai_example.py) |
-| LangGraph | [examples/runtime/langgraph_pipeline.py](examples/runtime/langgraph_pipeline.py) |
 
 ## Documentation
 
@@ -344,8 +313,6 @@ SR2 works with any LLM framework — it compiles context, your framework handles
 - **[Tool Masking](docs/guide-tool-masking.md)** — Dynamic tool visibility with state machines
 - **[Custom Resolvers](docs/guide-custom-resolvers.md)** — Build pluggable content sources (5 patterns + examples)
 - **[Circuit Breakers](docs/guide-circuit-breakers.md)** — Graceful degradation when layers fail
-- **[Agent-to-Agent](docs/guide-a2a.md)** — Multi-agent workflows and service composition
-- **[Heartbeats](docs/guide-heartbeats.md)** — Scheduling agent callbacks for async tasks and retries
 - **[Evaluation Harness](docs/guide-eval-harness.md)** — Multi-turn benchmarking framework and evaluation
 - **[Observability](docs/observability.md)** — Prometheus and OpenTelemetry setup
 - **[Troubleshooting](docs/troubleshooting.md)** — Common errors, debugging, FAQ

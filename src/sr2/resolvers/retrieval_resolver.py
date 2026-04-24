@@ -76,7 +76,6 @@ class RetrievalResolver:
             channel_map = {
                 "user_message": "chat",
                 "webhook": "webhook",
-                "a2a_inbound": "agent",
                 "heartbeat": "system",
             }
             dims["channel"] = channel_map.get(context.interface_type, context.interface_type)

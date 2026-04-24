@@ -81,7 +81,7 @@ class TestSummarizationEngine:
 
     def test_should_trigger_above_threshold(self):
         """should_trigger() returns True when tokens exceed threshold."""
-        config = SummarizationConfig(trigger="token_threshold", threshold=0.75)
+        config = SummarizationConfig(enabled=True, trigger="token_threshold", threshold=0.75)
         engine = SummarizationEngine(config=config)
 
         assert engine.should_trigger(compacted_tokens=8000, max_tokens=10000) is True

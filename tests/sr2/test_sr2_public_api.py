@@ -1,20 +1,12 @@
-"""Tests for SR2 facade public API methods (Fix 09: private attribute access from bridge).
+"""Tests for SR2 facade public API methods.
 
-Verifies that the 6 new public methods exist on the SR2 facade and behave correctly:
+Verifies that the 6 public methods exist on the SR2 facade and behave correctly:
   - get_zones(session_id)         — returns ConversationZones for a session
   - get_zone_transitions(session_id) — returns zone transition counts dict
   - restore_zones(session_id, zones) — restores zones from persistence
   - is_circuit_breaker_open(feature) — checks if a circuit breaker is open
   - get_circuit_breaker_status()  — returns full status dict for all stages
   - get_degradation_level()       — returns simplified 3-level degradation string
-
-All 6 methods replace bridge-side private attribute access:
-  self._sr2._conversation.zones()
-  self._sr2._conversation.get_zone_transitions()
-  self._sr2._conversation.restore_zones()
-  self._sr2._engine._circuit_breaker.is_open()
-  self._sr2._engine._circuit_breaker.status()
-  (degradation logic from BridgeEngine.degradation_level property)
 """
 
 import tempfile

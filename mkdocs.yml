@@ -39,9 +39,6 @@ nav:
     - Tool Masking: guide-tool-masking.md
     - Custom Resolvers: guide-custom-resolvers.md
     - Circuit Breakers: guide-circuit-breakers.md
-    - Agent-to-Agent: guide-a2a.md
-    - Bridge Proxy: guide-bridge.md
-    - Heartbeats: guide-heartbeats.md
     - Evaluation: guide-eval-harness.md
   - Operations:
     - Observability: observability.md

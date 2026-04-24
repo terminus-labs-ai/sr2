@@ -42,10 +42,10 @@ def test_registered_interfaces_lists_all():
     """registered_interfaces returns all registered interface names."""
     loader = ConfigLoader()
     router = InterfaceRouter(
-        {"chat": {}, "agent": {}, "a2a": {}},
+        {"chat": {}, "agent": {}},
         loader,
     )
-    assert sorted(router.registered_interfaces) == ["a2a", "agent", "chat"]
+    assert sorted(router.registered_interfaces) == ["agent", "chat"]
 
 
 def test_route_from_yaml(tmp_path):

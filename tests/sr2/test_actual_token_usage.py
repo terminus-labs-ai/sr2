@@ -179,9 +179,9 @@ class TestReportActualUsageMethod:
         sr2.report_actual_usage(usage_a, session_id="session_a")
         sr2.report_actual_usage(usage_b, session_id="session_b")
 
-        # Retrieve stored values — implementation stores in _last_actual_usage[session_id]
-        stored_a = sr2._last_actual_usage.get("session_a")
-        stored_b = sr2._last_actual_usage.get("session_b")
+        # Retrieve stored values — implementation stores in _metrics_manager._last_actual_usage[session_id]
+        stored_a = sr2._metrics_manager._last_actual_usage.get("session_a")
+        stored_b = sr2._metrics_manager._last_actual_usage.get("session_b")
 
         assert stored_a is not None, "session_a usage should be stored"
         assert stored_b is not None, "session_b usage should be stored"
@@ -196,7 +196,7 @@ class TestReportActualUsageMethod:
         sr2.report_actual_usage(_make_usage(input_tokens=9999), session_id="session_b")
 
         # session_a still has 1000
-        stored_a = sr2._last_actual_usage.get("session_a")
+        stored_a = sr2._metrics_manager._last_actual_usage.get("session_a")
         assert stored_a is not None
         assert stored_a.input_tokens == 1000
 
@@ -207,14 +207,14 @@ class TestReportActualUsageMethod:
         sr2.report_actual_usage(_make_usage(input_tokens=1000), session_id="s1")
         sr2.report_actual_usage(_make_usage(input_tokens=2000), session_id="s1")
 
-        stored = sr2._last_actual_usage.get("s1")
+        stored = sr2._metrics_manager._last_actual_usage.get("s1")
         assert stored is not None
         assert stored.input_tokens == 2000
 
     def test_last_actual_usage_is_dict(self):
         """_last_actual_usage must be a dict (keyed by session_id), not a scalar."""
         sr2 = _make_sr2()
-        assert isinstance(sr2._last_actual_usage, dict), (
+        assert isinstance(sr2._metrics_manager._last_actual_usage, dict), (
             "_last_actual_usage must be dict[str, ...], not a bare attribute"
         )
 
@@ -230,14 +230,14 @@ class TestDriftHistoryPerSession:
     def test_drift_history_is_dict(self):
         """_estimate_drift_history must be a dict keyed by session_id."""
         sr2 = _make_sr2()
-        assert isinstance(sr2._estimate_drift_history, dict), (
+        assert isinstance(sr2._metrics_manager._estimate_drift_history, dict), (
             "_estimate_drift_history must be dict[str, list[float]]"
         )
 
     def test_input_token_history_is_dict(self):
         """_actual_input_tokens_history must be a dict keyed by session_id."""
         sr2 = _make_sr2()
-        assert isinstance(sr2._actual_input_tokens_history, dict), (
+        assert isinstance(sr2._metrics_manager._actual_input_tokens_history, dict), (
             "_actual_input_tokens_history must be dict[str, list[int]]"
         )
 
@@ -246,26 +246,26 @@ class TestDriftHistoryPerSession:
         sr2 = _make_sr2()
 
         # Seed _last_compiled_tokens for drift calculation
-        sr2._last_compiled_tokens = {"s1": 900}
+        sr2._metrics_manager._last_compiled_tokens = {"s1": 900}
 
         sr2.report_actual_usage(_make_usage(input_tokens=1000), session_id="s1")
         sr2.report_actual_usage(_make_usage(input_tokens=1100), session_id="s1")
 
-        history = sr2._estimate_drift_history.get("s1", [])
+        history = sr2._metrics_manager._estimate_drift_history.get("s1", [])
         assert len(history) == 2, f"Expected 2 drift entries, got {len(history)}"
 
     def test_drift_history_independent_between_sessions(self):
         """Reporting for session B does not add entries to session A's drift history."""
         sr2 = _make_sr2()
 
-        sr2._last_compiled_tokens = {"s1": 900, "s2": 900}
+        sr2._metrics_manager._last_compiled_tokens = {"s1": 900, "s2": 900}
 
         sr2.report_actual_usage(_make_usage(input_tokens=1000), session_id="s1")
         sr2.report_actual_usage(_make_usage(input_tokens=1000), session_id="s2")
         sr2.report_actual_usage(_make_usage(input_tokens=1100), session_id="s2")
 
-        history_s1 = sr2._estimate_drift_history.get("s1", [])
-        history_s2 = sr2._estimate_drift_history.get("s2", [])
+        history_s1 = sr2._metrics_manager._estimate_drift_history.get("s1", [])
+        history_s2 = sr2._metrics_manager._estimate_drift_history.get("s2", [])
 
         assert len(history_s1) == 1, "s1 should have exactly 1 drift entry"
         assert len(history_s2) == 2, "s2 should have exactly 2 drift entries"
@@ -282,11 +282,11 @@ class TestDriftCalculation:
     def test_drift_correct_value(self):
         """SR2 estimates 1000, provider reports 1200 -> drift ≈ 0.167."""
         sr2 = _make_sr2()
-        sr2._last_compiled_tokens = {"s1": 1000}
+        sr2._metrics_manager._last_compiled_tokens = {"s1": 1000}
 
         sr2.report_actual_usage(_make_usage(input_tokens=1200), session_id="s1")
 
-        history = sr2._estimate_drift_history.get("s1", [])
+        history = sr2._metrics_manager._estimate_drift_history.get("s1", [])
         assert len(history) == 1
         expected_drift = (1200 - 1000) / 1200
         assert history[0] == pytest.approx(expected_drift, rel=1e-3)
@@ -298,26 +298,26 @@ class TestDriftCalculation:
 
         sr2.report_actual_usage(_make_usage(input_tokens=1200), session_id="s1")
 
-        history = sr2._estimate_drift_history.get("s1", [])
+        history = sr2._metrics_manager._estimate_drift_history.get("s1", [])
         assert len(history) == 0, "No drift should be recorded if compiled tokens unknown"
 
     def test_no_drift_when_actual_input_is_zero(self):
         """Drift is not recorded when actual input_tokens == 0 (division by zero guard)."""
         sr2 = _make_sr2()
-        sr2._last_compiled_tokens = {"s1": 1000}
+        sr2._metrics_manager._last_compiled_tokens = {"s1": 1000}
 
         sr2.report_actual_usage(_make_usage(input_tokens=0), session_id="s1")
 
-        history = sr2._estimate_drift_history.get("s1", [])
+        history = sr2._metrics_manager._estimate_drift_history.get("s1", [])
         assert len(history) == 0, "Drift must not be recorded when actual is 0"
 
     def test_rolling_drift_average(self):
         """estimate_drift(session_id) returns the mean of the drift history."""
         sr2 = _make_sr2()
         # Two turns: each with estimated=1000 and actual=1200
-        sr2._last_compiled_tokens = {"s1": 1000}
+        sr2._metrics_manager._last_compiled_tokens = {"s1": 1000}
         sr2.report_actual_usage(_make_usage(input_tokens=1200), session_id="s1")
-        sr2._last_compiled_tokens = {"s1": 1000}
+        sr2._metrics_manager._last_compiled_tokens = {"s1": 1000}
         sr2.report_actual_usage(_make_usage(input_tokens=1200), session_id="s1")
 
         expected = (1200 - 1000) / 1200
@@ -350,7 +350,7 @@ class TestDriftWarningThreshold:
         """A drift of >15% must emit a WARNING log."""
         sr2 = _make_sr2()
         # Drift = (1200 - 1000) / 1200 ≈ 16.7% > 15%
-        sr2._last_compiled_tokens = {"warn_session": 1000}
+        sr2._metrics_manager._last_compiled_tokens = {"warn_session": 1000}
 
         with caplog.at_level(logging.WARNING, logger="sr2.sr2"):
             sr2.report_actual_usage(_make_usage(input_tokens=1200), session_id="warn_session")
@@ -363,7 +363,7 @@ class TestDriftWarningThreshold:
         """Drift of ≤15% must NOT emit a drift warning."""
         sr2 = _make_sr2()
         # Drift = (1050 - 1000) / 1050 ≈ 4.8% < 15%
-        sr2._last_compiled_tokens = {"quiet_session": 1000}
+        sr2._metrics_manager._last_compiled_tokens = {"quiet_session": 1000}
 
         with caplog.at_level(logging.WARNING, logger="sr2.sr2"):
             sr2.report_actual_usage(_make_usage(input_tokens=1050), session_id="quiet_session")
@@ -481,7 +481,7 @@ class TestMetricsIncludeActualUsage:
         from sr2.pipeline.result import PipelineResult
 
         sr2 = _make_sr2()
-        sr2._last_compiled_tokens = {"drift_session": 1000}
+        sr2._metrics_manager._last_compiled_tokens = {"drift_session": 1000}
 
         # Drift ≈ 16.7% (above threshold)
         sr2.report_actual_usage(_make_usage(input_tokens=1200), session_id="drift_session")

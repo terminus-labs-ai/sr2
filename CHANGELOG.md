@@ -68,7 +68,7 @@ Initial public release.
 - Character-based heuristic tokenizer (fast, no dependencies)
 - Tiktoken-based accurate tokenizer (optional, for GPT models)
 
-**Agent Runtime** (optional, in `packages/sr2-runtime/`)
+**Agent Runtime** (now in sr2-spectre)
 - Agentic LLM loop with LiteLLM
 - Plugin system: HTTP/FastAPI, Telegram, timer, A2A
 - Session management with three lifecycle policies: `persistent`, `ephemeral`, `rolling`

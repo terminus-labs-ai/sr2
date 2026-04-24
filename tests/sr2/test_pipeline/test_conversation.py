@@ -130,7 +130,7 @@ class TestConversationManager:
             })
 
         engine = _make_compaction_engine(raw_window=2)
-        summ_config = SummarizationConfig(trigger="token_threshold", threshold=0.5, preserve_recent_turns=0)
+        summ_config = SummarizationConfig(enabled=True, trigger="token_threshold", threshold=0.5, preserve_recent_turns=0)
         summ_engine = SummarizationEngine(config=summ_config, llm_callable=mock_llm)
 
         mgr = ConversationManager(
@@ -163,7 +163,7 @@ class TestConversationManager:
             })
 
         engine = _make_compaction_engine(raw_window=2)
-        summ_config = SummarizationConfig(trigger="token_threshold", threshold=0.5, preserve_recent_turns=0)
+        summ_config = SummarizationConfig(enabled=True, trigger="token_threshold", threshold=0.5, preserve_recent_turns=0)
         summ_engine = SummarizationEngine(config=summ_config, llm_callable=mock_llm)
 
         mgr = ConversationManager(
@@ -222,7 +222,7 @@ class TestConversationManager:
 
         compaction_engine = _make_compaction_engine(raw_window=3)
         summ_config = SummarizationConfig(
-            trigger="token_threshold", threshold=0.3, preserve_recent_turns=1
+            enabled=True, trigger="token_threshold", threshold=0.3, preserve_recent_turns=1
         )
         summ_engine = SummarizationEngine(config=summ_config, llm_callable=mock_llm)
 
@@ -296,6 +296,7 @@ class TestConversationManager:
         raw_window = 3
         compaction_engine = _make_compaction_engine(raw_window=raw_window)
         summ_config = SummarizationConfig(
+            enabled=True,
             trigger="token_threshold",
             threshold=0.3,
             preserve_recent_turns=1,

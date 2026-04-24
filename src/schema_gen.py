@@ -24,8 +24,6 @@ from sr2.config.models import (
     DegradationConfig,
     LayerConfig,
     ContentItemConfig,
-    LLMConfig,
-    LLMModelOverride,
 )
 
 
@@ -44,8 +42,6 @@ CONFIG_SECTIONS: list[tuple[str, type | None, int]] = [
     ("Retrieval", RetrievalConfig, 3),
     ("Intent Detection", IntentDetectionConfig, 3),
     ("Tool Masking", ToolMaskingConfig, 3),
-    ("Per-Interface LLM Override", LLMConfig, 3),
-    ("Per-Interface Model Override", LLMModelOverride, 4),
     ("Degradation", DegradationConfig, 3),
     ("Layers", LayerConfig, 3),
     ("Content Item", ContentItemConfig, 4),
@@ -298,7 +294,7 @@ def _document_cache_policies() -> list[str]:
         "| `refresh_on_state_change` | Recompute when state hash changes | Last known state (heartbeat polling) |",
         "| `append_only` | Always recompute (content grows each turn) | Conversation history |",
         "| `always_new` | Always recompute (changes every invocation) | Timestamps, dynamic instructions |",
-        "| `per_invocation` | Always recompute, no caching between calls | A2A task input, event payloads |",
+        "| `per_invocation` | Always recompute, no caching between calls | Webhook payloads, event-driven inputs |",
         "| `template_reuse` | Same as immutable — reuse across calls of this type | Sub-agent system prompts |",
         "",
         "**KV-Cache impact:** Layers earlier in the config (top) form the cached prefix.",

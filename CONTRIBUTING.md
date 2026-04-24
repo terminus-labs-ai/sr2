@@ -43,13 +43,13 @@ We use [Ruff](https://docs.astral.sh/ruff/) for linting and formatting:
 
 ```bash
 # Check for issues
-ruff check packages/
+ruff check src/
 
 # Auto-fix
-ruff check packages/ --fix
+ruff check src/ --fix
 
 # Format
-ruff format packages/
+ruff format src/
 ```
 
 Config is in `pyproject.toml`: Python 3.12 target, 100-char line length.
@@ -64,8 +64,7 @@ Config is in `pyproject.toml`: Python 3.12 target, 100-char line length.
 ## Project Structure
 
 ```
-packages/
-├── sr2/src/sr2/           # Core library (PyPI: sr2)
+src/sr2/                   # Core library (PyPI: sr2)
 │   ├── config/            Config models, loader, validation
 │   ├── pipeline/          Engine, router, conversation manager
 │   ├── resolvers/         Content resolvers
@@ -77,10 +76,9 @@ packages/
 │   ├── tools/             Tool state machine, masking
 │   ├── metrics/           Prometheus/OTel exporters
 │   └── a2a/               Agent-to-Agent protocol
-│
-configs/           # Example configs
-tests/             # Core library tests
-examples/          # Runnable examples
+configs/                   # Example configs
+tests/                     # Core library tests
+examples/                  # Runnable examples
 ```
 
 ## Making Changes
@@ -92,7 +90,7 @@ examples/          # Runnable examples
 
 ## Config Changes
 
-If you modify Pydantic models in `packages/sr2/src/sr2/config/models.py`, regenerate the config docs:
+If you modify Pydantic models in `src/sr2/config/models.py`, regenerate the config docs:
 
 ```bash
 python -m schema_gen --format md > docs/configuration.md
@@ -100,7 +98,7 @@ python -m schema_gen --format md > docs/configuration.md
 
 ## Adding a New Resolver
 
-1. Create `packages/sr2/src/sr2/resolvers/your_resolver.py` implementing the `ContentResolver` protocol
+1. Create `src/sr2/resolvers/your_resolver.py` implementing the `ContentResolver` protocol
 2. Register it in `SR2._build_resolver_registry()` or let users register it manually
 3. Add tests in `tests/sr2/test_resolvers/`
 

@@ -142,15 +142,15 @@ class TestCircularExtends:
 class TestRootLevelPipelineFields:
     """Test 9: Root-level PipelineConfig fields are extracted (not just from pipeline: dict)."""
 
-    def test_system_prompt_at_root_level(self, tmp_path):
-        """system_prompt defined at YAML root level should be extracted."""
+    def test_token_budget_at_root_level(self, tmp_path):
+        """token_budget defined at YAML root level should be extracted."""
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump({"system_prompt": "You are running autonomously..."}))
+        config_file.write_text(yaml.dump({"token_budget": 24000}))
 
         loader = ConfigLoader()
         config = loader.load(str(config_file))
 
-        assert config.system_prompt == "You are running autonomously..."
+        assert config.token_budget == 24000
 
     def test_pipeline_dict_overrides_root_level(self, tmp_path):
         """pipeline: dict values should override root-level values."""
@@ -158,8 +158,8 @@ class TestRootLevelPipelineFields:
         config_file.write_text(
             yaml.dump(
                 {
-                    "system_prompt": "Root prompt",
-                    "pipeline": {"system_prompt": "Nested prompt"},
+                    "token_budget": 24000,
+                    "pipeline": {"token_budget": 65536},
                 }
             )
         )
@@ -167,7 +167,7 @@ class TestRootLevelPipelineFields:
         loader = ConfigLoader()
         config = loader.load(str(config_file))
 
-        assert config.system_prompt == "Nested prompt"
+        assert config.token_budget == 65536
 
     def test_mixed_root_and_pipeline_fields(self, tmp_path):
         """Root-level and pipeline: dict fields should merge correctly."""
@@ -175,8 +175,8 @@ class TestRootLevelPipelineFields:
         config_file.write_text(
             yaml.dump(
                 {
-                    "system_prompt": "Root prompt",
-                    "pipeline": {"token_budget": 65536},
+                    "token_budget": 24000,
+                    "pipeline": {"pre_rot_threshold": 0.5},
                 }
             )
         )
@@ -184,221 +184,22 @@ class TestRootLevelPipelineFields:
         loader = ConfigLoader()
         config = loader.load(str(config_file))
 
-        assert config.system_prompt == "Root prompt"
-        assert config.token_budget == 65536
+        assert config.token_budget == 24000
+        assert config.pre_rot_threshold == 0.5
 
     def test_inheritance_with_root_level_fields(self, tmp_path):
         """Root-level fields should work with inheritance chain."""
-        # Base config with system_prompt at root level
         base = tmp_path / "base.yaml"
-        base.write_text(yaml.dump({"system_prompt": "Base prompt"}))
+        base.write_text(yaml.dump({"token_budget": 24000}))
 
-        # Child config that extends and adds pipeline: dict
         child = tmp_path / "child.yaml"
-        child.write_text(yaml.dump({"extends": "base.yaml", "pipeline": {"token_budget": 16000}}))
+        child.write_text(yaml.dump({"extends": "base.yaml", "pipeline": {"pre_rot_threshold": 0.3}}))
 
         loader = ConfigLoader()
         config = loader.load(str(child))
 
-        assert config.system_prompt == "Base prompt"
-        assert config.token_budget == 16000
-
-
-class TestRuntimeLLMExtraction:
-    """Test runtime.llm extraction into PipelineConfig.llm."""
-
-    def test_runtime_llm_extracted_as_pipeline_llm(self, tmp_path):
-        """runtime.llm.model should populate PipelineConfig.llm.model."""
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "runtime": {
-                        "llm": {
-                            "model": {
-                                "name": "openai/qwen3.5:40b-a3b",
-                                "api_base": "http://localhost:8080/v1",
-                            }
-                        }
-                    }
-                }
-            )
-        )
-
-        loader = ConfigLoader()
-        config = loader.load(str(config_file))
-
-        assert config.llm is not None
-        assert config.llm.model is not None
-        assert config.llm.model.name == "openai/qwen3.5:40b-a3b"
-        assert config.llm.model.api_base == "http://localhost:8080/v1"
-
-    def test_stream_field_stripped(self, tmp_path):
-        """runtime.llm fields not in LLMModelOverride (like stream) should be stripped."""
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "runtime": {
-                        "llm": {
-                            "model": {
-                                "name": "openai/qwen3.5:40b-a3b",
-                                "stream": True,
-                                "timeout": 30,
-                            }
-                        }
-                    }
-                }
-            )
-        )
-
-        loader = ConfigLoader()
-        config = loader.load(str(config_file))
-
-        assert config.llm is not None
-        assert config.llm.model.name == "openai/qwen3.5:40b-a3b"
-        # stream and timeout are not LLMModelOverride fields, should not be present
-        model_dict = config.llm.model.model_dump()
-        assert "stream" not in model_dict
-        assert "timeout" not in model_dict
-
-    def test_pipeline_llm_takes_priority_over_runtime(self, tmp_path):
-        """pipeline.llm should completely override runtime.llm."""
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "runtime": {
-                        "llm": {
-                            "model": {"name": "openai/runtime-model"},
-                        }
-                    },
-                    "pipeline": {
-                        "llm": {
-                            "model": {"name": "openai/pipeline-model"},
-                        }
-                    },
-                }
-            )
-        )
-
-        loader = ConfigLoader()
-        config = loader.load(str(config_file))
-
-        assert config.llm.model.name == "openai/pipeline-model"
-
-    def test_root_level_llm_takes_priority_over_runtime(self, tmp_path):
-        """Root-level llm: should override runtime.llm."""
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "runtime": {
-                        "llm": {
-                            "model": {"name": "openai/runtime-model", "max_tokens": 4096},
-                        }
-                    },
-                    "llm": {
-                        "model": {"name": "openai/root-model"},
-                    },
-                }
-            )
-        )
-
-        loader = ConfigLoader()
-        config = loader.load(str(config_file))
-
-        # Root-level wins for name
-        assert config.llm.model.name == "openai/root-model"
-        # But runtime max_tokens should merge through as fallback
-        assert config.llm.model.max_tokens == 4096
-
-    def test_inheritance_with_runtime_llm_in_child(self, tmp_path):
-        """Child config with runtime.llm should override parent's model."""
-        # Parent (agent.yaml style)
-        parent = tmp_path / "agent.yaml"
-        parent.write_text(
-            yaml.dump(
-                {
-                    "runtime": {
-                        "llm": {
-                            "model": {"name": "openai/base-model"},
-                        }
-                    },
-                    "pipeline": {"token_budget": 65536},
-                }
-            )
-        )
-
-        # Child interface
-        interfaces = tmp_path / "interfaces"
-        interfaces.mkdir()
-        child = interfaces / "user_message.yaml"
-        child.write_text(
-            yaml.dump(
-                {
-                    "extends": "agent",
-                    "runtime": {
-                        "llm": {
-                            "model": {"name": "openai/override-model"},
-                        }
-                    },
-                }
-            )
-        )
-
-        loader = ConfigLoader()
-        config = loader.load(str(child))
-
-        assert config.llm.model.name == "openai/override-model"
-        assert config.token_budget == 65536
-
-    def test_fast_model_and_embedding_extracted(self, tmp_path):
-        """runtime.llm.fast_model and embedding should also be extracted."""
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "runtime": {
-                        "llm": {
-                            "model": {"name": "openai/main-model"},
-                            "fast_model": {"name": "openai/fast-model"},
-                            "embedding": {"name": "openai/embed-model"},
-                        }
-                    }
-                }
-            )
-        )
-
-        loader = ConfigLoader()
-        config = loader.load(str(config_file))
-
-        assert config.llm.model.name == "openai/main-model"
-        assert config.llm.fast_model.name == "openai/fast-model"
-        assert config.llm.embedding.name == "openai/embed-model"
-
-    def test_no_runtime_llm_no_effect(self, tmp_path):
-        """Config without runtime.llm should work as before (backward compat)."""
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump({"pipeline": {"token_budget": 16000}}))
-
-        loader = ConfigLoader()
-        config = loader.load(str(config_file))
-
-        assert config.llm.model is None
-        assert config.token_budget == 16000
-
-    def test_runtime_without_llm_key(self, tmp_path):
-        """runtime: dict without llm key should not affect anything."""
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump({"runtime": {"stream": True}, "pipeline": {"token_budget": 16000}})
-        )
-
-        loader = ConfigLoader()
-        config = loader.load(str(config_file))
-
-        assert config.llm.model is None
+        assert config.token_budget == 24000
+        assert config.pre_rot_threshold == 0.3
 
 
 class TestPathTraversalPrevention:
@@ -551,29 +352,29 @@ class TestEnvVarInterpolation:
         assert config.memory.scope.allowed_read == ["project"]
 
     def test_default_value_in_config(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("CLAUDE_AGENT_NAME", raising=False)
+        monkeypatch.delenv("SR2_TOKEN_BUDGET", raising=False)
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
-            yaml.dump({"system_prompt": "Agent: ${CLAUDE_AGENT_NAME:-default-agent}"})
+            yaml.dump({"token_budget": "${SR2_TOKEN_BUDGET:-16000}"})
         )
 
         loader = ConfigLoader()
         config = loader.load(str(config_file))
-        assert config.system_prompt == "Agent: default-agent"
+        assert config.token_budget == 16000
 
     def test_env_vars_expanded_in_parent_config(self, tmp_path, monkeypatch):
         """Env vars in parent configs are expanded before merge."""
-        monkeypatch.setenv("SR2_BASE_BUDGET", "32000")
+        monkeypatch.setenv("SR2_BASE_BUDGET", "24000")
         parent = tmp_path / "base.yaml"
-        parent.write_text(yaml.dump({"system_prompt": "budget=${SR2_BASE_BUDGET}"}))
+        parent.write_text(yaml.dump({"token_budget": "${SR2_BASE_BUDGET}"}))
 
         child = tmp_path / "child.yaml"
-        child.write_text(yaml.dump({"extends": "base.yaml", "pipeline": {"token_budget": 16000}}))
+        child.write_text(yaml.dump({"extends": "base.yaml", "pipeline": {"pre_rot_threshold": 0.3}}))
 
         loader = ConfigLoader()
         config = loader.load(str(child))
-        assert config.system_prompt == "budget=32000"
-        assert config.token_budget == 16000
+        assert config.token_budget == 24000
+        assert config.pre_rot_threshold == 0.3
 
     def test_non_string_values_untouched(self, tmp_path):
         """Integers, booleans, etc. pass through without modification."""

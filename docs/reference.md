@@ -6,59 +6,6 @@
 uv sync                          # Install all deps (core + dev)
 ```
 
-## Run the Agent
-
-```bash
-# With HTTP API (interactive)
-uv run sr2-agent configs/agents/edi --http --port 8008
-
-# Headless (heartbeats only, no HTTP)
-uv run sr2-agent configs/agents/edi
-
-# Options
-#   --name EDI               Override agent name
-#   --defaults path.yaml     Custom defaults file
-#   --log-level DEBUG        Verbose logging
-#   --inspect                Pipeline inspector (default mode)
-#   --inspect=full           Full trace with all event data
-#   --inspect=brief          One-line-per-turn summary
-```
-
-Once running with `--http`, open the built-in chat UI at [http://localhost:8008](http://localhost:8008), or talk to it via curl:
-
-```bash
-curl -X POST http://localhost:8008/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello", "session_id": "default"}'
-```
-
-### Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /` | Built-in web chat UI |
-| `POST /chat` | SR2 native chat (`{"message": "...", "session_id": "..."}`) |
-| `POST /v1/chat/completions` | OpenAI-compatible chat (for Open WebUI, etc.) |
-| `GET /v1/models` | OpenAI-compatible model list |
-| `GET /health` | Health check |
-| `GET /metrics` | Prometheus metrics |
-| `GET /.well-known/agent.json` | A2A Agent Card |
-
-### Using with Open WebUI
-
-SR2 exposes OpenAI-compatible endpoints, so you can connect [Open WebUI](https://github.com/open-webui/open-webui) (or any OpenAI-compatible client) directly to the agent:
-
-```bash
-docker run -d -p 3000:8080 \
-  -e OLLAMA_API_BASE_URL="" \
-  -e OPENAI_API_BASE_URL=http://host.docker.internal:8008/v1 \
-  -e OPENAI_API_KEY=sr2 \
-  -e WEBUI_AUTH=false \
-  ghcr.io/open-webui/open-webui:main
-```
-
-Open [http://localhost:3000](http://localhost:3000) and select the `sr2-edi` model. Or use the `docker compose` setup — see the `open-webui` service in `docker-compose.yaml`.
-
 ## Generate Config Schema / Docs
 
 ```bash
@@ -115,8 +62,8 @@ docker compose -f docker-compose.test.yaml down
 ## Lint
 
 ```bash
-uv run ruff check packages/
-uv run ruff format packages/
+uv run ruff check src/
+uv run ruff format src/
 ```
 
 ## Config Inheritance
@@ -134,124 +81,8 @@ Deep merge, more specific wins. Use `extends:` to reference parent config.
 | Path | What |
 |---|---|
 | `configs/defaults.yaml` | Library-wide defaults |
-| `configs/agents/edi/agent.yaml` | Agent config (system prompt, tools, LLM, plugins) |
-| `configs/agents/edi/interfaces/` | Per-interface pipeline configs |
-| `packages/sr2/src/sr2/` | Core context engineering library |
+| `src/sr2/` | Core context engineering library |
 | `tests/` | Unit + integration tests |
-
-## Creating a New Agent
-
-1. Create `configs/agents/<name>/agent.yaml` with system prompt, tools, and LLM settings
-2. Create pipeline configs in `configs/agents/<name>/interfaces/`
-3. Run: `uv run sr2-agent configs/agents/<name> --http`
-
-See `configs/agents/edi/` for a working example.
-
-## Runtime Config (`runtime:`)
-
-The `runtime` section configures the agent runtime — LLM connections, database, loop behavior, and session defaults.
-
-```yaml
-runtime:
-  database:
-    url: "${DATABASE_URL}"           # PostgreSQL connection string (env var substitution)
-    pool_min: 2                      # Minimum connection pool size
-    pool_max: 10                     # Maximum connection pool size
-
-  llm:
-    model:                           # Main LLM — chat, reasoning, tool use
-      name: "claude-sonnet-4-20250514"
-      api_base: null                 # API base URL (Ollama, vLLM, etc.)
-      max_tokens: 4096
-      model_params:
-        temperature: 0.7
-    fast_model:                      # Fast LLM — extraction, summarization, intent
-      name: "claude-haiku-4-5-20251001"
-      api_base: null
-      max_tokens: 1000
-      model_params:
-        temperature: 0.3
-    embedding:                       # Embedding model — memory retrieval
-      name: "text-embedding-3-small"
-      api_base: null
-
-  loop:
-    max_iterations: 25               # Max tool-call loop iterations
-
-  session:
-    max_turns: 200                   # Default max turns for unnamed sessions
-    idle_timeout_minutes: 60         # Default idle timeout
-
-  heartbeat:
-    enabled: false                   # Enable schedule_heartbeat / cancel_heartbeat tools
-    poll_interval_seconds: 30        # Scanner poll frequency (min: 5)
-    session_lifecycle: ephemeral     # Session lifecycle for heartbeat sessions
-    pipeline: null                   # Custom pipeline config path (optional)
-    max_pending_per_agent: 100       # Max queued heartbeats
-```
-
-All fields have defaults — you only need to specify what you want to override. See [Heartbeat Guide](guide-heartbeats.md) for details on the heartbeat system.
-
-## Interfaces (`interfaces:`)
-
-Interfaces define how the agent receives input. Each interface maps to a plugin type and a session.
-
-```yaml
-interfaces:
-  telegram:
-    plugin: telegram
-    session:
-      name: main_chat
-      lifecycle: persistent
-    pipeline: interfaces/user_message.yaml
-
-  api:
-    plugin: http
-    port: 8008
-    session:
-      name: "{request.session_id}"   # Dynamic session name from request
-      lifecycle: persistent
-    pipeline: interfaces/user_message.yaml
-
-  planned_check:
-    plugin: timer
-    interval_seconds: 300
-    session:
-      name: heartbeat_plan
-      lifecycle: ephemeral
-    pipeline: interfaces/heartbeat_plan.yaml
-
-  agent_calls:
-    plugin: a2a
-    session:
-      name: "a2a_{task_id}"
-      lifecycle: ephemeral
-    pipeline: interfaces/heartbeat_plan.yaml
-```
-
-Plugin-specific fields (`port`, `interval_seconds`, `enabled`, etc.) are passed through — the interface model allows extra fields.
-
-### Session Lifecycles
-
-| Lifecycle | Behavior | Persisted | Use Case |
-|---|---|---|---|
-| `persistent` | Survives across triggers. Compaction/summarization apply. | PostgreSQL | User conversations |
-| `ephemeral` | Fresh per trigger. Destroyed after processing. | In-memory only | Heartbeats, A2A calls |
-| `rolling` | Persistent but capped at `max_turns`. Oldest dropped. | PostgreSQL | Monitoring, log watchers |
-
-## Sessions (`sessions:`)
-
-Named session configurations override the runtime defaults.
-
-```yaml
-sessions:
-  main_chat:
-    max_turns: 200
-    idle_timeout_minutes: 60
-  _default:                          # Fallback for sessions not listed above
-    max_turns: 100
-    idle_timeout_minutes: 30
-```
 
 ## MCP Servers (`mcp_servers:`)
 
@@ -462,7 +293,7 @@ Policies:
 
 ### Troubleshooting
 
-- **"mcp package not installed"** — Install with `pip install -e "packages/sr2[mcp]"` or `uv sync --extra mcp`
+- **"mcp package not installed"** — Install with `pip install -e ".[mcp]"` or `uv sync --extra mcp`
 - **Server fails to connect** — The agent logs the error and continues without that server's tools. Other servers are unaffected.
 - **Tool not showing up** — Check that the tool name in `tools:` matches exactly what the server reports. Run the server standalone to see its tool list.
 - **Resources/prompts not discovered** — The server must support these capabilities. Check logs for "does not support resources/prompts" debug messages.

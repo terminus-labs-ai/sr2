@@ -48,10 +48,6 @@ class TestToolDefinition:
 
         assert schema["parameters"]["properties"]["style"]["enum"] == ["json", "yaml", "toml"]
 
-    def test_a2a_tool_type(self):
-        """ToolDefinition with type='a2a_tool' is valid."""
-        tool = ToolDefinition(name="delegate", type="a2a_tool")
-        assert tool.type == "a2a_tool"
 
 
 class TestToolStateConfig:

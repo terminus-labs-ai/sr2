@@ -5,8 +5,6 @@
 # Fields with defaults are shown uncommented.
 # Fields without defaults (required) are commented out with placeholders.
 
-# Override the agent-level system prompt for this interface/pipeline.
-system_prompt: null
 # Total token budget for the context window. The pipeline distributes this
 # budget across layers. Higher values allow more context but increase cost and
 # latency.
@@ -15,9 +13,6 @@ token_budget: 32000
 # remaining budget drops below this fraction, summarization and compaction are
 # triggered proactively to avoid hitting the hard limit.
 pre_rot_threshold: 0.25
-# Per-interface LLM overrides
-# llm:
-
 # KV-cache optimization settings
 kv_cache:
   # KV-cache optimization strategy. 'append_only' keeps a stable prefix for
@@ -123,7 +118,8 @@ compaction:
 summarization:
   # Enable automatic summarization. When True, older conversation history is
   # summarized to reclaim token budget while preserving key information.
-  enabled: true
+  # Requires fast_complete callable.
+  enabled: false
   # What triggers summarization. 'token_threshold' triggers when token usage
   # exceeds the threshold fraction. 'topic_shift' triggers on detected topic
   # changes. 'manual' only triggers via explicit API call.
@@ -159,10 +155,11 @@ retrieval:
   # Enable retrieval-augmented context. When True, relevant memories and
   # documents are retrieved and injected into the context window.
   enabled: true
-  # Retrieval strategy. 'hybrid' combines semantic and keyword search.
-  # 'semantic' uses embedding similarity only. 'keyword' uses BM25/keyword
-  # matching. 'scoped' restricts retrieval to the current topic scope.
-  strategy: hybrid
+  # Retrieval strategy. 'hybrid' combines semantic and keyword search (requires
+  # embed callable). 'semantic' uses embedding similarity only (requires embed
+  # callable). 'keyword' uses BM25/keyword matching. 'scoped' restricts
+  # retrieval to the current topic scope.
+  strategy: keyword
   # Maximum number of retrieved items to include in context.
   top_k: 10
   # Maximum total tokens allocated for retrieved content. Results are truncated
@@ -231,8 +228,9 @@ degradation:
 # Memory extraction settings
 memory:
   # Whether to automatically extract memories from conversation turns. When
-  # False, memories can still be saved explicitly via save_memory tool.
-  extract: true
+  # False, memories can still be saved explicitly via save_memory tool. Requires
+  # fast_complete callable.
+  extract: false
   # Memory store backend name. Built-in: 'memory' (in-memory), 'sqlite'.
   # Additional backends (e.g. 'postgres') available via plugins like sr2-pro.
   store: memory

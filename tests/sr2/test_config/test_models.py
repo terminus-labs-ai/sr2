@@ -4,7 +4,6 @@ from pydantic import ValidationError
 from sr2.config import (
     ContentItemConfig,
     LayerConfig,
-    LLMConfig,
     PipelineConfig,
 )
 
@@ -20,8 +19,10 @@ class TestPipelineConfigDefaults:
         assert config.extends is None
         assert config.kv_cache.strategy == "append_only"
         assert config.compaction.enabled is True
-        assert config.summarization.enabled is True
+        assert config.summarization.enabled is False
+        assert config.memory.extract is False
         assert config.retrieval.enabled is True
+        assert config.retrieval.strategy == "keyword"
         assert config.intent_detection.enabled is True
         assert config.tool_masking.strategy == "allowed_list"
         assert config.degradation.circuit_breaker_threshold == 3
@@ -88,46 +89,6 @@ class TestLayerConfigEmptyContents:
         assert layer.name == "empty_layer"
         assert layer.contents == []
         assert layer.cache_policy == "immutable"
-
-
-class TestLLMConfigDefaults:
-    """LLMConfig() with no args -> all fields None."""
-
-    def test_all_none_by_default(self):
-        llm = LLMConfig()
-        assert llm.model is None
-        assert llm.fast_model is None
-        assert llm.embedding is None
-
-
-class TestLLMConfigPartial:
-    """LLMConfig with some fields set."""
-
-    def test_model_and_api_base(self):
-        llm = LLMConfig(model={"name": "ollama/qwen2.5-coder:7b", "api_base": "http://localhost:11435"})
-        assert llm.model.name == "ollama/qwen2.5-coder:7b"
-        assert llm.model.api_base == "http://localhost:11435"
-        assert llm.fast_model is None
-
-    def test_only_model_name(self):
-        llm = LLMConfig(model={"name": "ollama/qwen2.5-coder:7b"})
-        assert llm.model.name == "ollama/qwen2.5-coder:7b"
-        assert llm.model.api_base is None
-
-
-class TestPipelineConfigWithLLM:
-    """PipelineConfig with llm section parses correctly."""
-
-    def test_llm_defaults_to_empty(self):
-        config = PipelineConfig()
-        assert config.llm.model is None
-        assert config.llm.fast_model is None
-
-    def test_llm_from_dict(self):
-        config = PipelineConfig(llm={"model": {"name": "gemini-2.0-flash", "max_tokens": 500}})
-        assert config.llm.model.name == "gemini-2.0-flash"
-        assert config.llm.model.max_tokens == 500
-        assert config.llm.model.api_base is None
 
 
 class TestSerializationRoundTrip:

@@ -694,7 +694,6 @@ class TestInterfaceSpecificBudgets:
         "interface_name,token_budget",
         [
             ("heartbeat", 3000),
-            ("a2a", 8000),
             ("user_message", 48000),
         ],
     )
@@ -814,7 +813,7 @@ class TestRouterDrivenBudgetEnforcement:
 
     async def test_each_interface_gets_its_own_budget(self):
         """Route to 3 interfaces with different budgets; each enforced independently."""
-        budgets = {"heartbeat": 3000, "a2a": 8000, "user_message": 48000}
+        budgets = {"heartbeat": 3000, "user_message": 48000}
         engine, router = self._build_engine_and_router(budgets)
 
         for interface_name, expected_budget in budgets.items():

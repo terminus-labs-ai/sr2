@@ -305,152 +305,6 @@ max_tokens: null
 optional: false
 ```
 
-## Runtime Config
-
-### Top-Level
-
-Model: `RuntimeConfig`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `database` | any | — |  |  |
-| `llm` | any | — |  |  |
-| `loop` | any | — |  |  |
-| `session` | any | — |  | Default session settings. |
-| `stream_content` | any | — |  |  |
-| `heartbeat` | any | — |  |  |
-
-**Example:**
-```yaml
-database: <database>
-llm: <llm>
-loop: <loop>
-session: <session>
-stream_content: <stream_content>
-heartbeat: <heartbeat>
-```
-
-### Database
-
-Model: `RuntimeDatabaseConfig`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `url` | string \| null | `null` |  | PostgreSQL connection string. Supports ${VAR} env var substitution. |
-| `pool_min` | integer | `2` |  | Minimum connection pool size. |
-| `pool_max` | integer | `10` |  | Maximum connection pool size. |
-
-**Example:**
-```yaml
-url: null
-pool_min: 2
-pool_max: 10
-```
-
-### LLM
-
-Model: `RuntimeLLMConfig`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `model` | any | — |  | Main LLM model configuration. |
-| `fast_model` | any | — |  | Fast model for extraction, summarization, intent detection. |
-| `embedding` | any | — |  | Embedding model for memory retrieval. |
-
-**Example:**
-```yaml
-model: <model>
-fast_model: <fast_model>
-embedding: <embedding>
-```
-
-#### LLM Model
-
-Model: `LLMModelConfig`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `name` | string | — | ✅ | Model identifier. |
-| `api_base` | string \| null | `null` |  | API base URL. |
-| `max_tokens` | integer | `4096` |  | Max tokens per response. |
-| `stream` | boolean | `false` |  | Enable streaming for this model. |
-| `model_params` | any | — |  | Sampling parameters. |
-
-**Example:**
-```yaml
-name: <name>
-api_base: null
-max_tokens: 4096
-stream: false
-model_params: <model_params>
-```
-
-#### Model Parameters
-
-Model: `ModelParams`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `temperature` | number \| null | `null` |  | Sampling temperature (0=deterministic, 2=max randomness). |
-| `top_p` | number \| null | `null` |  | Nucleus sampling threshold. |
-| `top_k` | integer \| null | `null` |  | Top-k sampling. Not supported by all providers. |
-| `frequency_penalty` | number \| null | `null` |  | Penalize frequent tokens (-2 to 2). |
-| `presence_penalty` | number \| null | `null` |  | Penalize already-used tokens (-2 to 2). |
-| `stop` | array \| null | `null` |  | Stop sequences. |
-
-**Example:**
-```yaml
-temperature: null
-top_p: null
-top_k: null
-frequency_penalty: null
-presence_penalty: null
-stop: null
-```
-
-### Loop
-
-Model: `RuntimeLoopConfig`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `max_iterations` | integer | `25` |  | Max tool-call loop iterations before stopping. |
-
-**Example:**
-```yaml
-max_iterations: 25
-```
-
-### Session Defaults
-
-Model: `RuntimeSessionConfig`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `max_turns` | integer | `200` |  | Default max turns for sessions not explicitly configured. |
-| `idle_timeout_minutes` | integer | `60` |  | Default idle timeout in minutes before session cleanup. |
-
-**Example:**
-```yaml
-max_turns: 200
-idle_timeout_minutes: 60
-```
-
-### Stream Content
-
-Model: `StreamContentConfig`
-
-| Field | Type | Default | Required | Description |
-|---|---|---|---|---|
-| `tool_status` | boolean | `true` |  | Stream tool invocation status. |
-| `tool_results` | boolean | `false` |  | Stream tool result content. |
-
-**Example:**
-```yaml
-tool_status: true
-tool_results: false
-```
-
 ## Interfaces & Plugins
 
 ### Interface
@@ -459,7 +313,7 @@ Model: `InterfaceConfig`
 
 | Field | Type | Default | Required | Description |
 |---|---|---|---|---|
-| `plugin` | string | — | ✅ | Plugin type: telegram | timer | http | a2a |
+| `plugin` | string | — | ✅ | Plugin type: telegram | timer | http |
 | `session` | any \| null | `null` |  | Session config for this interface. |
 | `pipeline` | string \| null | `null` |  | Path to pipeline config (relative to config_dir). |
 
@@ -571,7 +425,7 @@ Each layer declares a cache policy that controls when its content is recomputed.
 | `refresh_on_state_change` | Recompute when state hash changes | Last known state (heartbeat polling) |
 | `append_only` | Always recompute (content grows each turn) | Conversation history |
 | `always_new` | Always recompute (changes every invocation) | Timestamps, dynamic instructions |
-| `per_invocation` | Always recompute, no caching between calls | A2A task input, event payloads |
+| `per_invocation` | Always recompute, no caching between calls | Webhook payloads, event-driven inputs |
 | `template_reuse` | Same as immutable — reuse across calls of this type | Sub-agent system prompts |
 
 **KV-Cache impact:** Layers earlier in the config (top) form the cached prefix.
@@ -583,6 +437,6 @@ Order layers from most stable to least stable.
 | Lifecycle | Behavior | Persisted | Use Case |
 |---|---|---|---|
 | `persistent` | Survives across triggers. Compaction/summarization apply. | ✅ PostgreSQL | User conversations |
-| `ephemeral` | Fresh per trigger. Destroyed after processing. | ❌ In-memory | Heartbeats, A2A calls |
+| `ephemeral` | Fresh per trigger. Destroyed after processing. | ❌ In-memory | Webhooks, event-driven triggers |
 | `rolling` | Persistent but capped at `max_turns`. Oldest dropped. | ✅ PostgreSQL | Monitoring, log watchers |
 

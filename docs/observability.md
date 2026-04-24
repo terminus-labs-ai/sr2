@@ -39,12 +39,26 @@ Both exporters can run simultaneously.
 
 ## Option A: Prometheus Scraping (simplest)
 
-The `/metrics` endpoint is always available when running with `--http`. No extra dependencies needed.
+The `PrometheusExporter` (sr2-pro) registers a `/metrics` endpoint on your application's HTTP server.
 
-### 1. Start the agent with HTTP
+### 1. Expose `/metrics` in your application
 
-```bash
-uv run sr2-agent configs/agents/edi --http --port 8008
+Mount the exporter on your own FastAPI app (or equivalent):
+
+```python
+from fastapi import FastAPI, Response
+from sr2.metrics.collector import MetricCollector
+# sr2-pro required:
+from sr2_pro.metrics import PrometheusExporter
+
+app = FastAPI()
+collector = MetricCollector()
+exporter = PrometheusExporter()
+exporter.register(collector)
+
+@app.get("/metrics")
+async def metrics():
+    return Response(content=exporter.export(), media_type="text/plain")
 ```
 
 Verify metrics are exposed:
@@ -52,8 +66,6 @@ Verify metrics are exposed:
 ```bash
 curl http://localhost:8008/metrics
 ```
-
-> **Tip:** The agent also serves a built-in chat UI at `GET /` and OpenAI-compatible endpoints at `/v1/chat/completions` and `/v1/models`. See the [Quick Reference](reference.md) for details.
 
 You should see output like:
 
@@ -81,18 +93,12 @@ scrape_configs:
 
   - job_name: "sr2"
     static_configs:
-      - targets: ["sr2-edi:8008"]  # container name + port
+      - targets: ["your-app:8008"]  # your application's host + port
     metrics_path: /metrics
     scrape_interval: 10s
 ```
 
-If running outside Docker, use `localhost:8008` instead.
-
-### 3. Start the stack
-
-```bash
-docker compose up -d prometheus grafana
-```
+### 3. Start Prometheus and Grafana
 
 Prometheus is at `http://localhost:9501`, Grafana at `http://localhost:9502`.
 
@@ -199,13 +205,18 @@ provider = MeterProvider(resource=resource, metric_readers=[reader])
 metrics.set_meter_provider(provider)
 ```
 
-### 4. Start the agent
+### 4. Register the OTel exporter before your first pipeline run
 
-```bash
-uv run sr2-agent configs/agents/edi --http --port 8008
+```python
+from sr2.metrics.collector import MetricCollector
+from sr2_pro.metrics import OTelExporter  # sr2-pro required
+
+collector = MetricCollector()
+exporter = OTelExporter()
+exporter.register(collector)  # hooks into collector callbacks
 ```
 
-On startup you should see:
+On first registration you should see:
 
 ```
 OTelExporter registered on MetricCollector (meter=sr2)
