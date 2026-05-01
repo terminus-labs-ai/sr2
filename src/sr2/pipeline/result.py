@@ -1,104 +1,69 @@
+"""Pipeline result types.
+
+CompiledContext is the output of process() — what the harness sends to the LLM.
+PostProcessResult is the output of post_process() — memory actions, maintenance.
+"""
+
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Literal
-import time
+from typing import Any
 
 
 @dataclass
-class ActualTokenUsage:
-    """Actual token counts reported by the LLM provider after a call."""
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cached_tokens: int = 0
-    loop_iterations: int = 0
-
-    @property
-    def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
-
-    @property
-    def cache_hit_rate(self) -> float:
-        if self.input_tokens == 0:
-            return 0.0
-        return self.cached_tokens / self.input_tokens
-
-    @property
-    def uncached_input_tokens(self) -> int:
-        """Input tokens that were NOT served from cache (new computation)."""
-        return max(0, self.input_tokens - self.cached_tokens)
+class LayerResult:
+    """Result from processing a single layer."""
+    name: str
+    content: str
+    tokens: int
+    cache_hit: bool = False
+    providers: dict[str, int] = field(default_factory=dict)  # provider_name -> tokens
+    shed: bool = False  # Was this layer shed due to budget pressure?
 
 
 @dataclass
-class StageResult:
-    stage_name: str
-    status: Literal["success", "degraded", "failed"]
-    fallback_used: bool = False
-    tokens_used: int = 0
-    duration_ms: float = 0.0
-    cache_status: str = ""  # "hit" | "miss" | "skipped" | ""
-    error: str | None = None
-
-
-@dataclass
-class PipelineResult:
-    stages: list[StageResult] = field(default_factory=list)
+class PipelineMetrics:
+    """Metrics snapshot from a process() call."""
     total_tokens: int = 0
-    total_duration_ms: float = 0.0
-    cache_hit_rate: float | None = None
-    config_used: str = ""
-
-    def add_stage(self, result: StageResult) -> None:
-        """Add a stage result and update totals."""
-        self.stages.append(result)
-        self.total_tokens += result.tokens_used
-        self.total_duration_ms += result.duration_ms
-
-    @property
-    def has_failures(self) -> bool:
-        return any(s.status == "failed" for s in self.stages)
-
-    @property
-    def has_degradations(self) -> bool:
-        return any(s.status == "degraded" for s in self.stages)
-
-    @property
-    def overall_status(self) -> Literal["success", "degraded", "failed"]:
-        if self.has_failures:
-            return "failed"
-        if self.has_degradations:
-            return "degraded"
-        return "success"
+    total_budget: int | None = None
+    layers: dict[str, int] = field(default_factory=dict)  # layer_name -> tokens
+    layers_shed: list[str] = field(default_factory=list)
+    cache_hits: int = 0
+    cache_misses: int = 0
+    providers_failed: list[str] = field(default_factory=list)
+    fallbacks_activated: list[str] = field(default_factory=list)
+    reduction_savings: int = 0  # tokens saved by reducers
+    memories_retrieved: int = 0
+    memories_written: int = 0
+    custom: dict[str, Any] = field(default_factory=dict)
 
 
-class StageTimer:
-    """Context manager for timing a pipeline stage."""
+@dataclass
+class CompiledContext:
+    """Output of process() — ready-to-use context for the LLM call.
 
-    def __init__(self, stage_name: str):
-        self.stage_name = stage_name
-        self._start: float = 0.0
-        self.duration_ms: float = 0.0
+    Contains the assembled messages/blocks and metadata about
+    what went in and why.
+    """
+    layers: list[LayerResult]
+    metrics: PipelineMetrics
+    total_tokens: int = 0
 
-    def __enter__(self) -> "StageTimer":
-        self._start = time.perf_counter()
-        return self
+    def to_text(self) -> str:
+        """Assemble all layer content into a single string."""
+        return "\n\n".join(layer.content for layer in self.layers if layer.content)
 
-    def __exit__(self, *args) -> None:
-        self.duration_ms = (time.perf_counter() - self._start) * 1000
 
-    def result(
-        self,
-        status: Literal["success", "degraded", "failed"],
-        tokens_used: int = 0,
-        fallback_used: bool = False,
-        cache_status: str = "",
-        error: str | None = None,
-    ) -> StageResult:
-        return StageResult(
-            stage_name=self.stage_name,
-            status=status,
-            fallback_used=fallback_used,
-            tokens_used=tokens_used,
-            duration_ms=self.duration_ms,
-            cache_status=cache_status,
-            error=error,
-        )
+@dataclass
+class MaintenanceAction:
+    """A maintenance action performed during post_process()."""
+    kind: str  # "merge", "archive", "stale_check", "cleanup"
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PostProcessResult:
+    """Output of post_process() — side effects and metrics."""
+    memories_extracted: list[str] = field(default_factory=list)  # memory IDs
+    maintenance_actions: list[MaintenanceAction] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)

@@ -1,60 +1,46 @@
 [project]
 name = "sr2"
-version = "1.0.0"
+version = "2.0.0-alpha.0"
 description = "Context engineering library for AI agents"
-readme = "README.md"
 requires-python = ">=3.12"
-authors = [{name = "Terminus Labs"}]
-license = {text = "Apache-2.0"}
-keywords = ["context-engineering", "llm", "agents", "kv-cache", "tokens", "compaction", "summarization"]
-classifiers = [
-    "Development Status :: 5 - Production/Stable",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
 dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
-    "litellm>=1.0",
-    "python-dotenv>=1.0",
-    "aiosqlite>=0.20",
+    "tiktoken>=0.7",
 ]
 
-[project.urls]
-Homepage = "https://sr2.dev"
-Repository = "https://github.com/terminus-labs-ai/sr2"
-Documentation = "https://sr2.dev/docs"
+[project.entry-points."sr2.providers"]
+session_history = "sr2.providers.session:SessionHistoryProvider"
+memory = "sr2.providers.memory:MemoryProvider"
+tools = "sr2.providers.tools:ToolsProvider"
 
-[project.optional-dependencies]
-mcp = ["mcp>=1.0"]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "pytest-cov>=4.0",
-    "ruff>=0.3",
-    "pre-commit>=3.0",
-    "httpx>=0.27",
-    "mkdocs>=1.6",
-    "mkdocs-material>=9.5",
-]
+[project.entry-points."sr2.reducers"]
+compaction = "sr2.compaction.plugin:CompactionReducer"
+summarization = "sr2.summarization.plugin:SummarizationReducer"
 
-[project.scripts]
-sr2-config-docs = "schema_gen:main"
+[project.entry-points."sr2.stores"]
+in_memory = "sr2.stores.memory:InMemoryStore"
+sqlite = "sr2.stores.sqlite:SQLiteStore"
+
+[project.entry-points."sr2.exporters"]
+# OTel and Prometheus are paid plugins (sr2-pro)
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/sr2", "src/schema_gen.py"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]

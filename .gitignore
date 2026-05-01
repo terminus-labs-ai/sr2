@@ -1,44 +1,10 @@
-# Python #
-*.pyc
 __pycache__/
-.pytest_cache/
-.venv
-venv
-
-# Docker #
-.dockerenv
-.dockervols
-
-# Miscellaneous #
-*.log
-*.swp
-*.swo
-*.env
-!.env.example
-
-# Python #
-*.pyc
-__pycache__/
-.pytest_cache/
-.venv
-venv
-
-# Docker #
-.dockerenv
-
-# Miscellaneous #
-*.log
-*.swp
-*.swo
-
-# TypeScript #
-node_modules/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+*.egg
 dist/
-tsconfig.tsbuildinfo
-*.tsbuildinfo
-
-.coverage
-.ruff_cache
-site/
-.claude/*.local.*
-.opencode
+build/
+.pytest_cache/
+.mypy_cache/

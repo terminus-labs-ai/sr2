@@ -1,58 +1,82 @@
-import logging
-import time
+"""Circuit breaker for content providers.
 
-logger = logging.getLogger(__name__)
+Per-provider circuit breaker pattern:
+closed (normal) -> open (failing, skip provider) -> half-open (try one request) -> closed or back to open.
+
+Design principles:
+- SRP: Only tracks failure state — doesn't know about content or providers.
+- OCP: New breaker policies added via subclasses, not by modifying state machine.
+"""
+
+from __future__ import annotations
+
+import time
+from enum import Enum
+
+
+class CircuitState(str, Enum):
+    CLOSED = "closed"       # Normal operation
+    OPEN = "open"           # Failing, skip provider
+    HALF_OPEN = "half_open" # Testing if recovery happened
 
 
 class CircuitBreaker:
-    """Per-stage circuit breaker. Opens after N consecutive failures,
-    closes after cooldown period."""
+    """Per-content-provider circuit breaker.
 
-    def __init__(self, threshold: int = 3, cooldown_seconds: float = 300.0):
-        self._threshold = threshold
-        self._cooldown = cooldown_seconds
-        self._failure_counts: dict[str, int] = {}
-        self._open_since: dict[str, float] = {}
+    Sits on individual providers within a layer, not on the layer itself.
+    A memory retrieval failure doesn't kill the whole conversation layer.
 
-    def record_success(self, stage: str) -> None:
-        """Reset failure count for a stage."""
-        self._failure_counts.pop(stage, None)
-        self._open_since.pop(stage, None)
+    Args:
+        threshold: Consecutive failures before opening (default: 3).
+        cooldown: Seconds to wait before transitioning to half-open (default: 300).
+    """
 
-    def record_failure(self, stage: str) -> None:
-        """Record a failure. Opens breaker if threshold reached."""
-        self._failure_counts[stage] = self._failure_counts.get(stage, 0) + 1
-        if self._failure_counts[stage] >= self._threshold:
-            self._open_since[stage] = time.monotonic()
-            logger.warning(
-                "Circuit breaker OPEN for stage %r after %d consecutive failures (cooldown: %.0fs)",
-                stage,
-                self._failure_counts[stage],
-                self._cooldown,
-            )
+    def __init__(self, threshold: int = 3, cooldown: int = 300) -> None:
+        self.threshold = threshold
+        self.cooldown = cooldown
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._last_failure_time: float = 0
 
-    def is_open(self, stage: str) -> bool:
-        """Return True if the breaker is open (stage should be skipped)."""
-        if stage not in self._open_since:
-            return False
-        elapsed = time.monotonic() - self._open_since[stage]
-        if elapsed >= self._cooldown:
-            self._open_since.pop(stage)
-            self._failure_counts.pop(stage, None)
-            logger.warning(
-                "Circuit breaker CLOSED for stage %r after %.0fs cooldown, will retry",
-                stage,
-                elapsed,
-            )
-            return False
-        return True
+    @property
+    def state(self) -> CircuitState:
+        """Current breaker state, with automatic half-open transition."""
+        if self._state == CircuitState.OPEN:
+            elapsed = time.monotonic() - self._last_failure_time
+            if elapsed >= self.cooldown:
+                self._state = CircuitState.HALF_OPEN
+        return self._state
 
-    def status(self) -> dict[str, dict]:
-        """Return status of all tracked stages."""
-        result = {}
-        for stage in set(list(self._failure_counts) + list(self._open_since)):
-            result[stage] = {
-                "failures": self._failure_counts.get(stage, 0),
-                "is_open": self.is_open(stage),
-            }
-        return result
+    def record_success(self) -> None:
+        """Record a successful provider call. Resets failure count."""
+        self._failure_count = 0
+        self._state = CircuitState.CLOSED
+
+    def record_failure(self) -> None:
+        """Record a failed provider call. Opens if threshold reached."""
+        self._failure_count += 1
+        self._last_failure_time = time.monotonic()
+
+        if self._failure_count >= self.threshold:
+            self._state = CircuitState.OPEN
+
+    def allow_request(self) -> bool:
+        """Check if a request should be allowed through.
+
+        Returns:
+            True if the provider should be called, False if it should be skipped.
+        """
+        current_state = self.state  # Triggers half-open check
+
+        if current_state == CircuitState.CLOSED:
+            return True
+        if current_state == CircuitState.HALF_OPEN:
+            return True  # Allow one test request
+        # OPEN state
+        return False
+
+    def reset(self) -> None:
+        """Reset to initial state. Useful for testing."""
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._last_failure_time = 0
