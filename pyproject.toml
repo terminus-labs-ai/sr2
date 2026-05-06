@@ -1,46 +1,15 @@
 [project]
 name = "sr2"
-version = "2.0.0-alpha.0"
-description = "Context engineering library for AI agents"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "Diego Camizotti", email = "diego@terminuslabs.co" }]
 requires-python = ">=3.12"
-dependencies = [
-    "pydantic>=2.0",
-    "pyyaml>=6.0",
-    "tiktoken>=0.7",
-]
-
-[project.entry-points."sr2.providers"]
-session_history = "sr2.providers.session:SessionHistoryProvider"
-memory = "sr2.providers.memory:MemoryProvider"
-tools = "sr2.providers.tools:ToolsProvider"
-
-[project.entry-points."sr2.reducers"]
-compaction = "sr2.compaction.plugin:CompactionReducer"
-summarization = "sr2.summarization.plugin:SummarizationReducer"
-
-[project.entry-points."sr2.stores"]
-in_memory = "sr2.stores.memory:InMemoryStore"
-sqlite = "sr2.stores.sqlite:SQLiteStore"
-
-[project.entry-points."sr2.exporters"]
-# OTel and Prometheus are paid plugins (sr2-pro)
+dependencies = []
 
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-
-[tool.ruff]
-target-version = "py312"
-line-length = 100
-
-[tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
+[dependency-groups]
+dev = ["pytest>=9.0.3", "ruff>=0.15.11"]

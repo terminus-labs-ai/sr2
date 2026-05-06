@@ -6,6 +6,7 @@ Tests that:
 - Config models validate correctly
 - Facade instantiates
 - Errors are properly hierarchized
+- Dependency injection through facade
 """
 
 import pytest
@@ -23,7 +24,12 @@ from sr2.protocols import (
     ResolvedContent,
     ReducedContent,
     MetricSnapshot,
+    LLMClient,
+    EmbeddingProvider,
+    TokenCounter,
 )
+from sr2.protocols.llm import Message, CompletionResult
+from sr2.tokenization.counting import CharacterCounter, TiktokenCounter, create_token_counter
 from sr2.core.errors import (
     SR2Error,
     ConfigError,
@@ -187,3 +193,77 @@ class TestFacadeInit:
     def test_init_with_dict(self):
         sr2 = SR2(config={"layers": [{"name": "system_prompt"}]})
         assert sr2 is not None
+
+
+# ---------------------------------------------------------------------------
+# Mock implementations for dependency injection tests
+# ---------------------------------------------------------------------------
+
+
+class _MockLLMClient:
+    """Minimal LLMClient implementation for testing."""
+
+    async def complete(
+        self,
+        messages: list[Message],
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> CompletionResult:
+        return CompletionResult(content="mock response")
+
+
+class _MockEmbeddingProvider:
+    """Minimal EmbeddingProvider implementation for testing."""
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * 128 for _ in texts]
+
+    @property
+    def dimensions(self) -> int:
+        return 128
+
+
+class TestFacadeDependencyInjection:
+    """Verify SR2 facade accepts optional dependency injection params."""
+
+    def test_init_with_llm_client(self):
+        """SR2(llm=mock_llm) stores the client without error."""
+        llm = _MockLLMClient()
+        sr2 = SR2(llm=llm)
+        assert sr2._llm is llm
+
+    def test_init_with_token_counter(self):
+        """SR2(token_counter=CharacterCounter()) stores the counter."""
+        counter = CharacterCounter()
+        sr2 = SR2(token_counter=counter)
+        assert sr2._token_counter is counter
+
+    def test_init_with_embedding_provider(self):
+        """SR2(embedding_provider=mock_embedder) stores the provider."""
+        embedder = _MockEmbeddingProvider()
+        sr2 = SR2(embedding_provider=embedder)
+        assert sr2._embedding_provider is embedder
+
+    def test_init_with_all_deps(self):
+        """All three deps at once works."""
+        llm = _MockLLMClient()
+        counter = CharacterCounter()
+        embedder = _MockEmbeddingProvider()
+        sr2 = SR2(llm=llm, token_counter=counter, embedding_provider=embedder)
+        assert sr2._llm is llm
+        assert sr2._token_counter is counter
+        assert sr2._embedding_provider is embedder
+
+    def test_init_defaults_to_none(self):
+        """SR2() still works — backward compat. LLM and embedder default to None."""
+        sr2 = SR2()
+        assert sr2._llm is None
+        assert sr2._embedding_provider is None
+
+    def test_default_token_counter(self):
+        """When no token_counter provided, SR2 creates a default one."""
+        sr2 = SR2()
+        assert sr2._token_counter is not None
+        # Must be either TiktokenCounter or CharacterCounter
+        assert isinstance(sr2._token_counter, (TiktokenCounter, CharacterCounter))
