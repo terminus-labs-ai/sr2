@@ -1,0 +1,23 @@
+# Minimal SR2 config — proves the pipeline works end-to-end with a real LLM.
+# Run with: uv run sr2 configs/minimal.yaml
+
+models:
+  default:
+    model: anthropic/claude-haiku-4-5-20251001
+    # Falls back to ANTHROPIC_API_KEY env var
+
+pipeline:
+  token_budget: 200000
+  layers:
+    - name: system
+      target: system
+      resolvers:
+        - type: static
+          config:
+            text: "You are a helpful assistant."
+
+    - name: conversation
+      target: messages
+      resolvers:
+        - type: session   # prior history first (defaults: user_input + assistant_response)
+        - type: input     # current user message (default: user_input at STARTING)

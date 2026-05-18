@@ -1,25 +1,31 @@
-from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel
+from pydantic.functional_validators import PlainValidator
+
+# A dict field that Pydantic does not copy — preserves the original object's
+# identity so that callers who mutate the dict after construction see the
+# change at resolve/transform time (hot-reload, AC15).
+_LiveDict = Annotated[dict, PlainValidator(lambda v: v)]
 
 
-class TransformTriggers(str, Enum):
-  TURN_START = "turn_start"
-  TURN_END = "turn_end"
-  OVERFLOW = "overflow"
-  INTERVAL = "interval"
+class EventSubscriptionConfig(BaseModel):
+  event: str
+  phase: str | None = None
 
 
 class TransformerConfig(BaseModel):
   type: str
-  triggers: list[TransformTriggers]
-  config: dict[str, Any] = {}
+  subscriptions: list[EventSubscriptionConfig] = []
+  config: _LiveDict = {}
+  max_executions: int = 1
 
 
 class ResolverConfig(BaseModel):
   type: str
-  config: dict[str, Any] = {}
+  config: _LiveDict = {}
+  subscriptions: list[EventSubscriptionConfig] = []
+  max_executions: int = 1
 
 
 class LayerConfig(BaseModel):
@@ -28,11 +34,12 @@ class LayerConfig(BaseModel):
   token_budget: int | None = None
   resolvers: list[ResolverConfig]
   transformers: list[TransformerConfig] | None = None
-
-
-class ContextConfig(BaseModel):
-  layers: list[LayerConfig]
+  target: str | None = None
+  position: str = "append"
 
 
 class PipelineConfig(BaseModel):
-  context: ContextConfig
+  layers: list[LayerConfig]
+  max_iterations: int = 100
+  token_budget: int = 200_000
+  enable_overflow_detection: bool = True

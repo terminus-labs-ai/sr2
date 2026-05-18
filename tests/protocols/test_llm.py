@@ -1,121 +1,197 @@
-"""Tests for the LLMClient protocol, Message, and CompletionResult.
+"""Tests for sr2.protocols.llm — StreamEvent model + LLMCallable protocol.
 
-Verifies:
-- Message dataclass is frozen/immutable
-- CompletionResult dataclass is frozen with correct defaults
-- LLMClient protocol is runtime_checkable
-- Non-conforming classes are rejected by isinstance
-- A mock LLMClient can be called and returns CompletionResult
+Covers:
+  1. StreamEvent model construction — text, usage, and end events with correct defaults.
+  2. StreamEvent type validation — only "text", "usage", "end" are valid.
+  3. LLMCallable protocol compliance — requires both complete() and stream().
+  4. StreamEvent serialization — round-trip through model_dump / model_validate.
 """
 
-import asyncio
+from collections.abc import AsyncIterator
 
 import pytest
+from pydantic import ValidationError
 
-from sr2.protocols import Message, CompletionResult, LLMClient
-
-
-class TestMessage:
-    """Verify Message value object."""
-
-    def test_message_creation(self):
-        msg = Message(role="user", content="hello")
-        assert msg.role == "user"
-        assert msg.content == "hello"
-
-    def test_message_is_frozen(self):
-        msg = Message(role="user", content="hello")
-        with pytest.raises(Exception):  # FrozenInstanceError
-            msg.role = "changed"
-
-    def test_message_is_frozen_content(self):
-        msg = Message(role="assistant", content="hi")
-        with pytest.raises(Exception):  # FrozenInstanceError
-            msg.content = "changed"
+from sr2.models import TokenUsage
+from sr2.protocols.llm import (
+    CompletionRequest,
+    CompletionResponse,
+    LLMCallable,
+    StreamEvent,
+)
 
 
-class TestCompletionResult:
-    """Verify CompletionResult value object."""
+# ---------------------------------------------------------------------------
+# 1. StreamEvent model construction
+# ---------------------------------------------------------------------------
 
-    def test_completion_result_creation(self):
-        result = CompletionResult(content="answer")
-        assert result.content == "answer"
 
-    def test_completion_result_is_frozen(self):
-        result = CompletionResult(content="answer")
-        with pytest.raises(Exception):  # FrozenInstanceError
-            result.content = "changed"
+class TestStreamEventConstruction:
+    def test_text_event(self):
+        event = StreamEvent(type="text", text="hello")
+        assert event.type == "text"
+        assert event.text == "hello"
+        assert event.usage is None
 
-    def test_completion_result_usage_default(self):
-        result = CompletionResult(content="answer")
-        assert result.usage == {}
+    def test_text_event_default_text(self):
+        event = StreamEvent(type="text")
+        assert event.text == ""
 
-    def test_completion_result_model_default(self):
-        result = CompletionResult(content="answer")
-        assert result.model == ""
+    def test_usage_event(self):
+        usage = TokenUsage(input_tokens=10, output_tokens=5)
+        event = StreamEvent(type="usage", usage=usage)
+        assert event.type == "usage"
+        assert event.usage is not None
+        assert event.usage.input_tokens == 10
+        assert event.usage.output_tokens == 5
+        assert event.text == ""
 
-    def test_completion_result_with_usage(self):
-        result = CompletionResult(
-            content="answer",
-            usage={"prompt_tokens": 10, "completion_tokens": 5},
-            model="gpt-4",
+    def test_end_event(self):
+        event = StreamEvent(type="end")
+        assert event.type == "end"
+        assert event.text == ""
+        assert event.usage is None
+
+    def test_end_event_ignores_text(self):
+        """End events can carry text (empty by default), but usage should be None."""
+        event = StreamEvent(type="end", text="ignored")
+        assert event.text == "ignored"
+
+    def test_usage_event_with_cache_fields(self):
+        usage = TokenUsage(
+            input_tokens=100,
+            output_tokens=50,
+            cache_creation_input_tokens=20,
+            cache_read_input_tokens=30,
         )
-        assert result.usage["prompt_tokens"] == 10
-        assert result.usage["completion_tokens"] == 5
-        assert result.model == "gpt-4"
+        event = StreamEvent(type="usage", usage=usage)
+        assert event.usage.cache_creation_input_tokens == 20
+        assert event.usage.cache_read_input_tokens == 30
 
 
-class TestLLMClientProtocol:
-    """Verify LLMClient protocol is runtime-checkable."""
+# ---------------------------------------------------------------------------
+# 2. StreamEvent type validation
+# ---------------------------------------------------------------------------
 
-    def test_conforming_class_satisfies_isinstance(self):
-        """A class with the correct complete signature satisfies isinstance."""
 
-        class FakeClient:
-            async def complete(
-                self,
-                messages: list[Message],
-                model: str | None = None,
-                temperature: float = 0.0,
-                max_tokens: int | None = None,
-            ) -> CompletionResult:
-                return CompletionResult(content="ok")
+class TestStreamEventTypeValidation:
+    def test_valid_types(self):
+        for t in ("text", "usage", "end"):
+            event = StreamEvent(type=t)
+            assert event.type == t
 
-        client = FakeClient()
-        assert isinstance(client, LLMClient)
+    def test_invalid_type_rejected(self):
+        with pytest.raises(ValidationError):
+            StreamEvent(type="start")
 
-    def test_missing_method_fails_isinstance(self):
-        """A class without complete does NOT satisfy isinstance."""
+    def test_invalid_type_arbitrary_string(self):
+        with pytest.raises(ValidationError):
+            StreamEvent(type="content_block_delta")
 
-        class NotAClient:
-            pass
+    def test_empty_type_rejected(self):
+        with pytest.raises(ValidationError):
+            StreamEvent(type="")
 
-        obj = NotAClient()
-        assert not isinstance(obj, LLMClient)
+    def test_missing_type_rejected(self):
+        with pytest.raises(ValidationError):
+            StreamEvent()  # type is required (Literal, no default)
 
-    def test_mock_client_returns_completion_result(self):
-        """A mock LLMClient can be called and returns CompletionResult."""
 
-        class MockClient:
-            async def complete(
-                self,
-                messages: list[Message],
-                model: str | None = None,
-                temperature: float = 0.0,
-                max_tokens: int | None = None,
-            ) -> CompletionResult:
-                return CompletionResult(
-                    content="mock response",
-                    usage={"prompt_tokens": 5, "completion_tokens": 3},
-                    model=model or "test-model",
-                )
+# ---------------------------------------------------------------------------
+# 3. LLMCallable protocol compliance
+# ---------------------------------------------------------------------------
 
-        async def _run():
-            client = MockClient()
-            msgs = [Message(role="user", content="hello")]
-            result = await client.complete(msgs, model="test-model")
-            assert result.content == "mock response"
-            assert result.usage == {"prompt_tokens": 5, "completion_tokens": 3}
-            assert result.model == "test-model"
 
-        asyncio.run(_run())
+class _FullImpl:
+    """Implements both complete() and stream()."""
+
+    async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        return CompletionResponse(
+            id="r1",
+            content=[],
+            stop_reason="end_turn",
+            usage=TokenUsage(),
+        )
+
+    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
+        yield StreamEvent(type="text", text="hi")
+        yield StreamEvent(type="end")
+
+
+class _MissingStream:
+    """Implements complete() only — should NOT satisfy LLMCallable."""
+
+    async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        return CompletionResponse(
+            id="r1",
+            content=[],
+            stop_reason="end_turn",
+            usage=TokenUsage(),
+        )
+
+
+class _MissingComplete:
+    """Implements stream() only — should NOT satisfy LLMCallable."""
+
+    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
+        yield StreamEvent(type="end")
+
+
+class TestLLMCallableProtocol:
+    def test_full_impl_satisfies_protocol(self):
+        assert isinstance(_FullImpl(), LLMCallable)
+
+    def test_missing_stream_does_not_satisfy(self):
+        assert not isinstance(_MissingStream(), LLMCallable)
+
+    def test_missing_complete_does_not_satisfy(self):
+        assert not isinstance(_MissingComplete(), LLMCallable)
+
+    def test_protocol_is_runtime_checkable(self):
+        """If @runtime_checkable is missing, isinstance() raises TypeError."""
+        assert isinstance(_FullImpl(), LLMCallable)
+
+
+# ---------------------------------------------------------------------------
+# 4. StreamEvent serialization round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestStreamEventSerialization:
+    def test_text_event_round_trip(self):
+        original = StreamEvent(type="text", text="hello world")
+        data = original.model_dump()
+        restored = StreamEvent.model_validate(data)
+        assert restored == original
+
+    def test_usage_event_round_trip(self):
+        usage = TokenUsage(
+            input_tokens=42,
+            output_tokens=7,
+            cache_creation_input_tokens=3,
+            cache_read_input_tokens=5,
+        )
+        original = StreamEvent(type="usage", usage=usage)
+        data = original.model_dump()
+        restored = StreamEvent.model_validate(data)
+        assert restored == original
+        assert restored.usage.input_tokens == 42
+
+    def test_end_event_round_trip(self):
+        original = StreamEvent(type="end")
+        data = original.model_dump()
+        restored = StreamEvent.model_validate(data)
+        assert restored == original
+
+    def test_serialized_shape_text(self):
+        event = StreamEvent(type="text", text="hi")
+        data = event.model_dump()
+        assert data["type"] == "text"
+        assert data["text"] == "hi"
+        assert data["usage"] is None
+
+    def test_serialized_shape_usage(self):
+        event = StreamEvent(type="usage", usage=TokenUsage(input_tokens=1))
+        data = event.model_dump()
+        assert data["type"] == "usage"
+        assert data["usage"]["input_tokens"] == 1
