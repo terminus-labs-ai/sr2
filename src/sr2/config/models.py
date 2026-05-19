@@ -3,6 +3,10 @@ from typing import Annotated, Literal
 from pydantic import BaseModel
 from pydantic.functional_validators import PlainValidator
 
+
+class ConfigError(Exception):
+    """Raised when a pipeline configuration is invalid."""
+
 # A dict field that Pydantic does not copy — preserves the original object's
 # identity so that callers who mutate the dict after construction see the
 # change at resolve/transform time (hot-reload, AC15).

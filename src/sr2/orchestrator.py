@@ -10,7 +10,10 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from sr2.config.models import LayerConfig, PipelineConfig, ResolverConfig
+from ulid import ULID
+
+from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig
+from sr2.pipeline.provenance import ProvenanceStore
 from sr2.models import TextBlock, TokenUsage
 from sr2.pipeline.compilation import AppendStrategy, PrefixStrategy
 from sr2.pipeline.engine import PipelineEngine
@@ -51,10 +54,13 @@ def _build_layer(layer_config: LayerConfig, token_counter: TokenCounter) -> Laye
     position = PrefixStrategy() if position_str == "prefix" else AppendStrategy()
 
     resolvers = [_build_resolver(r) for r in layer_config.resolvers]
-    transformers = []
     if layer_config.transformers:
-        # Transformers not yet implemented in this MVP; skip gracefully.
-        transformers = []
+        raise ConfigError(
+            f"Layer '{layer_config.name}' declares transformers, but transformer "
+            f"execution is not yet implemented. Remove the transformers block or "
+            f"wait for the transformer execution PR."
+        )
+    transformers = []
 
     # EventBus is a placeholder here — PipelineEngine replaces it after init.
     event_bus = EventBus()
@@ -79,6 +85,8 @@ class SR2:
         pipeline_config: PipelineConfig,
         llm: dict[str, LLMCallable],
         token_counter: TokenCounter,
+        session_id: str | None = None,
+        provenance_store: ProvenanceStore | None = None,
     ) -> None:
         if "default" not in llm:
             raise ValueError(
@@ -88,9 +96,14 @@ class SR2:
 
         self._llm = llm["default"]
         self._token_counter = token_counter
+        self.session_id = session_id if session_id is not None else str(ULID())
 
         layers = [_build_layer(lc, token_counter) for lc in pipeline_config.layers]
-        self._engine = PipelineEngine(layers=layers, token_counter=token_counter)
+        self._engine = PipelineEngine(
+            layers=layers,
+            token_counter=token_counter,
+            provenance_store=provenance_store,
+        )
 
     # ------------------------------------------------------------------
     # Core turn loop

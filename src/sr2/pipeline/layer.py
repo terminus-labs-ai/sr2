@@ -13,6 +13,7 @@ from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import CompilationTarget
 from sr2.pipeline.models import ResolvedContent, TransformationResult
 from sr2.pipeline.protocols import Resolver, TokenCounter, Transformer
+from sr2.pipeline.provenance import Entry, InMemoryProvenanceStore, ProvenanceStore
 
 
 class Layer:
@@ -28,6 +29,7 @@ class Layer:
         transformers: list[Transformer],
         token_counter: TokenCounter,
         event_bus: EventBus,
+        provenance_store: ProvenanceStore | None = None,
     ) -> None:
         self.name = name
         self.target = target
@@ -37,12 +39,17 @@ class Layer:
         self.transformers = transformers
         self._token_counter = token_counter
         self._event_bus = event_bus
+        self._provenance_store: ProvenanceStore = (
+            provenance_store if provenance_store is not None else InMemoryProvenanceStore()
+        )
 
         self._content: list[ContentBlock | Message] = []
         self._tool_definitions: list[ToolDefinition] = []
         self._force_truncated: bool = False
         # Collected events from bus callbacks — processed by engine after drain
         self._pending_events: list[Event] = []
+        # Entries buffered for store write — flushed in process_pending
+        self._pending_writes: list[Entry] = []
 
     # -- subscriptions --------------------------------------------------------
 
@@ -78,63 +85,70 @@ class Layer:
 
         Drives resolvers and transformers against collected events, adds
         content, checks budget, and emits overflow events if needed.
+        Also flushes any buffered provenance writes to the store.
         """
-        if not self._pending_events:
-            return False
+        changed = False
 
-        events = self._pending_events
-        self._pending_events = []
+        if self._pending_events:
+            events = self._pending_events
+            self._pending_events = []
 
-        # --- Resolvers ---
-        for resolver in self.resolvers:
-            if resolver.execution_count >= resolver.max_executions:
-                continue
-            if not any(
-                s.matches(e)
-                for s in resolver.subscriptions
-                for e in events
-            ):
-                continue
-            resolved = await resolver.resolve(events)
-            self.add_content(resolved)
+            # --- Resolvers ---
+            for resolver in self.resolvers:
+                if resolver.execution_count >= resolver.max_executions:
+                    continue
+                if not any(
+                    s.matches(e)
+                    for s in resolver.subscriptions
+                    for e in events
+                ):
+                    continue
+                resolved = await resolver.resolve(events)
+                self.add_content(resolved)
 
-        # --- Transformers ---
-        for transformer in self.transformers:
-            if transformer.execution_count >= transformer.max_executions:
-                continue
-            if not any(
-                s.matches(e)
-                for s in transformer.subscriptions
-                for e in events
-            ):
-                continue
-            result = await transformer.transform(self.get_content(), events)
-            if result.content is not None:
-                self.set_content(result.content)
+            # --- Transformers ---
+            for transformer in self.transformers:
+                if transformer.execution_count >= transformer.max_executions:
+                    continue
+                if not any(
+                    s.matches(e)
+                    for s in transformer.subscriptions
+                    for e in events
+                ):
+                    continue
+                result = await transformer.transform(self.get_content(), events)
+                if result.content is not None:
+                    self.set_content(result.content)
 
-            # Queue events emitted by transformer
-            if result.events:
-                for ev in result.events:
-                    self._event_bus.queue(ev)
+                # Queue events emitted by transformer
+                if result.events:
+                    for ev in result.events:
+                        self._event_bus.queue(ev)
 
-        # --- Budget check ---
-        self.check_budget()
+            # --- Budget check ---
+            self.check_budget()
 
-        # Force-truncate if over budget
-        warning = self.force_truncate()
-        if warning:
-            self._event_bus.queue(
-                Event(
-                    name="truncation",
-                    phase=EventPhase.COMPLETED,
-                    source_layer=self.name,
-                    data=warning,
+            # Force-truncate if over budget
+            warning = self.force_truncate()
+            if warning:
+                self._event_bus.queue(
+                    Event(
+                        name="truncation",
+                        phase=EventPhase.COMPLETED,
+                        source_layer=self.name,
+                        data=warning,
+                    )
                 )
-            )
 
-        # Return True if any events were queued (overflow, truncation, etc.)
-        # The engine checks this to decide if another drain is needed.
-        return not self._event_bus.is_empty()
+            # True if any events were queued (overflow, truncation, etc.)
+            changed = not self._event_bus.is_empty()
+
+        # Flush pending provenance writes (regardless of whether events fired)
+        if self._pending_writes:
+            await self._provenance_store.write_batch(self._pending_writes)
+            self._pending_writes = []
+
+        return changed
 
     # -- content management --------------------------------------------------
 
@@ -142,7 +156,14 @@ class Layer:
         return list(self._content)
 
     def add_content(self, resolved: ResolvedContent) -> None:
-        self._content = self._position.place(self._content, resolved.content)
+        if resolved.entries:
+            # New path: entries with provenance — extract content blocks and buffer for store
+            entry_contents = [e.content for e in resolved.entries]
+            self._content = self._position.place(self._content, entry_contents)
+            self._pending_writes.extend(resolved.entries)
+        elif resolved.content:
+            # Old path: raw content blocks (backward compat) — no store write
+            self._content = self._position.place(self._content, resolved.content)
 
     def set_content(self, content: list[ContentBlock | Message]) -> None:
         self._content = list(content)

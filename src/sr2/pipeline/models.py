@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from sr2.models import ContentBlock, Message
 from sr2.pipeline.events import Event
+from sr2.pipeline.provenance import Entry
 
 
 # ---------------------------------------------------------------------------
@@ -56,8 +57,9 @@ class ResolvedContent:
 
   resolver_name: str
   source_layer: str
-  content: list[ContentBlock | Message]
+  content: list[ContentBlock | Message] = field(default_factory=list)
   token_count: int = 0
+  entries: list[Entry] = field(default_factory=list)
 
 
 @dataclass
@@ -66,11 +68,12 @@ class TransformationResult:
 
   transformer_name: str
   source_layer: str
-  content: list[ContentBlock]
+  content: list[ContentBlock] | None = None
   events: list[Event] | None = None
   tokens_before: int = 0
   tokens_after: int = 0
   tokens_saved: int = 0
+  entries: list[Entry] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

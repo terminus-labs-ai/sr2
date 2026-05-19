@@ -22,6 +22,7 @@ from sr2.pipeline.models import (
     PipelineResult,
 )
 from sr2.pipeline.protocols import TokenCounter
+from sr2.pipeline.provenance import InMemoryProvenanceStore, ProvenanceStore
 from sr2.protocols.llm import CompletionRequest
 
 
@@ -40,13 +41,18 @@ class PipelineEngine:
         self,
         layers: List[Layer],
         token_counter: TokenCounter,
+        provenance_store: ProvenanceStore | None = None,
     ) -> None:
         self.token_counter = token_counter
         self._bus = EventBus()
         self._layers = layers
+        self._provenance_store: ProvenanceStore = (
+            provenance_store if provenance_store is not None else InMemoryProvenanceStore()
+        )
 
         for layer in self._layers:
             layer._event_bus = self._bus
+            layer._provenance_store = self._provenance_store
 
         self._setup_event_handlers()
 
