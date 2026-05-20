@@ -14,7 +14,7 @@ from ulid import ULID
 
 from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig
 from sr2.pipeline.provenance import ProvenanceStore
-from sr2.models import TextBlock, TokenUsage
+from sr2.models import Message, TextBlock, TokenUsage
 from sr2.pipeline.compilation import AppendStrategy, PrefixStrategy
 from sr2.pipeline.engine import PipelineEngine
 from sr2.pipeline.event_bus import EventBus
@@ -104,6 +104,22 @@ class SR2:
             token_counter=token_counter,
             provenance_store=provenance_store,
         )
+
+    # ------------------------------------------------------------------
+    # Session seeding
+    # ------------------------------------------------------------------
+
+    def seed_session(self, messages: list[Message]) -> None:
+        """Pre-populate conversation history in all SessionResolver instances.
+
+        Walks engine layers and sets each SessionResolver's _history to an
+        independent copy of *messages*. Overwrites any existing history.
+        No-op if no SessionResolver instances are found.
+        """
+        for layer in self._engine._layers:
+            for resolver in layer.resolvers:
+                if isinstance(resolver, SessionResolver):
+                    resolver._history = [m.model_copy() for m in messages]
 
     # ------------------------------------------------------------------
     # Core turn loop
