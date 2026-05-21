@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from sr2 import ContentBlock, Message, TextBlock, TokenUsage, ToolDefinition
 
@@ -20,9 +20,12 @@ class CompletionResponse(BaseModel):
 
 
 class StreamEvent(BaseModel):
-  type: Literal["text", "usage", "end"]
+  type: Literal["text", "usage", "end", "tool_use"]
   text: str = ""
   usage: TokenUsage | None = None
+  tool_use_id: str = ""
+  tool_name: str = ""
+  tool_input: dict[str, Any] = Field(default_factory=dict)
 
 
 @runtime_checkable
