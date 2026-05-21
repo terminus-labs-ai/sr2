@@ -103,6 +103,7 @@ class SR2:
             layers=layers,
             token_counter=token_counter,
             provenance_store=provenance_store,
+            token_budget=pipeline_config.token_budget,
         )
 
     # ------------------------------------------------------------------

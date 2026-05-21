@@ -42,8 +42,12 @@ class PipelineEngine:
         layers: List[Layer],
         token_counter: TokenCounter,
         provenance_store: ProvenanceStore | None = None,
+        max_cycles: int = 50,
+        token_budget: int | None = None,
     ) -> None:
         self.token_counter = token_counter
+        self._max_cycles = max_cycles
+        self._token_budget = token_budget
         self._bus = EventBus()
         self._layers = layers
         self._provenance_store: ProvenanceStore = (
@@ -90,12 +94,7 @@ class PipelineEngine:
             )
 
         # --- Drain-process loop ---
-        max_cycles = 50
-        for _ in range(max_cycles):
-            await self._bus._drain()
-            changed = await self._process_layers()
-            if not changed and self._bus.is_empty():
-                break
+        await self._run_loop()
 
         # --- Emit turn_end for post-processing transformers ---
         self._bus.queue(
@@ -105,17 +104,21 @@ class PipelineEngine:
                 source_layer="engine",
             )
         )
-        for _ in range(max_cycles):
-            await self._bus._drain()
-            changed = await self._process_layers()
-            if not changed and self._bus.is_empty():
-                break
+        await self._run_loop()
 
         # --- Compile and collect metrics ---
         request = self._compile_request()
         metrics = self._build_metrics()
 
         return PipelineResult(request=request, metrics=metrics)
+
+    async def _run_loop(self) -> None:
+        """Drain the event bus and process layers until quiescent."""
+        for _ in range(self._max_cycles):
+            await self._bus._drain()
+            changed = await self._process_layers()
+            if not changed and self._bus.is_empty():
+                break
 
     async def _process_layers(self) -> bool:
         """Process pending events in all layers. Returns True if any work done."""
@@ -201,6 +204,12 @@ class PipelineEngine:
                     f"Layer '{layer.name}': force-truncated to fit budget of "
                     f"{layer.token_budget} tokens"
                 )
+
+        if self._token_budget is not None and total_tokens > self._token_budget:
+            warnings.append(
+                f"Pipeline token budget exceeded: {total_tokens} tokens used, "
+                f"budget is {self._token_budget}"
+            )
 
         return PipelineMetrics(
             layers=layers,
