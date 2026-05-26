@@ -19,14 +19,17 @@ class InMemoryMemoryStore(MemoryStore):
         self._store: dict[str, Memory] = {}
 
     def save(self, memory: Memory) -> Memory:
-        """Persist a Memory. If the id already exists, increment frequency."""
+        """Persist a Memory. If the id already exists, increment frequency.
+
+        Never mutates the caller's object — returns a new Memory with updated fields.
+        """
         existing = self._store.get(memory.id)
+        updates: dict = {"last_accessed": datetime.now(timezone.utc)}
         if existing:
-            memory.frequency = existing.frequency + 1
-        # Always refresh last_accessed on save
-        memory.last_accessed = datetime.now(timezone.utc)
-        self._store[memory.id] = memory
-        return memory
+            updates["frequency"] = existing.frequency + 1
+        saved = memory.model_copy(update=updates)
+        self._store[saved.id] = saved
+        return saved
 
     def search(
         self, query: str, scope: MemoryScope | None = None, limit: int = 10

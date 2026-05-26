@@ -78,6 +78,15 @@ class TestSave:
         result = store.save(m)
         assert result.frequency == 5
 
+    def test_save_does_not_mutate_original(self):
+        store = InMemoryMemoryStore()
+        m = make_memory("original", frequency=0)
+        original_last_accessed = m.last_accessed
+        store.save(m)
+        store.save(m)  # second save would increment frequency if mutating
+        assert m.frequency == 0  # original object unchanged
+        assert m.last_accessed == original_last_accessed  # timestamp unchanged
+
     def test_save_different_memories_independent(self):
         store = InMemoryMemoryStore()
         m1 = make_memory("fact one")
