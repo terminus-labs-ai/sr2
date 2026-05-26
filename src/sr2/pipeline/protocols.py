@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, Self, runtime_checkable
 
-from sr2.models import ContentBlock
+from sr2.config.models import ResolverConfig, TransformerConfig
+from sr2.models import ContentBlock, ToolDefinition
+from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventSubscription
 from sr2.pipeline.models import ResolvedContent, TransformationResult
+
+if TYPE_CHECKING:
+    from sr2.config.models import ToolProviderConfig
 
 
 @runtime_checkable
@@ -17,6 +22,9 @@ class Resolver(Protocol):
     max_executions: int
 
     async def resolve(self, events: list[Event]) -> ResolvedContent: ...
+
+    @classmethod
+    def build(cls, config: ResolverConfig, deps: Dependencies) -> Self: ...
 
 
 @runtime_checkable
@@ -29,6 +37,23 @@ class Transformer(Protocol):
     async def transform(
         self, content: list[ContentBlock], events: list[Event]
     ) -> TransformationResult: ...
+
+    @classmethod
+    def build(cls, config: TransformerConfig, deps: Dependencies) -> Self: ...
+
+
+@runtime_checkable
+class ToolProvider(Protocol):
+    """Fires when subscribed events arrive, returns ToolDefinitions."""
+
+    subscriptions: list[EventSubscription]
+    max_executions: int
+    execution_count: int
+
+    async def provide(self, events: list[Event]) -> list[ToolDefinition]: ...
+
+    @classmethod
+    def build(cls, config: "ToolProviderConfig", deps: Dependencies) -> Self: ...
 
 
 @runtime_checkable

@@ -14,6 +14,7 @@ import pytest
 
 from sr2.config.models import EventSubscriptionConfig, ResolverConfig
 from sr2.models import Message, TextBlock
+from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import ResolvedContent
 from sr2.pipeline.protocols import Resolver
@@ -305,3 +306,39 @@ class TestInputResolverProtocolConformance:
         resolver = InputResolver(make_config())
         assert hasattr(resolver, "execution_count")
         assert isinstance(resolver.execution_count, int)
+
+
+# ---------------------------------------------------------------------------
+# 7. build() classmethod
+# ---------------------------------------------------------------------------
+
+
+class TestInputResolverBuild:
+    def test_build_returns_input_resolver_instance(self):
+        """build() must return an InputResolver instance."""
+        config = make_config()
+        result = InputResolver.build(config, Dependencies())
+        assert isinstance(result, InputResolver)
+
+    def test_build_with_populated_deps_also_works(self):
+        """build() must accept and ignore a non-empty Dependencies container."""
+        config = make_config()
+        deps = Dependencies(llm={"default": lambda *a, **kw: None})
+        result = InputResolver.build(config, deps)
+        assert isinstance(result, InputResolver)
+
+    def test_build_result_satisfies_resolver_protocol(self):
+        """Instance returned by build() must satisfy isinstance(x, Resolver)."""
+        config = make_config()
+        result = InputResolver.build(config, Dependencies())
+        assert isinstance(result, Resolver)
+
+    def test_build_state_matches_direct_construction(self):
+        """build() must produce an instance with the same observable state
+        as one constructed via InputResolver(config) directly."""
+        config = make_config(max_executions=7)
+        via_build = InputResolver.build(config, Dependencies())
+        via_init = InputResolver(config)
+        assert via_build.max_executions == via_init.max_executions
+        assert via_build.name == via_init.name
+        assert via_build.execution_count == via_init.execution_count

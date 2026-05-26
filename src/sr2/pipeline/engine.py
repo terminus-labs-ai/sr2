@@ -74,6 +74,8 @@ class PipelineEngine:
         self._bus.reset()
         for layer in self._layers:
             layer.set_content([])
+            if layer.tool_providers:
+                layer.reset_tools()
 
         # --- Emit lifecycle events ---
         self._bus.queue(

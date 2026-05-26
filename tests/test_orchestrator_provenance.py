@@ -3,7 +3,7 @@
 Covers:
   FR11: SR2 accepts session_id; mints ULID if None
   FR12: SR2 accepts provenance_store; defaults to InMemoryProvenanceStore
-  FR14: _build_layer raises ConfigError when LayerConfig declares transformers
+  FR14: _build_layer raises PluginNotFoundError when LayerConfig declares an unknown transformer type
   AC1:  Round-trip test — entries survive SQLite close + reopen
   AC5:  InMemoryProvenanceStore satisfies isinstance(store, ProvenanceStore)
   AC6:  SQLiteProvenanceStore satisfies isinstance(store, ProvenanceStore) (via orchestrator)
@@ -27,6 +27,7 @@ from sr2.config.models import (
 )
 from sr2.models import TextBlock, TokenUsage
 from sr2.pipeline.provenance import Entry, EntryOrigin, InMemoryProvenanceStore, ProvenanceStore
+from sr2.plugins.errors import PluginNotFoundError
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.protocols.llm import (
     CompletionRequest,
@@ -335,39 +336,35 @@ class TestTransformerConfigError:
         )
         assert sr2 is not None
 
-    def test_non_empty_transformers_raises_config_error(self):
-        """transformers=[TransformerConfig(...)] → raises ConfigError at SR2 construction."""
-        from sr2.config.models import ConfigError
+    def test_non_empty_transformers_with_unknown_type_raises_plugin_not_found_error(self):
+        """transformers=[TransformerConfig(type=unknown)] → raises PluginNotFoundError at SR2 construction."""
         from sr2.orchestrator import SR2
 
-        with pytest.raises(ConfigError):
+        with pytest.raises(PluginNotFoundError):
             SR2(
                 pipeline_config=make_config_with_transformers(),
                 llm={"default": MockLLM()},
                 token_counter=CharacterTokenCounter(),
             )
 
-    def test_config_error_message_contains_layer_name(self):
-        """ConfigError message contains the name of the offending layer."""
-        from sr2.config.models import ConfigError
+    def test_plugin_not_found_error_message_contains_unknown_type_name(self):
+        """PluginNotFoundError message contains the unknown transformer type name."""
         from sr2.orchestrator import SR2
 
-        layer_name = "my_custom_layer"
-        config = make_config_with_transformers(layer_name=layer_name)
+        config = make_config_with_transformers()
 
-        with pytest.raises(ConfigError, match=layer_name):
+        with pytest.raises(PluginNotFoundError, match="some_transformer"):
             SR2(
                 pipeline_config=config,
                 llm={"default": MockLLM()},
                 token_counter=CharacterTokenCounter(),
             )
 
-    def test_config_error_message_directs_user_to_remove_or_wait(self):
-        """ConfigError message tells user to remove the block or wait for the transformer PR."""
-        from sr2.config.models import ConfigError
+    def test_plugin_not_found_error_message_mentions_transformer(self):
+        """PluginNotFoundError message mentions 'transformer' to guide the user."""
         from sr2.orchestrator import SR2
 
-        with pytest.raises(ConfigError) as exc_info:
+        with pytest.raises(PluginNotFoundError) as exc_info:
             SR2(
                 pipeline_config=make_config_with_transformers(),
                 llm={"default": MockLLM()},
@@ -375,12 +372,10 @@ class TestTransformerConfigError:
             )
 
         message = str(exc_info.value).lower()
-        # Must mention either "remove" or "transformer" to guide the user
-        assert "remove" in message or "transformer" in message
+        assert "transformer" in message
 
-    def test_single_layer_with_transformers_raises(self):
-        """Only one layer has transformers → ConfigError is still raised."""
-        from sr2.config.models import ConfigError
+    def test_single_layer_with_unknown_transformer_raises(self):
+        """Only one layer has transformers → PluginNotFoundError is still raised."""
         from sr2.orchestrator import SR2
 
         # Second layer has transformers, first does not
@@ -414,7 +409,7 @@ class TestTransformerConfigError:
             ]
         )
 
-        with pytest.raises(ConfigError):
+        with pytest.raises(PluginNotFoundError):
             SR2(
                 pipeline_config=config,
                 llm={"default": MockLLM()},

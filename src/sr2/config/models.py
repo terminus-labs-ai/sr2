@@ -32,12 +32,21 @@ class ResolverConfig(BaseModel):
   max_executions: int = 1
 
 
+class ToolProviderConfig(BaseModel):
+  type: str
+  config: _LiveDict = {}
+  subscriptions: list[EventSubscriptionConfig] = []
+  max_executions: int = 1
+
+
 class LayerConfig(BaseModel):
   name: str
   cache: Literal["static", "ephemeral", "append_only"] | None = None
   token_budget: int | None = None
+  token_threshold_pct: float | None = None
   resolvers: list[ResolverConfig]
   transformers: list[TransformerConfig] | None = None
+  tool_providers: list[ToolProviderConfig] | None = None
   target: str | None = None
   position: str = "append"
 

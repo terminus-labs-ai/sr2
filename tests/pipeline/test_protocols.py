@@ -229,6 +229,10 @@ class TestResolverProtocol:
                     content=[TextBlock(text="hello")],
                 )
 
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
+
         assert isinstance(MyResolver(), Resolver)
 
     def test_non_conforming_class_missing_resolve(self):
@@ -296,6 +300,10 @@ class TestResolverProtocol:
             async def resolve(self, events):
                 pass
 
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
+
         r = MultiExecResolver()
         assert r.max_executions == 3
         assert isinstance(r, Resolver)
@@ -361,6 +369,10 @@ class TestTransformerProtocol:
                     source_layer="core",
                     content=content,
                 )
+
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
 
         assert isinstance(MyTransformer(), Transformer)
 
@@ -476,6 +488,10 @@ class TestTransformerProtocol:
 
             async def transform(self, content, events):
                 pass
+
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
 
         t = MultiExecTransformer()
         assert t.max_executions == 5
@@ -652,6 +668,10 @@ class TestProtocolIndependence:
             async def resolve(self, events):
                 pass
 
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
+
         r = OnlyResolver()
         assert isinstance(r, Resolver)
         assert not isinstance(r, Transformer)
@@ -665,6 +685,10 @@ class TestProtocolIndependence:
 
             async def transform(self, content, events):
                 pass
+
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
 
         t = OnlyTransformer()
         assert isinstance(t, Transformer)
@@ -695,6 +719,10 @@ class TestProtocolIndependence:
 
             async def transform(self, content, events):
                 pass
+
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
 
         d = Dual()
         assert isinstance(d, Resolver)

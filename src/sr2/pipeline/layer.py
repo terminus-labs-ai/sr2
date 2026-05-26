@@ -12,7 +12,7 @@ from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import CompilationTarget
 from sr2.pipeline.models import ResolvedContent, TransformationResult
-from sr2.pipeline.protocols import Resolver, TokenCounter, Transformer
+from sr2.pipeline.protocols import Resolver, TokenCounter, ToolProvider, Transformer
 from sr2.pipeline.provenance import Entry, InMemoryProvenanceStore, ProvenanceStore
 
 
@@ -30,13 +30,17 @@ class Layer:
         token_counter: TokenCounter,
         event_bus: EventBus,
         provenance_store: ProvenanceStore | None = None,
+        token_threshold_pct: float | None = None,
+        tool_providers: list = [],
     ) -> None:
         self.name = name
         self.target = target
         self._position = position
         self.token_budget = token_budget
+        self.token_threshold_pct = token_threshold_pct
         self.resolvers = resolvers
         self.transformers = transformers
+        self.tool_providers = list(tool_providers)
         self._token_counter = token_counter
         self._event_bus = event_bus
         self._provenance_store: ProvenanceStore = (
@@ -55,9 +59,9 @@ class Layer:
 
     @property
     def subscriptions(self) -> list[EventSubscription]:
-        """All event subscriptions from this layer's resolvers and transformers."""
+        """All event subscriptions from this layer's resolvers, transformers, and tool providers."""
         subs: list[EventSubscription] = []
-        for comp in [*self.resolvers, *self.transformers]:
+        for comp in [*self.resolvers, *self.transformers, *self.tool_providers]:
             subs.extend(comp.subscriptions)
         return subs
 
@@ -65,7 +69,7 @@ class Layer:
 
     def is_done(self) -> bool:
         """True when all components are idle (never fired) or exhausted (hit max_executions)."""
-        for comp in [*self.resolvers, *self.transformers]:
+        for comp in [*self.resolvers, *self.transformers, *self.tool_providers]:
             if comp.execution_count > 0 and comp.execution_count < comp.max_executions:
                 return False
         return True
@@ -116,14 +120,32 @@ class Layer:
                     for e in events
                 ):
                     continue
+                _count_before = transformer.execution_count
                 result = await transformer.transform(self.get_content(), events)
+                if transformer.execution_count == _count_before:
+                    transformer.execution_count += 1
                 if result.content is not None:
                     self.set_content(result.content)
+                if result.entries:
+                    self._pending_writes.extend(result.entries)
 
                 # Queue events emitted by transformer
                 if result.events:
                     for ev in result.events:
                         self._event_bus.queue(ev)
+
+            # --- Tool Providers ---
+            for tp in self.tool_providers:
+                if tp.execution_count >= tp.max_executions:
+                    continue
+                if not any(
+                    s.matches(e)
+                    for s in tp.subscriptions
+                    for e in events
+                ):
+                    continue
+                defs = await tp.provide(events)
+                self.add_tool_definitions(defs)
 
             # --- Budget check ---
             self.check_budget()
@@ -170,6 +192,9 @@ class Layer:
         if not content:
             self._force_truncated = False
 
+    def reset_tools(self) -> None:
+        self._tool_definitions = []
+
     def add_tool_definitions(self, defs: list[ToolDefinition]) -> None:
         self._tool_definitions.extend(defs)
 
@@ -179,6 +204,15 @@ class Layer:
         if self.token_budget is None:
             return
         used = self._token_counter.count(self._content)
+        if self.token_threshold_pct is not None and used >= self.token_budget * self.token_threshold_pct:
+            self._event_bus.queue(
+                Event(
+                    name="token_threshold",
+                    phase=EventPhase.COMPLETED,
+                    source_layer=self.name,
+                    data={"used": used, "budget": self.token_budget, "pct": self.token_threshold_pct},
+                )
+            )
         if used > self.token_budget:
             self._event_bus.queue(
                 Event(

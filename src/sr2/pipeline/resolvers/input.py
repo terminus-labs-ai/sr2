@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sr2.config.models import ResolverConfig
 from sr2.models import Message
+from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import ResolvedContent
 
@@ -36,6 +37,10 @@ class InputResolver:
             ]
         else:
             self.subscriptions = [_DEFAULT_SUBSCRIPTION]
+
+    @classmethod
+    def build(cls, config: ResolverConfig, deps: "Dependencies") -> "InputResolver":
+        return cls(config)
 
     async def resolve(self, events: list[Event]) -> ResolvedContent:
         self.execution_count += 1

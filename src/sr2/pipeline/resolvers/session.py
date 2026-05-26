@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from sr2.config.models import ResolverConfig
 from sr2.models import ContentBlock, Message
+from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import ResolvedContent
 from sr2.protocols.llm import CompletionResponse
@@ -51,6 +52,10 @@ class SessionResolver:
             ]
         else:
             self.subscriptions = list(_DEFAULT_SUBSCRIPTIONS)
+
+    @classmethod
+    def build(cls, config: ResolverConfig, deps: "Dependencies") -> "SessionResolver":
+        return cls(config)
 
     async def resolve(self, events: list[Event]) -> ResolvedContent:
         self.execution_count += 1

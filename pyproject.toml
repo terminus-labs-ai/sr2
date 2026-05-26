@@ -19,5 +19,14 @@ build-backend = "uv_build"
 [project.scripts]
 sr2 = "sr2.cli:main"
 
+[project.entry-points."sr2.resolvers"]
+static = "sr2.pipeline.resolvers.static:StaticResolver"
+input = "sr2.pipeline.resolvers.input:InputResolver"
+session = "sr2.pipeline.resolvers.session:SessionResolver"
+event_payload = "sr2.pipeline.resolvers.event_payload:EventPayloadResolver"
+
+[project.entry-points."sr2.transformers"]
+summarize = "sr2.pipeline.transformers.summarization:SummarizationTransformer"
+
 [dependency-groups]
 dev = ["pytest>=9.0.3", "pytest-asyncio>=0.25.0", "ruff>=0.15.11"]

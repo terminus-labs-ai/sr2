@@ -1,0 +1,74 @@
+"""EventPayloadResolver: surfaces event.data ContentBlocks as provenance entries."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from ulid import ULID
+
+from sr2.config.models import ResolverConfig
+from sr2.pipeline.dependencies import Dependencies
+from sr2.pipeline.events import Event, EventPhase, EventSubscription
+from sr2.pipeline.models import ResolvedContent
+from sr2.pipeline.provenance import Entry, EntryOrigin
+
+_PHASE_MAP: dict[str, EventPhase] = {
+    "starting": EventPhase.STARTING,
+    "completed": EventPhase.COMPLETED,
+    "failed": EventPhase.FAILED,
+}
+
+_ORIGIN = EntryOrigin(kind="resolver", name="event_payload")
+
+
+class EventPayloadResolver:
+    """Returns ContentBlocks emitted in matching event payloads as provenance entries."""
+
+    name: str = "event_payload"
+
+    def __init__(self, config: ResolverConfig) -> None:
+        self.max_executions: int = config.max_executions
+        self.execution_count: int = 0
+
+        self.subscriptions: list[EventSubscription] = [
+            EventSubscription(
+                event_name=sub.event,
+                phase=_PHASE_MAP[sub.phase] if sub.phase is not None else None,
+            )
+            for sub in config.subscriptions
+        ]
+
+    @classmethod
+    def build(cls, config: ResolverConfig, deps: "Dependencies") -> "EventPayloadResolver":
+        return cls(config)
+
+    async def resolve(self, events: list[Event]) -> ResolvedContent:
+        self.execution_count += 1
+
+        subscribed_names = {sub.event_name for sub in self.subscriptions}
+        entries: list[Entry] = []
+
+        for event in events:
+            if event.name not in subscribed_names:
+                continue
+            data = event.data
+            if not isinstance(data, list) or not data:
+                continue
+            for block in data:
+                entries.append(
+                    Entry(
+                        id=str(ULID()),
+                        content=block,
+                        sources=(),
+                        origin=_ORIGIN,
+                        layer="event_payload",
+                        session_id="",
+                        created_at=datetime.now(tz=timezone.utc),
+                    )
+                )
+
+        return ResolvedContent(
+            resolver_name=self.name,
+            source_layer="event_payload",
+            entries=entries,
+        )

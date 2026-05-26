@@ -22,6 +22,7 @@ import pytest
 
 from sr2.config.models import EventSubscriptionConfig, ResolverConfig
 from sr2.models import TextBlock
+from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import ResolvedContent
 from sr2.pipeline.protocols import Resolver
@@ -361,3 +362,49 @@ class TestStaticResolverHotReload:
         assert result1.content[0].text == "v1"
         assert result2.content[0].text == "v2"
         assert result1.content[0].text != result2.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# 9. build() classmethod
+# ---------------------------------------------------------------------------
+
+
+class TestStaticResolverBuild:
+    def test_build_returns_static_resolver_instance(self):
+        """build() must return a StaticResolver instance."""
+        config = make_config("built text")
+        result = StaticResolver.build(config, Dependencies())
+        assert isinstance(result, StaticResolver)
+
+    def test_build_with_populated_deps_also_works(self):
+        """build() must accept and ignore a non-empty Dependencies container."""
+        config = make_config("built text")
+        deps = Dependencies(llm={"default": lambda *a, **kw: None})
+        result = StaticResolver.build(config, deps)
+        assert isinstance(result, StaticResolver)
+
+    def test_build_result_satisfies_resolver_protocol(self):
+        """Instance returned by build() must satisfy isinstance(x, Resolver)."""
+        config = make_config("hello")
+        result = StaticResolver.build(config, Dependencies())
+        assert isinstance(result, Resolver)
+
+    def test_build_state_matches_direct_construction(self):
+        """build() must produce an instance with the same observable state
+        as one constructed via StaticResolver(config) directly."""
+        config = make_config("some static text")
+        via_build = StaticResolver.build(config, Dependencies())
+        via_init = StaticResolver(config)
+        # Config text is read at resolve-time from the same config object,
+        # so both instances share the same source. Compare max_executions
+        # (from config) and that both have the same name.
+        assert via_build.max_executions == via_init.max_executions
+        assert via_build.name == via_init.name
+
+    @pytest.mark.asyncio
+    async def test_build_content_resolves_correctly(self):
+        """Instance from build() resolves to the configured text value."""
+        config = make_config("expected content")
+        resolver = StaticResolver.build(config, Dependencies())
+        result = await resolver.resolve([make_turn_start_event()])
+        assert result.content[0].text == "expected content"
