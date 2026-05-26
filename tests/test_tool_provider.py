@@ -587,6 +587,71 @@ class TestEndToEnd:
         assert mock_llm.last_request.tools[0].name == "e2e_tool"
 
     @pytest.mark.asyncio
+    async def test_tool_provider_fires_on_second_turn(self, reset_plugin_registries):
+        """D15: Tools appear in CompletionRequest.tools on the SECOND turn() call.
+
+        Regression for SR2 orchestrator not resetting execution_count for
+        tool_providers between turns. Without the fix, a max_executions=1 provider
+        fires only on turn 1; on turn 2 it is skipped (execution_count >= max_executions)
+        and the model loses tool access.
+        """
+        from sr2.config.models import (
+            LayerConfig,
+            PipelineConfig,
+            ResolverConfig,
+            ToolProviderConfig,
+        )
+        from sr2.orchestrator import SR2
+
+        pipeline_config = PipelineConfig(
+            layers=[
+                LayerConfig(
+                    name="system",
+                    resolvers=[
+                        ResolverConfig(
+                            type="static",
+                            config={"text": "You are a helpful assistant."},
+                        )
+                    ],
+                ),
+                LayerConfig(
+                    name="tools",
+                    resolvers=[],
+                    tool_providers=[ToolProviderConfig(type="e2e_spy")],
+                ),
+            ]
+        )
+
+        mock_llm = _MockLLM()
+        side_effect = _make_e2e_ep_side_effect(_E2EToolProvider)
+
+        with patch("sr2.plugins.registry.entry_points", side_effect=side_effect):
+            sr2 = SR2(
+                pipeline_config=pipeline_config,
+                llm={"default": mock_llm},
+                token_counter=CharacterTokenCounter(),
+            )
+
+            # Turn 1
+            stream = sr2.turn([TextBlock(text="hello")])
+            async for _ in stream:
+                pass
+            turn1_tools = mock_llm.last_request.tools
+
+            # Turn 2 — execution_count must be reset so provider fires again
+            stream = sr2.turn([TextBlock(text="again")])
+            async for _ in stream:
+                pass
+            turn2_tools = mock_llm.last_request.tools
+
+        assert turn1_tools is not None and len(turn1_tools) == 1, (
+            "Turn 1 should have tools"
+        )
+        assert turn2_tools is not None and len(turn2_tools) == 1, (
+            "Turn 2 must also have tools — execution_count reset missing in SR2.turn()"
+        )
+
+    @pytest.mark.asyncio
     async def test_tool_definitions_absent_when_no_tool_providers(
         self, reset_plugin_registries
     ):

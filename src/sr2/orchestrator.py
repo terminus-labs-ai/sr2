@@ -133,10 +133,10 @@ class SR2:
 
     async def turn(self, user_input: list) -> AsyncIterator[StreamEvent]:
         """Async generator: runs the pipeline and streams LLM events."""
-        # Reset all resolvers so turn 2+ re-fires them.
+        # Reset all pipeline components so turn 2+ re-fires them.
         for layer in self._engine._layers:
-            for resolver in layer.resolvers:
-                resolver.execution_count = 0
+            for comp in (*layer.resolvers, *layer.tool_providers, *layer.transformers):
+                comp.execution_count = 0
 
         result = await self._engine.run(user_input)
 
