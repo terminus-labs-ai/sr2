@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import groupby
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from sr2.protocols.llm import CompletionRequest
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,7 @@ class Tracer(Protocol):
     """Protocol for objects that receive pipeline firing records."""
 
     def on_firing(self, record: FiringRecord) -> None: ...
+    def on_compile(self, request: "CompletionRequest") -> None: ...
 
 
 class CollectingTracer:
@@ -42,9 +46,13 @@ class CollectingTracer:
 
     def __init__(self) -> None:
         self._buffer: list[FiringRecord] = []
+        self.compiled_request: "CompletionRequest | None" = None
 
     def on_firing(self, record: FiringRecord) -> None:
         self._buffer.append(record)
+
+    def on_compile(self, request: "CompletionRequest") -> None:
+        self.compiled_request = request
 
     def get_trace(self) -> list[FiringRecord]:
         """Return an independent copy of the collected records."""
@@ -53,6 +61,7 @@ class CollectingTracer:
     def clear(self) -> None:
         """Empty the buffer."""
         self._buffer.clear()
+        self.compiled_request = None
 
 
 def render_trace(records: list[FiringRecord]) -> str:
@@ -105,5 +114,39 @@ def render_trace(records: list[FiringRecord]) -> str:
                 lines.append(f"      after:  {items_repr}")
 
         lines.append("─" * width)
+
+    return "\n".join(lines) + "\n"
+
+
+def render_compiled_request(request: "CompletionRequest") -> str:
+    """Render the compiled CompletionRequest as a human-readable string."""
+    width = 57
+    lines: list[str] = []
+
+    header = "── Compiled Request "
+    header = header + "─" * max(0, width - len(header))
+    lines.append(header)
+
+    if request.system:
+        lines.append("[system]")
+        for block in request.system:
+            lines.append(f"  {block.text}")
+
+    if request.messages:
+        lines.append("[messages]")
+        for msg in request.messages:
+            content_text = " ".join(
+                block.text
+                for block in msg.content
+                if hasattr(block, "text")
+            )
+            lines.append(f"  [{msg.role}] {content_text}")
+
+    if request.tools:
+        lines.append("[tools]")
+        for tool in request.tools:
+            lines.append(f"  {tool.name}")
+
+    lines.append("─" * width)
 
     return "\n".join(lines) + "\n"

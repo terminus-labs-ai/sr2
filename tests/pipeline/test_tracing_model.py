@@ -131,10 +131,13 @@ def test_firing_record_kind_tool_provider():
 
 
 def test_tracer_protocol_is_runtime_checkable_positive():
-    """isinstance(obj, Tracer) returns True for objects with matching on_firing method."""
+    """isinstance(obj, Tracer) returns True for objects with on_firing and on_compile."""
 
     class DuckTracer:
         def on_firing(self, record: FiringRecord) -> None:
+            pass
+
+        def on_compile(self, request) -> None:
             pass
 
     obj = DuckTracer()

@@ -132,6 +132,8 @@ class PipelineEngine:
 
         # --- Compile and collect metrics ---
         request = self._compile_request()
+        if self._tracer is not None:
+            self._tracer.on_compile(request)
         metrics = self._build_metrics()
 
         return PipelineResult(request=request, metrics=metrics)
