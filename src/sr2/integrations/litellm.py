@@ -20,8 +20,14 @@ class LiteLLMCallable:
     if base_url is not None:
       self._kwargs["base_url"] = base_url
 
+  @property
+  def model(self) -> str:
+    return self._model
+
   def _build_messages(self, request: CompletionRequest) -> list[dict]:
     result: list[dict] = []
+    if request.system is not None:
+      result.append({"role": "system", "content": "".join(b.text for b in request.system)})
     for msg in request.messages:
       # ToolResultBlock → emit one "tool" role message per block
       if any(isinstance(b, ToolResultBlock) for b in msg.content):
@@ -69,8 +75,6 @@ class LiteLLMCallable:
 
   def _build_extra(self, request: CompletionRequest) -> dict:
     extra: dict = {}
-    if request.system is not None:
-      extra["system"] = "".join(b.text for b in request.system)
     if request.tools is not None:
       extra["tools"] = [
         {

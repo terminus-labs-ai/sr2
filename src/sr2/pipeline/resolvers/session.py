@@ -11,18 +11,13 @@ from sr2.models import ContentBlock, Message
 from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import ResolvedContent
+from sr2.pipeline.utils import PHASE_MAP, build_subscriptions
 from sr2.protocols.llm import CompletionResponse
 
 _DEFAULT_SUBSCRIPTIONS = [
     EventSubscription(event_name="user_input", phase=EventPhase.STARTING),
     EventSubscription(event_name="assistant_response", phase=EventPhase.COMPLETED),
 ]
-
-_PHASE_MAP: dict[str, EventPhase] = {
-    "starting": EventPhase.STARTING,
-    "completed": EventPhase.COMPLETED,
-    "failed": EventPhase.FAILED,
-}
 
 
 class SessionResolver:
@@ -41,17 +36,9 @@ class SessionResolver:
         self.max_executions: int = config.max_executions
         self.execution_count: int = 0
         self._history: list[Message] = []
-
-        if config.subscriptions:
-            self.subscriptions: list[EventSubscription] = [
-                EventSubscription(
-                    event_name=sub.event,
-                    phase=_PHASE_MAP[sub.phase] if sub.phase is not None else None,
-                )
-                for sub in config.subscriptions
-            ]
-        else:
-            self.subscriptions = list(_DEFAULT_SUBSCRIPTIONS)
+        self.subscriptions: list[EventSubscription] = build_subscriptions(
+            config.subscriptions, PHASE_MAP, _DEFAULT_SUBSCRIPTIONS
+        )
 
     @classmethod
     def build(cls, config: ResolverConfig, deps: "Dependencies") -> "SessionResolver":

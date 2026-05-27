@@ -7,14 +7,9 @@ from sr2.models import Message
 from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import ResolvedContent
+from sr2.pipeline.utils import PHASE_MAP, build_subscriptions
 
 _DEFAULT_SUBSCRIPTION = EventSubscription(event_name="user_input", phase=EventPhase.STARTING)
-
-_PHASE_MAP: dict[str, EventPhase] = {
-    "starting": EventPhase.STARTING,
-    "completed": EventPhase.COMPLETED,
-    "failed": EventPhase.FAILED,
-}
 
 
 class InputResolver:
@@ -26,17 +21,9 @@ class InputResolver:
         self._config = config
         self.max_executions: int = config.max_executions
         self.execution_count: int = 0
-
-        if config.subscriptions:
-            self.subscriptions: list[EventSubscription] = [
-                EventSubscription(
-                    event_name=sub.event,
-                    phase=_PHASE_MAP[sub.phase] if sub.phase is not None else None,
-                )
-                for sub in config.subscriptions
-            ]
-        else:
-            self.subscriptions = [_DEFAULT_SUBSCRIPTION]
+        self.subscriptions: list[EventSubscription] = build_subscriptions(
+            config.subscriptions, PHASE_MAP, [_DEFAULT_SUBSCRIPTION]
+        )
 
     @classmethod
     def build(cls, config: ResolverConfig, deps: "Dependencies") -> "InputResolver":

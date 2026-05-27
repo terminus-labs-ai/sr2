@@ -13,13 +13,8 @@ from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import TransformationResult
 from sr2.pipeline.provenance import Entry, EntryOrigin
 from sr2.pipeline.token_counting import CharacterTokenCounter
+from sr2.pipeline.utils import PHASE_MAP, build_subscriptions
 from sr2.protocols.llm import CompletionRequest, LLMCallable
-
-_PHASE_MAP: dict[str, EventPhase] = {
-    "starting": EventPhase.STARTING,
-    "completed": EventPhase.COMPLETED,
-    "failed": EventPhase.FAILED,
-}
 
 _COUNTER = CharacterTokenCounter()
 
@@ -41,16 +36,9 @@ class SummarizationTransformer:
         self.max_executions: int = config.max_executions
         self.execution_count: int = 0
 
-        if config.subscriptions:
-            self.subscriptions: list[EventSubscription] = [
-                EventSubscription(
-                    event_name=sub.event,
-                    phase=_PHASE_MAP[sub.phase] if sub.phase is not None else None,
-                )
-                for sub in config.subscriptions
-            ]
-        else:
-            self.subscriptions = []
+        self.subscriptions: list[EventSubscription] = build_subscriptions(
+            config.subscriptions, PHASE_MAP, []
+        )
 
     # ------------------------------------------------------------------
     # Factory

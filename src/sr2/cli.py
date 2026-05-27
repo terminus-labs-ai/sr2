@@ -8,7 +8,7 @@ import sys
 import yaml
 
 from sr2.config.models import PipelineConfig
-from sr2.llm.litellm_client import LiteLLMClient
+from sr2.integrations.litellm import LiteLLMCallable
 from sr2.models import TextBlock
 from sr2.orchestrator import SR2
 from sr2.pipeline.token_counting import CharacterTokenCounter
@@ -26,12 +26,12 @@ def load_config(path: str) -> dict:
 
 
 def build_llm_clients(models: dict) -> dict[str, LLMCallable]:
-    """Build a LiteLLMClient for each entry in the models dict."""
+    """Build a LiteLLMCallable for each entry in the models dict."""
     clients: dict[str, LLMCallable] = {}
     for name, entry in models.items():
         entry = dict(entry)
         model = entry.pop("model")
-        clients[name] = LiteLLMClient(model=model, **entry)
+        clients[name] = LiteLLMCallable(model=model, **entry)
     return clients
 
 

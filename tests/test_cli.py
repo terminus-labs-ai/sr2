@@ -252,14 +252,14 @@ class TestBuildLlmClients:
 
     def test_uses_model_field_as_litellm_model_string(self):
         from sr2.cli import build_llm_clients
-        from sr2.llm.litellm_client import LiteLLMClient
+        from sr2.integrations.litellm import LiteLLMCallable
 
         models = {"default": {"model": "anthropic/claude-sonnet-4-6"}}
 
         result = build_llm_clients(models)
 
         client = result["default"]
-        assert isinstance(client, LiteLLMClient)
+        assert isinstance(client, LiteLLMCallable)
         assert client.model == "anthropic/claude-sonnet-4-6"
 
     def test_optional_kwargs_forwarded_to_litellm(self):
@@ -286,6 +286,7 @@ class TestBuildLlmClients:
         fake_response.id = "resp-1"
         fake_response.choices = [AsyncMock()]
         fake_response.choices[0].message.content = "hello"
+        fake_response.choices[0].message.tool_calls = None
         fake_response.choices[0].finish_reason = "end_turn"
         fake_response.usage.prompt_tokens = 5
         fake_response.usage.completion_tokens = 3
@@ -294,7 +295,7 @@ class TestBuildLlmClients:
 
         request = CompletionRequest(messages=[Message(role="user", content=[TextBlock(text="hi")])])
 
-        with patch("sr2.llm.litellm_client.litellm.acompletion", return_value=fake_response) as mock_call:
+        with patch("sr2.integrations.litellm.litellm.acompletion", return_value=fake_response) as mock_call:
             asyncio.get_event_loop().run_until_complete(client.complete(request))
             call_kwargs = mock_call.call_args.kwargs
             assert call_kwargs.get("api_key") == "sk-ant-test-key"
@@ -309,14 +310,14 @@ class TestBuildLlmClients:
 
     def test_model_without_optional_kwargs_works(self):
         from sr2.cli import build_llm_clients
-        from sr2.llm.litellm_client import LiteLLMClient
+        from sr2.integrations.litellm import LiteLLMCallable
 
         models = {"bare": {"model": "ollama/llama3"}}
 
         result = build_llm_clients(models)
 
         client = result["bare"]
-        assert isinstance(client, LiteLLMClient)
+        assert isinstance(client, LiteLLMCallable)
         assert client.model == "ollama/llama3"
 
 

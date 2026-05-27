@@ -189,13 +189,15 @@ class TestCompleteBasic:
 
 class TestCompleteSystemPrompt:
   @pytest.mark.asyncio
-  async def test_system_prompt_passed_as_kwarg(self):
+  async def test_system_prompt_passed_as_system_role_message(self):
     resp = _mock_litellm_response()
     with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
       client = LiteLLMCallable("model")
       request = _make_request(system=[TextBlock(text="You are a helpful assistant.")])
       await client.complete(request)
-      assert mock_ac.call_args.kwargs.get("system") == "You are a helpful assistant."
+      messages = mock_ac.call_args.kwargs.get("messages", [])
+      assert messages[0]["role"] == "system"
+      assert messages[0]["content"] == "You are a helpful assistant."
 
   @pytest.mark.asyncio
   async def test_multiple_system_blocks_joined(self):
@@ -206,7 +208,9 @@ class TestCompleteSystemPrompt:
         system=[TextBlock(text="Block one. "), TextBlock(text="Block two.")]
       )
       await client.complete(request)
-      assert mock_ac.call_args.kwargs.get("system") == "Block one. Block two."
+      messages = mock_ac.call_args.kwargs.get("messages", [])
+      assert messages[0]["role"] == "system"
+      assert messages[0]["content"] == "Block one. Block two."
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +482,7 @@ class TestStreamEndEvent:
 
 class TestStreamSystemPrompt:
   @pytest.mark.asyncio
-  async def test_system_prompt_passed_as_kwarg_in_stream(self):
+  async def test_system_prompt_passed_as_system_role_message_in_stream(self):
     captured: dict = {}
 
     async def fake_acompletion(*args, **kwargs):
@@ -490,7 +494,9 @@ class TestStreamSystemPrompt:
       request = _make_request(system=[TextBlock(text="Be concise.")])
       _ = [e async for e in client.stream(request)]
 
-    assert captured.get("system") == "Be concise."
+    messages = captured.get("messages", [])
+    assert messages[0]["role"] == "system"
+    assert messages[0]["content"] == "Be concise."
 
   @pytest.mark.asyncio
   async def test_no_system_kwarg_in_stream_when_none(self):

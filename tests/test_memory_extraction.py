@@ -236,13 +236,15 @@ class TestMemoryResolver:
         )
         assert resolver._store is custom_store
 
-    async def test_resolver_build_default_store(self):
-        """Build creates InMemoryMemoryStore when no extras."""
-        resolver = MemoryResolver.build(
-            ResolverConfig(type="memory"),
-            Dependencies(),
-        )
-        assert isinstance(resolver._store, InMemoryMemoryStore)
+    async def test_resolver_build_requires_store_in_extras(self):
+        """Build raises ConfigError when no memory_store is provided in extras."""
+        import pytest
+        from sr2.config.models import ConfigError
+        with pytest.raises(ConfigError):
+            MemoryResolver.build(
+                ResolverConfig(type="memory"),
+                Dependencies(),
+            )
 
     async def test_resolver_name(self):
         """Resolver has correct name."""
