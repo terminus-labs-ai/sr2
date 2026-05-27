@@ -24,9 +24,15 @@ static = "sr2.pipeline.resolvers.static:StaticResolver"
 input = "sr2.pipeline.resolvers.input:InputResolver"
 session = "sr2.pipeline.resolvers.session:SessionResolver"
 event_payload = "sr2.pipeline.resolvers.event_payload:EventPayloadResolver"
+memory = "sr2.memory.memory_resolver:MemoryResolver"
+
+[project.entry-points."sr2.extractors"]
+rule_based = "sr2.memory.extraction:RuleBasedExtractor"
 
 [project.entry-points."sr2.transformers"]
 summarize = "sr2.pipeline.transformers.summarization:SummarizationTransformer"
+memory_extraction = "sr2.memory.extraction_transformer:MemoryExtractionTransformer"
+compaction = "sr2.compaction.transformer:CompactionTransformer"
 
 [dependency-groups]
 dev = ["pytest>=9.0.3", "pytest-asyncio>=0.25.0", "ruff>=0.15.11"]
