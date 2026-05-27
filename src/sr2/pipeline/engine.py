@@ -92,6 +92,9 @@ class PipelineEngine:
         self._firing_seq = -1
         self._bus.reset()
         for layer in self._layers:
+            layer._turn_seq = self._turn_seq
+            layer._next_firing_seq = self._next_firing_seq
+        for layer in self._layers:
             layer.set_content([])
             if layer.tool_providers:
                 layer.reset_tools()

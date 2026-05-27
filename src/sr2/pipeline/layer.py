@@ -6,7 +6,8 @@ budgets, and compiles content for its compilation target.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Callable
 
 from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
 from sr2.pipeline.compilation import PositionStrategy
@@ -16,6 +17,8 @@ from sr2.pipeline.models import CompilationTarget
 from sr2.pipeline.models import ResolvedContent, TransformationResult
 from sr2.pipeline.protocols import Resolver, TokenCounter, ToolProvider, Transformer
 from sr2.pipeline.provenance import Entry, InMemoryProvenanceStore, ProvenanceStore
+
+from sr2.pipeline.tracing import FiringRecord
 
 if TYPE_CHECKING:
     from sr2.pipeline.tracing import Tracer
@@ -54,6 +57,9 @@ class Layer:
         )
 
         self._tracer: "Tracer | None" = tracer
+
+        self._turn_seq: int = 0
+        self._next_firing_seq: Callable[[], int] = lambda: 0  # replaced by engine before each run
 
         self._content: list[ContentBlock | Message] = []
         self._tool_definitions: list[ToolDefinition] = []
@@ -115,8 +121,56 @@ class Layer:
                     for e in events
                 ):
                     continue
-                resolved = await resolver.resolve(events)
-                self.add_content(resolved)
+                if self._tracer is not None:
+                    content_before = list(self._content)
+                    tokens_before = self._token_counter.count(content_before)
+                    t_start = time.perf_counter()
+                try:
+                    resolved = await resolver.resolve(events)
+                    self.add_content(resolved)
+                    if self._tracer is not None:
+                        content_after = list(self._content)
+                        tokens_after = self._token_counter.count(content_after)
+                        duration_ms = (time.perf_counter() - t_start) * 1000
+                        record = FiringRecord(
+                            turn_seq=self._turn_seq,
+                            firing_seq=self._next_firing_seq(),
+                            kind="resolver",
+                            component_name=resolver.name,
+                            layer=self.name,
+                            trigger_events=[e.name for e in events],
+                            content_before=content_before,
+                            content_after=content_after,
+                            tokens_before=tokens_before,
+                            tokens_after=tokens_after,
+                            tokens_delta=tokens_after - tokens_before,
+                            duration_ms=duration_ms,
+                            status="ok",
+                        )
+                        self._tracer.on_firing(record)
+                except Exception as exc:
+                    if self._tracer is not None:
+                        content_after = list(self._content)
+                        tokens_after = self._token_counter.count(content_after)
+                        duration_ms = (time.perf_counter() - t_start) * 1000
+                        record = FiringRecord(
+                            turn_seq=self._turn_seq,
+                            firing_seq=self._next_firing_seq(),
+                            kind="resolver",
+                            component_name=resolver.name,
+                            layer=self.name,
+                            trigger_events=[e.name for e in events],
+                            content_before=content_before,
+                            content_after=content_after,
+                            tokens_before=tokens_before,
+                            tokens_after=tokens_after,
+                            tokens_delta=tokens_after - tokens_before,
+                            duration_ms=duration_ms,
+                            status="failed",
+                            error=str(exc),
+                        )
+                        self._tracer.on_firing(record)
+                    raise
 
             # --- Transformers ---
             for transformer in self.transformers:
@@ -128,14 +182,62 @@ class Layer:
                     for e in events
                 ):
                     continue
-                _count_before = transformer.execution_count
-                result = await transformer.transform(self.get_content(), events)
-                if transformer.execution_count == _count_before:
-                    transformer.execution_count += 1
-                if result.content is not None:
-                    self.set_content(result.content)
-                if result.entries:
-                    self._pending_writes.extend(result.entries)
+                if self._tracer is not None:
+                    content_before = self.get_content()
+                    tokens_before = self._token_counter.count(content_before)
+                    t_start = time.perf_counter()
+                try:
+                    _count_before = transformer.execution_count
+                    result = await transformer.transform(self.get_content(), events)
+                    if transformer.execution_count == _count_before:
+                        transformer.execution_count += 1
+                    if result.content is not None:
+                        self.set_content(result.content)
+                    if result.entries:
+                        self._pending_writes.extend(result.entries)
+                    if self._tracer is not None:
+                        content_after = list(self._content)
+                        tokens_after = self._token_counter.count(content_after)
+                        duration_ms = (time.perf_counter() - t_start) * 1000
+                        record = FiringRecord(
+                            turn_seq=self._turn_seq,
+                            firing_seq=self._next_firing_seq(),
+                            kind="transformer",
+                            component_name=transformer.name,
+                            layer=self.name,
+                            trigger_events=[e.name for e in events],
+                            content_before=content_before,
+                            content_after=content_after,
+                            tokens_before=tokens_before,
+                            tokens_after=tokens_after,
+                            tokens_delta=tokens_after - tokens_before,
+                            duration_ms=duration_ms,
+                            status="ok",
+                        )
+                        self._tracer.on_firing(record)
+                except Exception as exc:
+                    if self._tracer is not None:
+                        content_after = list(self._content)
+                        tokens_after = self._token_counter.count(content_after)
+                        duration_ms = (time.perf_counter() - t_start) * 1000
+                        record = FiringRecord(
+                            turn_seq=self._turn_seq,
+                            firing_seq=self._next_firing_seq(),
+                            kind="transformer",
+                            component_name=transformer.name,
+                            layer=self.name,
+                            trigger_events=[e.name for e in events],
+                            content_before=content_before,
+                            content_after=content_after,
+                            tokens_before=tokens_before,
+                            tokens_after=tokens_after,
+                            tokens_delta=tokens_after - tokens_before,
+                            duration_ms=duration_ms,
+                            status="failed",
+                            error=str(exc),
+                        )
+                        self._tracer.on_firing(record)
+                    raise
 
                 # Queue events emitted by transformer
                 if result.events:
@@ -152,8 +254,53 @@ class Layer:
                     for e in events
                 ):
                     continue
-                defs = await tp.provide(events)
-                self.add_tool_definitions(defs)
+                if self._tracer is not None:
+                    content_before = [td.name for td in self._tool_definitions]
+                    t_start = time.perf_counter()
+                try:
+                    defs = await tp.provide(events)
+                    self.add_tool_definitions(defs)
+                    if self._tracer is not None:
+                        content_after = [td.name for td in self._tool_definitions]
+                        duration_ms = (time.perf_counter() - t_start) * 1000
+                        record = FiringRecord(
+                            turn_seq=self._turn_seq,
+                            firing_seq=self._next_firing_seq(),
+                            kind="tool_provider",
+                            component_name=tp.name,
+                            layer=self.name,
+                            trigger_events=[e.name for e in events],
+                            content_before=content_before,
+                            content_after=content_after,
+                            tokens_before=0,
+                            tokens_after=0,
+                            tokens_delta=0,
+                            duration_ms=duration_ms,
+                            status="ok",
+                        )
+                        self._tracer.on_firing(record)
+                except Exception as exc:
+                    if self._tracer is not None:
+                        content_after = [td.name for td in self._tool_definitions]
+                        duration_ms = (time.perf_counter() - t_start) * 1000
+                        record = FiringRecord(
+                            turn_seq=self._turn_seq,
+                            firing_seq=self._next_firing_seq(),
+                            kind="tool_provider",
+                            component_name=tp.name,
+                            layer=self.name,
+                            trigger_events=[e.name for e in events],
+                            content_before=content_before,
+                            content_after=content_after,
+                            tokens_before=0,
+                            tokens_after=0,
+                            tokens_delta=0,
+                            duration_ms=duration_ms,
+                            status="failed",
+                            error=str(exc),
+                        )
+                        self._tracer.on_firing(record)
+                    raise
 
             # --- Budget check ---
             self.check_budget()
