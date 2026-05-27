@@ -14,6 +14,10 @@ from ulid import ULID
 
 from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig, ToolProviderConfig, TransformerConfig
 from sr2.pipeline.provenance import ProvenanceStore
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sr2.pipeline.tracing import Tracer
 from sr2.models import Message, TextBlock, TokenUsage
 from sr2.pipeline.compilation import AppendStrategy, PrefixStrategy
 from sr2.pipeline.dependencies import Dependencies
@@ -91,6 +95,7 @@ class SR2:
         session_id: str | None = None,
         provenance_store: ProvenanceStore | None = None,
         extras: Mapping[str, Any] | None = None,
+        tracer: "Tracer | None" = None,
     ) -> None:
         if "default" not in llm:
             raise ValueError(
@@ -100,6 +105,7 @@ class SR2:
 
         self._llm = llm["default"]
         self._token_counter = token_counter
+        self._tracer = tracer
         self.session_id = session_id if session_id is not None else str(ULID())
 
         deps = Dependencies(llm=llm, extras=extras or {})
@@ -109,6 +115,7 @@ class SR2:
             token_counter=token_counter,
             provenance_store=provenance_store,
             token_budget=pipeline_config.token_budget,
+            tracer=tracer,
         )
 
     # ------------------------------------------------------------------

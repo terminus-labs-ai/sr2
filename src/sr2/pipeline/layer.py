@@ -6,6 +6,8 @@ budgets, and compiles content for its compilation target.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
 from sr2.pipeline.compilation import PositionStrategy
 from sr2.pipeline.event_bus import EventBus
@@ -14,6 +16,9 @@ from sr2.pipeline.models import CompilationTarget
 from sr2.pipeline.models import ResolvedContent, TransformationResult
 from sr2.pipeline.protocols import Resolver, TokenCounter, ToolProvider, Transformer
 from sr2.pipeline.provenance import Entry, InMemoryProvenanceStore, ProvenanceStore
+
+if TYPE_CHECKING:
+    from sr2.pipeline.tracing import Tracer
 
 
 class Layer:
@@ -32,6 +37,7 @@ class Layer:
         provenance_store: ProvenanceStore | None = None,
         token_threshold_pct: float | None = None,
         tool_providers: list = [],
+        tracer: "Tracer | None" = None,
     ) -> None:
         self.name = name
         self.target = target
@@ -46,6 +52,8 @@ class Layer:
         self._provenance_store: ProvenanceStore = (
             provenance_store if provenance_store is not None else InMemoryProvenanceStore()
         )
+
+        self._tracer: "Tracer | None" = tracer
 
         self._content: list[ContentBlock | Message] = []
         self._tool_definitions: list[ToolDefinition] = []

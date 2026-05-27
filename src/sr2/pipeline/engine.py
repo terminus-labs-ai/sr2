@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from typing import TYPE_CHECKING
+
 from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
 from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase
@@ -24,6 +26,9 @@ from sr2.pipeline.models import (
 from sr2.pipeline.protocols import TokenCounter
 from sr2.pipeline.provenance import InMemoryProvenanceStore, ProvenanceStore
 from sr2.protocols.llm import CompletionRequest
+
+if TYPE_CHECKING:
+    from sr2.pipeline.tracing import Tracer
 
 
 class PipelineEngine:
@@ -44,10 +49,14 @@ class PipelineEngine:
         provenance_store: ProvenanceStore | None = None,
         max_cycles: int = 50,
         token_budget: int | None = None,
+        tracer: "Tracer | None" = None,
     ) -> None:
         self.token_counter = token_counter
         self._max_cycles = max_cycles
         self._token_budget = token_budget
+        self._tracer = tracer
+        self._turn_seq: int = -1
+        self._firing_seq: int = -1
         self._bus = EventBus()
         self._layers = layers
         self._provenance_store: ProvenanceStore = (
@@ -60,6 +69,14 @@ class PipelineEngine:
 
         self._setup_event_handlers()
 
+        for layer in self._layers:
+            layer._tracer = self._tracer
+
+    def _next_firing_seq(self) -> int:
+        """Increment and return the firing sequence counter."""
+        self._firing_seq += 1
+        return self._firing_seq
+
     def _setup_event_handlers(self) -> None:
         """Wire all layer component subscriptions to the shared bus."""
         for layer in self._layers:
@@ -71,6 +88,8 @@ class PipelineEngine:
         user_input: List[ContentBlock],
     ) -> PipelineResult:
         """Run the pipeline for a single turn."""
+        self._turn_seq += 1
+        self._firing_seq = -1
         self._bus.reset()
         for layer in self._layers:
             layer.set_content([])
