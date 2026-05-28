@@ -724,3 +724,646 @@ class TestTurnErrorHandling:
         with pytest.raises(RuntimeError, match="LLM backend error"):
             async for _ in sr2.turn(make_user_input()):
                 pass
+
+
+# ===========================================================================
+# Tests from test_sr2_14_ocp_llm_dict.py — OCP: hardcoded 'default' key in llm dict
+# SR2-14: SR2 should accept a single LLMCallable and SummarizationTransformer
+# must not silently fall back to the "default" key when a named key is absent.
+# ===========================================================================
+
+
+class _MockLLMNamed:
+    """Named MockLLM variant for sr2-14 tests (needs .name attribute)."""
+
+    def __init__(self, name: str = "mock"):
+        self.name = name
+        self.stream_calls: list[CompletionRequest] = []
+        self.complete_calls: list[CompletionRequest] = []
+
+    async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        self.complete_calls.append(request)
+        return CompletionResponse(
+            id="mock",
+            content=[TextBlock(text=f"response from {self.name}")],
+            stop_reason="end_turn",
+            usage=TokenUsage(),
+        )
+
+    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
+        self.stream_calls.append(request)
+        yield StreamEvent(type="text", text=f"text from {self.name}")
+        yield StreamEvent(type="end")
+
+
+def _make_minimal_pipeline_config_sr2_14():
+    return PipelineConfig(
+        layers=[
+            LayerConfig(
+                name="system",
+                target="system",
+                resolvers=[
+                    ResolverConfig(type="static", config={"text": "You are helpful."})
+                ],
+            ),
+            LayerConfig(
+                name="conversation",
+                target="messages",
+                resolvers=[ResolverConfig(type="session")],
+            ),
+        ]
+    )
+
+
+def _make_summarization_config(model_key=None, **kwargs):
+    from sr2.config.models import EventSubscriptionConfig, TransformerConfig
+
+    inner: dict = {"keep_strategy": "keep_last_n", "keep_last_n": 2}
+    if model_key is not None:
+        inner["model"] = model_key
+    inner.update(kwargs)
+    return TransformerConfig(
+        type="summarization",
+        subscriptions=[EventSubscriptionConfig(event="turn_start")],
+        config=inner,
+        max_executions=5,
+    )
+
+
+class TestSR2AcceptsSingleLLM:
+    """SR2 should be constructable with a bare LLMCallable, not forced to wrap it in a dict."""
+
+    def test_sr2_accepts_single_llm_callable(self):
+        """P1: SR2.__init__ accepts a single LLMCallable without requiring a dict wrapper."""
+        from sr2.orchestrator import SR2
+
+        config = _make_minimal_pipeline_config_sr2_14()
+        llm = _MockLLMNamed("driver")
+        counter = CharacterTokenCounter()
+
+        sr2 = SR2(pipeline_config=config, llm=llm, token_counter=counter)
+        assert sr2 is not None
+
+    def test_sr2_single_llm_is_the_driver(self):
+        """P1: When a single LLMCallable is provided, it becomes the driver LLM."""
+        from sr2.orchestrator import SR2
+
+        config = _make_minimal_pipeline_config_sr2_14()
+        driver = _MockLLMNamed("driver")
+        counter = CharacterTokenCounter()
+
+        sr2 = SR2(pipeline_config=config, llm=driver, token_counter=counter)
+        assert sr2._llm is driver
+
+    def test_sr2_dict_with_no_default_key_is_valid_if_driver_specified(self):
+        """P1: SR2 dict form should not require the string 'default' if driver is explicit."""
+        from sr2.orchestrator import SR2
+
+        config = _make_minimal_pipeline_config_sr2_14()
+        llm_haiku = _MockLLMNamed("haiku")
+        llm_opus = _MockLLMNamed("opus")
+        counter = CharacterTokenCounter()
+
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"haiku": llm_haiku, "opus": llm_opus},
+            token_counter=counter,
+        )
+        assert sr2 is not None
+
+
+class TestSR2NoDualAccess:
+    """SR2 should not store the driver LLM via two different paths simultaneously."""
+
+    def test_sr2_driver_not_duplicated_in_deps(self):
+        """P2: When llm is a single callable, deps.llm should not be a dict wrapping it."""
+        from sr2.orchestrator import SR2
+
+        config = _make_minimal_pipeline_config_sr2_14()
+        driver = _MockLLMNamed("driver")
+        counter = CharacterTokenCounter()
+
+        sr2 = SR2(pipeline_config=config, llm=driver, token_counter=counter)
+
+        if hasattr(sr2, "_llm"):
+            assert sr2._llm is driver, "sr2._llm should be the provided driver"
+
+
+class TestSummarizationNoSilentDefaultFallback:
+    """SummarizationTransformer.build() must raise when a configured key is absent from deps.llm."""
+
+    @pytest.fixture
+    def transformer_cls(self):
+        from sr2.pipeline.transformers.summarization import SummarizationTransformer
+
+        return SummarizationTransformer
+
+    def _make_deps_no_default(self, named_key: str, llm):
+        from sr2.pipeline.dependencies import Dependencies
+
+        return Dependencies(llm={named_key: llm})
+
+    def _make_deps_with_default_only(self, default_llm):
+        from sr2.pipeline.dependencies import Dependencies
+
+        return Dependencies(llm={"default": default_llm})
+
+    def test_named_key_absent_raises_not_silently_falls_back(self, transformer_cls):
+        """P3: config['model']='haiku' but 'haiku' absent from deps.llm → should raise."""
+        from sr2.config.models import ConfigError
+
+        default_llm = _MockLLMNamed("default")
+        config = _make_summarization_config(model_key="haiku")
+        deps = self._make_deps_with_default_only(default_llm)
+
+        with pytest.raises((ConfigError, KeyError, ValueError)):
+            transformer_cls.build(config, deps)
+
+    def test_named_key_absent_does_not_silently_return_instance(self, transformer_cls):
+        """P3: Variant — ensure build() does not return an instance when named key is missing."""
+        from sr2.config.models import ConfigError
+
+        default_llm = _MockLLMNamed("default")
+        config = _make_summarization_config(model_key="nonexistent-model")
+        deps = self._make_deps_with_default_only(default_llm)
+
+        raised = False
+        try:
+            result = transformer_cls.build(config, deps)
+            assert result._llm is not default_llm, (
+                "build() silently returned an instance using 'default' LLM "
+                "even though config specified a different model key that was absent."
+            )
+        except (ConfigError, KeyError, ValueError):
+            raised = True
+
+        assert raised, (
+            "Expected build() to raise when configured model key is absent from deps.llm, "
+            "but it silently fell back to 'default'. This is the bug."
+        )
+
+    def test_named_key_present_without_default_works(self, transformer_cls):
+        """P4: deps.llm has the named key but NO 'default' key → should work fine."""
+        haiku_llm = _MockLLMNamed("haiku")
+        config = _make_summarization_config(model_key="haiku")
+        deps = self._make_deps_no_default("haiku", haiku_llm)
+
+        result = transformer_cls.build(config, deps)
+        assert result._llm is haiku_llm
+
+    def test_no_model_key_in_config_without_default_in_deps_raises(self, transformer_cls):
+        """P4: No 'model' key in config AND no 'default' key in deps.llm → should raise."""
+        from sr2.config.models import ConfigError
+
+        haiku_llm = _MockLLMNamed("haiku")
+        config = _make_summarization_config(model_key=None)
+        deps = self._make_deps_no_default("haiku", haiku_llm)
+
+        with pytest.raises((ConfigError, KeyError, ValueError)):
+            transformer_cls.build(config, deps)
+
+
+class TestDependenciesLLMTypeContract:
+    """Dependencies.llm types the 'default' key convention only in prose — documents the gap."""
+
+    def test_dependencies_llm_dict_without_default_is_accepted_at_runtime(self):
+        """Dependencies accepts any dict[str, LLMCallable] — no 'default' enforcement."""
+        from sr2.pipeline.dependencies import Dependencies
+
+        llm_a = _MockLLMNamed("a")
+        llm_b = _MockLLMNamed("b")
+
+        deps = Dependencies(llm={"a": llm_a, "b": llm_b})
+
+        assert deps.llm is not None
+        assert "default" not in deps.llm
+
+    def test_driver_key_should_be_explicit_not_magic_string(self):
+        """P4: SR2 can be constructed without using the string 'default' anywhere."""
+        from sr2.orchestrator import SR2
+
+        config = _make_minimal_pipeline_config_sr2_14()
+        driver = _MockLLMNamed("primary-driver")
+        counter = CharacterTokenCounter()
+
+        try:
+            sr2 = SR2(pipeline_config=config, llm=driver, token_counter=counter)
+            constructed = True
+        except (TypeError, ValueError, AttributeError):
+            constructed = False
+
+        assert constructed, (
+            "SR2 should be constructable with a single LLMCallable (no magic 'default' key)."
+        )
+
+
+# ===========================================================================
+# Tests from test_orchestrator_provenance.py — SR2 orchestrator provenance (Chunk 4)
+# Covers: FR11 session_id, FR12 provenance_store, FR14 transformer config errors,
+#         AC1 SQLite round-trip, AC5/AC6 protocol compliance.
+# ===========================================================================
+
+
+from sr2.pipeline.provenance import Entry, EntryOrigin, InMemoryProvenanceStore, ProvenanceStore
+
+
+_PROV_ENTRY_COUNTER = 0
+
+
+def _next_prov_entry_id() -> str:
+    global _PROV_ENTRY_COUNTER
+    _PROV_ENTRY_COUNTER += 1
+    return f"ORCH{_PROV_ENTRY_COUNTER:022d}"
+
+
+def _make_prov_entry(session_id: str, layer: str = "conversation") -> Entry:
+    from datetime import datetime, timezone
+
+    return Entry(
+        id=_next_prov_entry_id(),
+        content=TextBlock(text="round-trip content"),
+        sources=(),
+        origin=EntryOrigin(kind="resolver", name="test_resolver"),
+        layer=layer,
+        session_id=session_id,
+        created_at=datetime.now(tz=timezone.utc),
+    )
+
+
+def _make_config_with_transformers(layer_name: str = "system") -> PipelineConfig:
+    from sr2.config.models import TransformerConfig
+
+    return PipelineConfig(
+        layers=[
+            LayerConfig(
+                name=layer_name,
+                target="system",
+                resolvers=[
+                    ResolverConfig(
+                        type="static",
+                        config={"text": "You are a helpful assistant."},
+                    )
+                ],
+                transformers=[
+                    TransformerConfig(type="some_transformer"),
+                ],
+            ),
+            LayerConfig(
+                name="conversation",
+                target="messages",
+                resolvers=[
+                    ResolverConfig(type="session"),
+                    ResolverConfig(
+                        type="input",
+                        subscriptions=[
+                            EventSubscriptionConfig(event="user_input", phase="completed")
+                        ],
+                    ),
+                ],
+            ),
+        ]
+    )
+
+
+def _make_config_with_empty_transformers() -> PipelineConfig:
+    from sr2.config.models import TransformerConfig
+
+    return PipelineConfig(
+        layers=[
+            LayerConfig(
+                name="system",
+                target="system",
+                resolvers=[
+                    ResolverConfig(
+                        type="static",
+                        config={"text": "You are a helpful assistant."},
+                    )
+                ],
+                transformers=[],
+            ),
+            LayerConfig(
+                name="conversation",
+                target="messages",
+                resolvers=[
+                    ResolverConfig(type="session"),
+                    ResolverConfig(
+                        type="input",
+                        subscriptions=[
+                            EventSubscriptionConfig(event="user_input", phase="completed")
+                        ],
+                    ),
+                ],
+            ),
+        ]
+    )
+
+
+class TestSR2SessionId:
+    def test_session_id_auto_minted_when_none(self):
+        """SR2() without session_id → sr2.session_id is a non-empty string."""
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        assert isinstance(sr2.session_id, str)
+        assert len(sr2.session_id) > 0
+
+    def test_session_id_is_ulid_format(self):
+        """SR2() without session_id → sr2.session_id is 26 characters (ULID format)."""
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        assert len(sr2.session_id) == 26
+
+    def test_explicit_session_id_stored(self):
+        """SR2(session_id='my-id') → sr2.session_id == 'my-id'."""
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            session_id="my-id",
+        )
+
+        assert sr2.session_id == "my-id"
+
+    def test_explicit_session_id_is_exact_string(self):
+        """SR2(session_id='my-id') → session_id is the exact string passed."""
+        from sr2.orchestrator import SR2
+
+        custom_id = "explicit-session-42"
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            session_id=custom_id,
+        )
+
+        assert sr2.session_id is custom_id
+
+    def test_two_instances_get_different_session_ids(self):
+        """Two SR2() without session_id → different session IDs."""
+        from sr2.orchestrator import SR2
+
+        config = make_minimal_config()
+        llm = {"default": MockLLM()}
+        counter = CharacterTokenCounter()
+
+        sr2_a = SR2(pipeline_config=config, llm=llm, token_counter=counter)
+        sr2_b = SR2(pipeline_config=config, llm=llm, token_counter=counter)
+
+        assert sr2_a.session_id != sr2_b.session_id
+
+
+class TestSR2ProvenanceStore:
+    def test_constructs_without_provenance_store(self):
+        """SR2() without provenance_store → constructs without error."""
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        assert sr2 is not None
+
+    def test_default_provenance_store_is_in_memory(self):
+        """SR2() without provenance_store → engine uses InMemoryProvenanceStore."""
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        assert isinstance(sr2._engine._provenance_store, InMemoryProvenanceStore)
+
+    def test_explicit_provenance_store_used_as_is(self):
+        """SR2(provenance_store=store) → engine._provenance_store is the exact object."""
+        from sr2.orchestrator import SR2
+
+        custom_store = InMemoryProvenanceStore()
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            provenance_store=custom_store,
+        )
+
+        assert sr2._engine._provenance_store is custom_store
+
+    def test_provided_store_satisfies_protocol(self):
+        """SR2(provenance_store=InMemoryProvenanceStore()) → store satisfies ProvenanceStore."""
+        from sr2.orchestrator import SR2
+
+        store = InMemoryProvenanceStore()
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            provenance_store=store,
+        )
+
+        assert isinstance(sr2._engine._provenance_store, ProvenanceStore)
+
+
+class TestTransformerConfigError:
+    def test_empty_transformers_list_does_not_raise(self):
+        """transformers=[] → no error; empty list is fine."""
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=_make_config_with_empty_transformers(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+        assert sr2 is not None
+
+    def test_non_empty_transformers_with_unknown_type_raises_plugin_not_found_error(self):
+        """transformers=[TransformerConfig(type=unknown)] → raises PluginNotFoundError."""
+        from sr2.orchestrator import SR2
+        from sr2.plugins.errors import PluginNotFoundError
+
+        with pytest.raises(PluginNotFoundError):
+            SR2(
+                pipeline_config=_make_config_with_transformers(),
+                llm={"default": MockLLM()},
+                token_counter=CharacterTokenCounter(),
+            )
+
+    def test_plugin_not_found_error_message_contains_unknown_type_name(self):
+        """PluginNotFoundError message contains the unknown transformer type name."""
+        from sr2.orchestrator import SR2
+        from sr2.plugins.errors import PluginNotFoundError
+
+        with pytest.raises(PluginNotFoundError, match="some_transformer"):
+            SR2(
+                pipeline_config=_make_config_with_transformers(),
+                llm={"default": MockLLM()},
+                token_counter=CharacterTokenCounter(),
+            )
+
+    def test_plugin_not_found_error_message_mentions_transformer(self):
+        """PluginNotFoundError message mentions 'transformer' to guide the user."""
+        from sr2.orchestrator import SR2
+        from sr2.plugins.errors import PluginNotFoundError
+
+        with pytest.raises(PluginNotFoundError) as exc_info:
+            SR2(
+                pipeline_config=_make_config_with_transformers(),
+                llm={"default": MockLLM()},
+                token_counter=CharacterTokenCounter(),
+            )
+
+        message = str(exc_info.value).lower()
+        assert "transformer" in message
+
+    def test_single_layer_with_unknown_transformer_raises(self):
+        """Only one layer has transformers → PluginNotFoundError is still raised."""
+        from sr2.orchestrator import SR2
+        from sr2.config.models import TransformerConfig
+        from sr2.plugins.errors import PluginNotFoundError
+
+        config = PipelineConfig(
+            layers=[
+                LayerConfig(
+                    name="system",
+                    target="system",
+                    resolvers=[
+                        ResolverConfig(
+                            type="static",
+                            config={"text": "You are a helpful assistant."},
+                        )
+                    ],
+                ),
+                LayerConfig(
+                    name="conversation",
+                    target="messages",
+                    resolvers=[
+                        ResolverConfig(type="session"),
+                        ResolverConfig(
+                            type="input",
+                            subscriptions=[
+                                EventSubscriptionConfig(event="user_input", phase="completed")
+                            ],
+                        ),
+                    ],
+                    transformers=[
+                        TransformerConfig(type="some_transformer"),
+                    ],
+                ),
+            ]
+        )
+
+        with pytest.raises(PluginNotFoundError):
+            SR2(
+                pipeline_config=config,
+                llm={"default": MockLLM()},
+                token_counter=CharacterTokenCounter(),
+            )
+
+
+class TestProtocolCompliance:
+    def test_in_memory_store_satisfies_protocol(self):
+        """AC5: InMemoryProvenanceStore() satisfies isinstance(store, ProvenanceStore)."""
+        store = InMemoryProvenanceStore()
+        assert isinstance(store, ProvenanceStore)
+
+
+class TestSR2RoundTrip:
+    @pytest.mark.asyncio
+    async def test_in_memory_store_session_id_threaded_to_entries(self):
+        """FR11: session_id threads through — entries written with sr2.session_id are queryable."""
+        from sr2.orchestrator import SR2
+
+        store = InMemoryProvenanceStore()
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            provenance_store=store,
+        )
+
+        entry = _make_prov_entry(session_id=sr2.session_id)
+        await store.write(entry)
+
+        entries = await store.get_session(sr2.session_id)
+        assert len(entries) == 1
+        assert entries[0].session_id == sr2.session_id
+        assert entries[0].id == entry.id
+
+    @pytest.mark.asyncio
+    async def test_sqlite_store_entries_survive_close_and_reopen(self, tmp_path):
+        """AC1: Entries written with session_id survive SQLite close → reopen."""
+        from sr2.orchestrator import SR2
+        from sr2.pipeline.stores.sqlite import SQLiteProvenanceStore
+
+        db_path = tmp_path / "provenance_test.db"
+        session_id = "round-trip-session-001"
+
+        store = SQLiteProvenanceStore(db_path=str(db_path))
+        await store.connect()
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            session_id=session_id,
+            provenance_store=store,
+        )
+
+        entry1 = _make_prov_entry(session_id=sr2.session_id, layer="system")
+        entry2 = _make_prov_entry(session_id=sr2.session_id, layer="conversation")
+        await store.write_batch([entry1, entry2])
+
+        entries_before = await store.get_session(session_id)
+        assert len(entries_before) == 2
+        assert all(e.session_id == session_id for e in entries_before)
+
+        await store.close()
+
+        store2 = SQLiteProvenanceStore(db_path=str(db_path))
+        await store2.connect()
+
+        entries_after = await store2.get_session(session_id)
+
+        assert len(entries_after) == len(entries_before)
+        ids_before = {e.id for e in entries_before}
+        ids_after = {e.id for e in entries_after}
+        assert ids_before == ids_after
+        assert all(e.session_id == session_id for e in entries_after)
+
+        await store2.close()
+
+    @pytest.mark.asyncio
+    async def test_sqlite_store_satisfies_protocol_via_orchestrator(self, tmp_path):
+        """AC6: SQLiteProvenanceStore plugged into SR2 satisfies isinstance(store, ProvenanceStore)."""
+        from sr2.orchestrator import SR2
+        from sr2.pipeline.stores.sqlite import SQLiteProvenanceStore
+
+        db_path = tmp_path / "protocol_check.db"
+        store = SQLiteProvenanceStore(db_path=str(db_path))
+        await store.connect()
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            provenance_store=store,
+        )
+
+        assert isinstance(sr2._engine._provenance_store, ProvenanceStore)
+
+        await store.close()

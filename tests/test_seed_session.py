@@ -685,3 +685,374 @@ class TestSeedSessionIsSynchronous:
 
         result = sr2.seed_session([make_user_message("test")])
         assert result is None
+
+
+# ===========================================================================
+# Tests from test_seed_encapsulation.py — SR2-16: encapsulation of seed_session()
+# Covers: SessionResolver.seed(), Layer.seed(), PipelineEngine.seed(),
+#         SR2.seed_session() public API chain, Resolver protocol compatibility,
+#         turn() execution_count reset.
+# ===========================================================================
+
+
+class TestSessionResolverSeedMethod:
+    def test_session_resolver_has_seed_method(self):
+        """SessionResolver must expose a public seed() method."""
+        config = ResolverConfig(type="session")
+        resolver = SessionResolver(config)
+
+        assert hasattr(resolver, "seed"), (
+            "SessionResolver has no 'seed' method — add seed(messages: list[Message]) -> None"
+        )
+        assert callable(resolver.seed)
+
+    def test_session_resolver_seed_sets_history_via_public_method(self):
+        """SessionResolver.seed() sets history without touching _history directly."""
+        from sr2.pipeline.events import Event
+
+        config = ResolverConfig(type="session")
+        resolver = SessionResolver(config)
+
+        messages = [make_user_message("seeded"), make_assistant_message("seeded reply")]
+        resolver.seed(messages)
+
+        result = asyncio.run(resolver.resolve([]))
+        resolved_texts = [
+            block.text
+            for msg in result.content
+            for block in msg.content
+            if hasattr(block, "text")
+        ]
+        assert "seeded" in resolved_texts, "seed() did not inject messages into resolve() output"
+        assert "seeded reply" in resolved_texts
+
+    def test_session_resolver_seed_stores_independent_copies(self):
+        """SessionResolver.seed() must copy messages, not store references."""
+        config = ResolverConfig(type="session")
+        resolver = SessionResolver(config)
+
+        messages = [make_user_message("original")]
+        resolver.seed(messages)
+        messages.clear()
+
+        result = asyncio.run(resolver.resolve([]))
+        texts = [
+            block.text
+            for msg in result.content
+            for block in msg.content
+            if hasattr(block, "text")
+        ]
+        assert "original" in texts, "seed() stored a reference; clearing input erased seeded history"
+
+    def test_session_resolver_seed_overwrites_existing_history(self):
+        """seed() replaces any prior history — does not append."""
+        config = ResolverConfig(type="session")
+        resolver = SessionResolver(config)
+
+        resolver.seed([make_user_message("first"), make_assistant_message("first reply")])
+        resolver.seed([make_user_message("second seed")])
+
+        result = asyncio.run(resolver.resolve([]))
+        texts = [
+            block.text
+            for msg in result.content
+            for block in msg.content
+            if hasattr(block, "text")
+        ]
+        assert len(result.content) == 1, (
+            f"seed() appended instead of replacing — got {len(result.content)} messages"
+        )
+        assert "second seed" in texts
+
+    def test_session_resolver_seed_with_empty_list_clears_history(self):
+        """seed([]) after a non-empty seed clears all history."""
+        config = ResolverConfig(type="session")
+        resolver = SessionResolver(config)
+
+        resolver.seed([make_user_message("something")])
+        resolver.seed([])
+
+        result = asyncio.run(resolver.resolve([]))
+        assert result.content == [], "seed([]) did not clear history"
+
+
+class TestLayerSeedMethod:
+    def test_layer_has_seed_method(self):
+        """Layer must expose a public seed() method."""
+        from sr2.pipeline.layer import Layer
+
+        assert hasattr(Layer, "seed"), (
+            "Layer class has no 'seed' method — add seed(messages: list[Message]) -> None"
+        )
+
+    def test_layer_seed_propagates_to_session_resolver(self):
+        """Layer.seed(messages) must call seed() on any SessionResolver it holds."""
+        from sr2.pipeline.layer import Layer
+        from sr2.pipeline.compilation import AppendStrategy
+        from sr2.pipeline.models import CompilationTarget
+        from sr2.pipeline.event_bus import EventBus
+
+        config = ResolverConfig(type="session")
+        resolver = SessionResolver(config)
+
+        layer = Layer(
+            name="conv",
+            target=CompilationTarget.MESSAGES,
+            position=AppendStrategy(),
+            token_budget=None,
+            resolvers=[resolver],
+            transformers=[],
+            token_counter=CharacterTokenCounter(),
+            event_bus=EventBus(),
+        )
+
+        messages = [make_user_message("layer seeded")]
+        layer.seed(messages)
+
+        result = asyncio.run(resolver.resolve([]))
+        texts = [
+            block.text
+            for msg in result.content
+            for block in msg.content
+            if hasattr(block, "text")
+        ]
+        assert "layer seeded" in texts, "Layer.seed() did not propagate to SessionResolver.seed()"
+
+    def test_layer_seed_noop_for_non_session_resolvers(self):
+        """Layer.seed() must not raise when no resolver is a SessionResolver."""
+        from sr2.pipeline.layer import Layer
+        from sr2.pipeline.compilation import AppendStrategy
+        from sr2.pipeline.models import CompilationTarget
+        from sr2.pipeline.event_bus import EventBus
+        from sr2.pipeline.resolvers.static import StaticResolver
+
+        static_config = ResolverConfig(type="static", config={"text": "hello"})
+        resolver = StaticResolver(static_config)
+
+        layer = Layer(
+            name="sys",
+            target=CompilationTarget.SYSTEM,
+            position=AppendStrategy(),
+            token_budget=None,
+            resolvers=[resolver],
+            transformers=[],
+            token_counter=CharacterTokenCounter(),
+            event_bus=EventBus(),
+        )
+
+        # Must not raise — no SessionResolver in this layer
+        layer.seed([make_user_message("ignored")])
+
+
+class TestPipelineEngineSeedMethod:
+    def test_engine_has_seed_method(self):
+        """PipelineEngine must expose a public seed() method."""
+        from sr2.pipeline.engine import PipelineEngine
+
+        assert hasattr(PipelineEngine, "seed"), (
+            "PipelineEngine class has no 'seed' method — add seed(messages: list[Message]) -> None"
+        )
+
+    def test_engine_seed_propagates_through_layers(self):
+        """PipelineEngine.seed(messages) must call seed() on all layers."""
+        from sr2.orchestrator import SR2
+
+        mock_llm = MockLLM()
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": mock_llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        messages = [make_user_message("engine seed"), make_assistant_message("engine reply")]
+        sr2._engine.seed(messages)
+
+        async def _exhaust():
+            async for _ in sr2.turn(make_user_input("live input")):
+                pass
+
+        asyncio.run(_exhaust())
+
+        assert len(mock_llm.stream_calls) == 1
+        request = mock_llm.stream_calls[0]
+        all_text = " ".join(
+            block.text
+            for msg in request.messages
+            for block in msg.content
+            if hasattr(block, "text")
+        )
+        assert "engine seed" in all_text, "engine.seed() did not reach SessionResolver"
+
+
+class TestSR2SeedSessionNoPrivateAccess:
+    def test_seed_session_delegates_to_engine_seed(self):
+        """SR2.seed_session() must delegate to engine.seed(), not access _layers directly."""
+        from unittest.mock import patch
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        messages = [make_user_message("public path")]
+        with patch.object(sr2._engine, "seed") as mock_seed:
+            sr2.seed_session(messages)
+            mock_seed.assert_called_once_with(messages)
+
+    def test_seed_session_does_not_directly_mutate_resolver_history(self):
+        """SR2.seed_session() must route through the public seed() API."""
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        resolvers: list[SessionResolver] = []
+        for layer in sr2._engine._layers:
+            for r in layer.resolvers:
+                if isinstance(r, SessionResolver):
+                    resolvers.append(r)
+
+        assert resolvers, "No SessionResolver found — config may be wrong"
+
+        seed_called = []
+        original_seed = getattr(resolvers[0], "seed", None)
+
+        if original_seed is None:
+            pytest.fail(
+                "SessionResolver.seed() does not exist — "
+                "seed_session() cannot delegate to it"
+            )
+
+        def spy_seed(messages):
+            seed_called.append(messages)
+            original_seed(messages)
+
+        resolvers[0].seed = spy_seed
+
+        sr2.seed_session([make_user_message("via public api")])
+
+        assert seed_called, (
+            "SR2.seed_session() did not call resolver.seed() — "
+            "it must delegate through engine.seed() → layer.seed() → resolver.seed()"
+        )
+
+    @pytest.mark.asyncio
+    async def test_seed_session_behavior_preserved_after_refactor(self):
+        """Seeded messages still appear in turn context after the encapsulation fix."""
+        from sr2.orchestrator import SR2
+
+        mock_llm = MockLLM()
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": mock_llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        seed = [make_user_message("refactored seed")]
+        sr2.seed_session(seed)
+
+        async for _ in sr2.turn(make_user_input("live input")):
+            pass
+
+        assert len(mock_llm.stream_calls) == 1
+        all_text = " ".join(
+            block.text
+            for msg in mock_llm.stream_calls[0].messages
+            for block in msg.content
+            if hasattr(block, "text")
+        )
+        assert "refactored seed" in all_text
+
+
+class TestResolverSeedProtocolCompatibility:
+    def test_non_session_resolvers_can_have_noop_seed(self):
+        """Resolvers that aren't SessionResolver must not crash when seed() is called."""
+        from sr2.pipeline.resolvers.static import StaticResolver
+
+        config = ResolverConfig(type="static", config={"text": "hello"})
+        resolver = StaticResolver(config)
+
+        try:
+            if hasattr(resolver, "seed"):
+                resolver.seed([make_user_message("noop")])
+        except Exception as exc:
+            pytest.fail(
+                f"Calling seed() on StaticResolver raised {type(exc).__name__}: {exc}"
+            )
+
+    def test_session_resolver_satisfies_resolver_protocol(self):
+        """SessionResolver with seed() still satisfies the Resolver protocol."""
+        from sr2.pipeline.protocols import Resolver
+
+        config = ResolverConfig(type="session")
+        resolver = SessionResolver(config)
+
+        assert isinstance(resolver, Resolver), (
+            "SessionResolver no longer satisfies Resolver protocol after adding seed()"
+        )
+
+
+class TestTurnExecutionCountReset:
+    def test_turn_has_public_reset_path_without_engine_layers(self):
+        """PipelineEngine must have a public method for resetting execution counts."""
+        from sr2.pipeline.engine import PipelineEngine
+
+        has_public_reset = any(
+            hasattr(PipelineEngine, name)
+            for name in ("reset_execution_counts", "prepare_turn", "reset_for_turn")
+        )
+        assert has_public_reset, (
+            "PipelineEngine has no public method for resetting execution counts "
+            "(reset_execution_counts / prepare_turn / reset_for_turn)."
+        )
+
+    def test_reset_execution_counts_actually_resets(self):
+        """PipelineEngine.reset_execution_counts() must zero all resolver execution counts."""
+        from sr2.pipeline.engine import PipelineEngine
+        from sr2.orchestrator import SR2
+
+        mock_llm = MockLLM()
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": mock_llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        async def _exhaust():
+            async for _ in sr2.turn(make_user_input("trigger")):
+                pass
+
+        asyncio.run(_exhaust())
+
+        engine: PipelineEngine = sr2._engine
+        all_before = [
+            r.execution_count
+            for layer in engine._layers
+            for r in layer.resolvers
+        ]
+        assert any(c > 0 for c in all_before), (
+            "No resolver incremented execution_count — test setup is wrong"
+        )
+
+        if hasattr(engine, "reset_execution_counts"):
+            engine.reset_execution_counts()
+        elif hasattr(engine, "prepare_turn"):
+            engine.prepare_turn()
+        elif hasattr(engine, "reset_for_turn"):
+            engine.reset_for_turn()
+        else:
+            pytest.fail("No public reset method found on PipelineEngine")
+
+        all_after = [
+            r.execution_count
+            for layer in engine._layers
+            for r in layer.resolvers
+        ]
+        assert all(c == 0 for c in all_after), (
+            f"reset method did not zero all execution counts; got {all_after}"
+        )
