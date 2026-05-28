@@ -13,6 +13,7 @@ from typing import Any, Callable, TYPE_CHECKING
 from ulid import ULID
 
 from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig, ToolLoopLimitError, ToolProviderConfig, TransformerConfig
+from sr2.degradation.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from sr2.pipeline.provenance import ProvenanceStore
 
 if TYPE_CHECKING:
@@ -120,6 +121,11 @@ class SR2:
         self._max_tool_iterations = pipeline_config.max_tool_iterations
         self._max_parallel_tools = pipeline_config.max_parallel_tools
         self.session_id = session_id if session_id is not None else str(ULID())
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=pipeline_config.circuit_breaker_failure_threshold,
+            recovery_timeout=pipeline_config.circuit_breaker_recovery_timeout,
+        )
+        self._llm_timeout_seconds = pipeline_config.llm_timeout_seconds
 
         deps = Dependencies(
             llm=llm_dict,
@@ -212,7 +218,33 @@ class SR2:
             iter_tool_use: list[StreamEvent] = []
             iter_usage: TokenUsage | None = None
 
-            async for event in self._llm.stream(current_request):
+            # Circuit breaker check — reject immediately if open.
+            if not self._circuit_breaker.allow_request():
+                raise CircuitBreakerOpenError("LLM circuit breaker is open")
+
+            # Collect all stream events, applying optional per-call timeout.
+            async def _collect_stream() -> list[StreamEvent]:
+                collected: list[StreamEvent] = []
+                async for event in self._llm.stream(current_request):
+                    collected.append(event)
+                return collected
+
+            try:
+                if self._llm_timeout_seconds is not None:
+                    raw_events = await asyncio.wait_for(
+                        _collect_stream(), timeout=self._llm_timeout_seconds
+                    )
+                else:
+                    raw_events = await _collect_stream()
+                self._circuit_breaker.record_success()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._circuit_breaker.record_failure()
+                raise
+
+            # Process collected events.
+            for event in raw_events:
                 if event.type == "text" and event.text:
                     iter_text.append(event.text)
                     yield event

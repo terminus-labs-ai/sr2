@@ -18,6 +18,10 @@ import time
 from enum import Enum
 
 
+class CircuitBreakerOpenError(Exception):
+    """Raised when a request is rejected because the circuit breaker is open."""
+
+
 class CircuitState(Enum):
     CLOSED = "closed"
     OPEN = "open"

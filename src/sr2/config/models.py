@@ -61,3 +61,6 @@ class PipelineConfig(BaseModel):
   enable_overflow_detection: bool = True
   max_tool_iterations: int = 25
   max_parallel_tools: int | None = None
+  llm_timeout_seconds: float | None = None
+  circuit_breaker_failure_threshold: int = 3
+  circuit_breaker_recovery_timeout: float = 60.0

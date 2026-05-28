@@ -15,7 +15,7 @@ from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import CompilationTarget
 from sr2.pipeline.models import ResolvedContent, TransformationResult
-from sr2.pipeline.protocols import Resolver, TokenCounter, ToolProvider, Transformer
+from sr2.pipeline.protocols import Component, ComponentResult, Resolver, TokenCounter, ToolProvider, Transformer
 from sr2.pipeline.provenance import Entry, InMemoryProvenanceStore, ProvenanceStore
 
 from sr2.pipeline.tracing import FiringRecord
@@ -41,6 +41,7 @@ class Layer:
         token_threshold_pct: float | None = None,
         tool_providers: list | None = None,
         tracer: "Tracer | None" = None,
+        components: list | None = None,
     ) -> None:
         self.name = name
         self.target = target
@@ -50,6 +51,7 @@ class Layer:
         self.resolvers = resolvers
         self.transformers = transformers
         self.tool_providers = list(tool_providers) if tool_providers is not None else []
+        self.components: list = list(components) if components is not None else []
         self._token_counter = token_counter
         self._event_bus = event_bus
         self._provenance_store: ProvenanceStore = (
@@ -87,9 +89,9 @@ class Layer:
 
     @property
     def subscriptions(self) -> list[EventSubscription]:
-        """All event subscriptions from this layer's resolvers, transformers, and tool providers."""
+        """All event subscriptions from this layer's resolvers, transformers, tool providers, and custom components."""
         subs: list[EventSubscription] = []
-        for comp in [*self.resolvers, *self.transformers, *self.tool_providers]:
+        for comp in [*self.resolvers, *self.transformers, *self.tool_providers, *self.components]:
             subs.extend(comp.subscriptions)
         return subs
 
@@ -97,7 +99,7 @@ class Layer:
 
     def is_done(self) -> bool:
         """True when all components are idle (never fired) or exhausted (hit max_executions)."""
-        for comp in [*self.resolvers, *self.transformers, *self.tool_providers]:
+        for comp in [*self.resolvers, *self.transformers, *self.tool_providers, *self.components]:
             if comp.execution_count > 0 and comp.execution_count < comp.max_executions:
                 return False
         return True
@@ -281,6 +283,18 @@ class Layer:
                 ):
                     continue
                 await self._fire_component(comp=tp, kind="tool_provider", events=events)
+
+            # --- Custom Components (OCP extension point) ---
+            for comp in self.components:
+                if comp.execution_count >= comp.max_executions:
+                    continue
+                if not any(
+                    s.matches(e)
+                    for s in comp.subscriptions
+                    for e in events
+                ):
+                    continue
+                await comp.run(self, events)
 
             # --- Budget check ---
             self.check_budget()
