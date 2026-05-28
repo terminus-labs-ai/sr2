@@ -1148,7 +1148,7 @@ class TestSR2ProvenanceStore:
             token_counter=CharacterTokenCounter(),
         )
 
-        assert isinstance(sr2._engine._provenance_store, InMemoryProvenanceStore)
+        assert isinstance(sr2.provenance_store, InMemoryProvenanceStore)
 
     def test_explicit_provenance_store_used_as_is(self):
         """SR2(provenance_store=store) → engine._provenance_store is the exact object."""
@@ -1162,7 +1162,7 @@ class TestSR2ProvenanceStore:
             provenance_store=custom_store,
         )
 
-        assert sr2._engine._provenance_store is custom_store
+        assert sr2.provenance_store is custom_store
 
     def test_provided_store_satisfies_protocol(self):
         """SR2(provenance_store=InMemoryProvenanceStore()) → store satisfies ProvenanceStore."""
@@ -1176,7 +1176,7 @@ class TestSR2ProvenanceStore:
             provenance_store=store,
         )
 
-        assert isinstance(sr2._engine._provenance_store, ProvenanceStore)
+        assert isinstance(sr2.provenance_store, ProvenanceStore)
 
 
 class TestTransformerConfigError:
@@ -1364,6 +1364,6 @@ class TestSR2RoundTrip:
             provenance_store=store,
         )
 
-        assert isinstance(sr2._engine._provenance_store, ProvenanceStore)
+        assert isinstance(sr2.provenance_store, ProvenanceStore)
 
         await store.close()

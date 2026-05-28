@@ -5,7 +5,7 @@ Covers:
 - Registry raises PluginNotFoundError for unknown extractor names
 - MemoryExtractionTransformer.build() uses config 'extractor' key to select via registry
 - MemoryExtractionTransformer.build() defaults to 'rule_based' when 'extractor' absent from config
-- deps.extras['memory_extractor'] override takes precedence over registry lookup
+- deps.memory_extractor typed field takes precedence over registry lookup
 """
 
 from __future__ import annotations
@@ -44,12 +44,10 @@ def make_config(extractor: str | None = None, max_executions: int = 10) -> Trans
 
 
 def make_deps(*, memory_store=None, memory_extractor=None) -> Dependencies:
-    ex: dict = {}
-    if memory_store is not None:
-        ex["memory_store"] = memory_store
-    if memory_extractor is not None:
-        ex["memory_extractor"] = memory_extractor
-    return Dependencies(extras=ex)
+    return Dependencies(  # type: ignore[call-arg]
+        memory_store=memory_store,
+        memory_extractor=memory_extractor,
+    )
 
 
 def _make_entry_point(name: str, cls: type, dist_name: str = "sr2") -> MagicMock:
@@ -182,11 +180,11 @@ class TestBuildUsesConfigExtractorKey:
 # ---------------------------------------------------------------------------
 
 
-class TestExtrasOverrideTakesPrecedence:
-    """deps.extras['memory_extractor'] takes precedence over registry lookup."""
+class TestTypedFieldTakesPrecedence:
+    """deps.memory_extractor typed field takes precedence over registry lookup."""
 
-    def test_extras_override_used_when_present(self):
-        """When memory_extractor is in extras, that instance is used — not the registry."""
+    def test_typed_field_used_when_present(self):
+        """When memory_extractor is set via typed field, it is used — not the registry."""
         from sr2.memory.extraction_transformer import MemoryExtractionTransformer
         from sr2.memory.schema import ExtractionResult
 
@@ -203,8 +201,8 @@ class TestExtrasOverrideTakesPrecedence:
 
         assert transformer._extractor is custom
 
-    def test_extras_override_beats_explicit_config_extractor_key(self):
-        """extras['memory_extractor'] wins even when config specifies an extractor name."""
+    def test_typed_field_beats_explicit_config_extractor_key(self):
+        """deps.memory_extractor wins even when config specifies an extractor name."""
         from sr2.memory.extraction_transformer import MemoryExtractionTransformer
         from sr2.memory.schema import ExtractionResult
 
@@ -215,18 +213,18 @@ class TestExtrasOverrideTakesPrecedence:
         store = make_store()
         custom = AnotherExtractor()
         deps = make_deps(memory_store=store, memory_extractor=custom)
-        config = make_config(extractor="rule_based")  # explicit, but should lose to extras
+        config = make_config(extractor="rule_based")  # explicit, but typed field wins
 
         transformer = MemoryExtractionTransformer.build(config, deps)
 
         assert transformer._extractor is custom
 
-    def test_registry_used_when_no_extras_override(self):
-        """When memory_extractor absent from extras, registry is used (not direct import)."""
+    def test_registry_used_when_no_typed_field(self):
+        """When memory_extractor absent from typed field, registry is used."""
         from sr2.memory.extraction_transformer import MemoryExtractionTransformer
 
         store = make_store()
-        deps = make_deps(memory_store=store)  # no memory_extractor in extras
+        deps = make_deps(memory_store=store)  # no memory_extractor
         config = make_config(extractor="rule_based")
 
         transformer = MemoryExtractionTransformer.build(config, deps)

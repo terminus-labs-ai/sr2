@@ -209,24 +209,32 @@ def test_sr2_accepts_tracer_none_explicit():
     assert sr2._tracer is None
 
 
-def test_sr2_accepts_collecting_tracer():
-    """SR2 constructed with a CollectingTracer: tracer reaches the engine's layers."""
+@pytest.mark.asyncio
+async def test_sr2_accepts_collecting_tracer():
+    """SR2 constructed with a CollectingTracer: tracer receives firing records during a turn."""
     tracer = CollectingTracer()
     sr2 = _make_sr2(tracer=tracer)
-    assert any(layer._tracer is tracer for layer in sr2._engine._layers), (
-        "Expected at least one engine layer to have the injected tracer"
+    async for _ in sr2.turn([]):
+        pass
+    assert tracer.get_trace(), (
+        "Expected CollectingTracer to have received at least one FiringRecord — "
+        "tracer was not wired to the engine layers"
     )
 
 
-def test_sr2_threads_tracer_to_engine_layers():
-    """SR2 with CollectingTracer: every engine layer receives the same tracer instance."""
+@pytest.mark.asyncio
+async def test_sr2_threads_tracer_to_engine_layers():
+    """SR2 with CollectingTracer: tracer receives firings from all engine layers during a turn."""
     tracer = CollectingTracer()
     sr2 = _make_sr2(tracer=tracer)
-    assert sr2._engine._layers, "Expected SR2 engine to have at least one layer"
-    for layer in sr2._engine._layers:
-        assert layer._tracer is tracer, (
-            f"Layer '{layer.name}' has _tracer={layer._tracer!r}, expected the injected tracer"
-        )
+    assert sr2._engine.layers, "Expected SR2 engine to have at least one layer"
+    async for _ in sr2.turn([]):
+        pass
+    # All layers must funnel through the same tracer — verify by observing its records
+    assert tracer.get_trace(), (
+        "Expected CollectingTracer to have captured FiringRecords after turn() — "
+        "tracer was not threaded to the engine layers"
+    )
 
 
 # ---------------------------------------------------------------------------

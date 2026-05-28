@@ -137,6 +137,15 @@ class SR2:
         )
 
     # ------------------------------------------------------------------
+    # Public inspection helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def provenance_store(self) -> "ProvenanceStore":
+        """Expose the active provenance store for testing and inspection."""
+        return self._engine.provenance_store
+
+    # ------------------------------------------------------------------
     # Session seeding
     # ------------------------------------------------------------------
 

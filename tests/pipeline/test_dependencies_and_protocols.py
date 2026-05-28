@@ -270,11 +270,14 @@ class TestDependenciesHasTypedMemoryStoreField:
     """Dependencies must expose `memory_store` as a first-class typed field."""
 
     def test_dependencies_has_memory_store_field(self):
-        """dataclasses.fields(Dependencies) includes a field named 'memory_store'."""
-        field_names = {f.name for f in dataclasses.fields(Dependencies)}
-        assert "memory_store" in field_names, (
-            f"Dependencies should have a typed 'memory_store' field. Current fields: {field_names}"
-        )
+        """When memory_store is passed to Dependencies, MemoryResolver.build() can find it."""
+        from sr2.memory.memory_resolver import MemoryResolver
+
+        store = InMemoryMemoryStore()
+        deps = Dependencies(memory_store=store)  # type: ignore[call-arg]
+        config = _make_resolver_config_typed()
+        result = MemoryResolver.build(config, deps)
+        assert result is not None
 
     def test_memory_store_field_defaults_to_none(self):
         deps = Dependencies()
@@ -302,10 +305,15 @@ class TestDependenciesHasTypedMemoryExtractorField:
     """Dependencies must expose `memory_extractor` as a first-class typed field."""
 
     def test_dependencies_has_memory_extractor_field(self):
-        field_names = {f.name for f in dataclasses.fields(Dependencies)}
-        assert "memory_extractor" in field_names, (
-            f"Dependencies should have a typed 'memory_extractor' field. Current fields: {field_names}"
-        )
+        """When memory_extractor is passed to Dependencies, MemoryExtractionTransformer.build() finds it."""
+        from sr2.memory.extraction_transformer import MemoryExtractionTransformer
+
+        store = InMemoryMemoryStore()
+        ext = _StubExtractor()
+        deps = Dependencies(memory_store=store, memory_extractor=ext)  # type: ignore[call-arg]
+        config = _make_transformer_config_typed()
+        result = MemoryExtractionTransformer.build(config, deps)
+        assert result is not None
 
     def test_memory_extractor_field_defaults_to_none(self):
         deps = Dependencies()
@@ -554,42 +562,40 @@ class TestExtrasNotRequiredForMemorySubsystem:
         assert transformer._extractor is ext
 
 
-class TestExtrasPathBackwardCompat:
-    """The extras dict path must continue to work after the typed-field fix."""
+class TestTypedFieldsOnly:
+    """After the extras-path removal, typed fields are the sole injection path."""
 
-    def test_extras_path_still_works_for_extraction_transformer(self):
+    def test_typed_field_works_for_extraction_transformer(self):
         from sr2.memory.extraction_transformer import MemoryExtractionTransformer
 
         store = InMemoryMemoryStore()
-        deps = Dependencies(extras={"memory_store": store})
+        deps = Dependencies(memory_store=store)  # type: ignore[call-arg]
         config = _make_transformer_config_typed()
 
         transformer = MemoryExtractionTransformer.build(config, deps)
         assert transformer._store is store
 
-    def test_extras_path_still_works_for_memory_resolver(self):
+    def test_typed_field_works_for_memory_resolver(self):
         from sr2.memory.memory_resolver import MemoryResolver
 
         store = InMemoryMemoryStore()
-        deps = Dependencies(extras={"memory_store": store})
+        deps = Dependencies(memory_store=store)  # type: ignore[call-arg]
         config = _make_resolver_config_typed()
 
         resolver = MemoryResolver.build(config, deps)
         assert resolver._store is store
 
-    def test_typed_field_takes_precedence_over_extras(self):
+    def test_typed_field_identity_preserved_through_build(self):
         from sr2.memory.extraction_transformer import MemoryExtractionTransformer
 
-        typed_store = InMemoryMemoryStore()
-        extras_store = InMemoryMemoryStore()
+        store = InMemoryMemoryStore()
         deps = Dependencies(  # type: ignore[call-arg]
-            memory_store=typed_store,
-            extras={"memory_store": extras_store},
+            memory_store=store,
         )
         config = _make_transformer_config_typed()
 
         transformer = MemoryExtractionTransformer.build(config, deps)
-        assert transformer._store is typed_store
+        assert transformer._store is store
 
 
 # ===========================================================================
@@ -798,7 +804,7 @@ class TestSR2BackwardCompat:
         config = _make_minimal_config_extras("static")
         with _patch("sr2.plugins.registry.entry_points", side_effect=_make_static_ep_side_effect_extras):
             sr2 = _make_sr2_extras(config)
-            assert len(sr2._engine._layers) == 1
+            assert len(sr2._engine.layers) == 1
 
 
 @pytest.mark.usefixtures("reset_plugin_registries_extras")

@@ -176,7 +176,7 @@ def _all_message_text(request: CompletionRequest) -> str:
 def _find_session_resolvers(sr2_instance) -> list[SessionResolver]:
     """Walk engine layers and collect all SessionResolver instances."""
     results = []
-    for layer in sr2_instance._engine._layers:
+    for layer in sr2_instance._engine.layers:
         for resolver in layer.resolvers:
             if isinstance(resolver, SessionResolver):
                 results.append(resolver)
@@ -912,7 +912,7 @@ class TestSR2SeedSessionNoPrivateAccess:
         )
 
         resolvers: list[SessionResolver] = []
-        for layer in sr2._engine._layers:
+        for layer in sr2._engine.layers:
             for r in layer.resolvers:
                 if isinstance(r, SessionResolver):
                     resolvers.append(r)

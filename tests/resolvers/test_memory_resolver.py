@@ -1,10 +1,10 @@
 """Tests for MemoryResolver — build(), resolve(), and DIP enforcement.
 
 Covers:
-  1. build() — happy path: returns MemoryResolver when store is in deps.extras
-  2. build() — raises ConfigError when memory_store is absent from deps.extras
-  3. build() — raises ConfigError when extras is empty dict
-  4. build() — raises ConfigError when extras is empty (default Dependencies)
+  1. build() — happy path: returns MemoryResolver when store is in deps.memory_store
+  2. build() — raises ConfigError when memory_store is absent from deps
+  3. build() — raises ConfigError when deps is empty dict
+  4. build() — raises ConfigError when deps is empty (default Dependencies)
   5. Construction — stores the injected MemoryStore (not a concrete fallback)
   6. resolve() — returns empty content when no user_input event
   7. resolve() — returns empty content when query matches nothing
@@ -52,9 +52,9 @@ def make_config(**kwargs) -> ResolverConfig:
 
 
 def make_deps_with_store(store: MemoryStore | None = None) -> Dependencies:
-    """Build Dependencies with a memory_store in extras."""
+    """Build Dependencies with a memory_store via typed field."""
     s = store if store is not None else InMemoryMemoryStore()
-    return Dependencies(extras={"memory_store": s})
+    return Dependencies(memory_store=s)  # type: ignore[call-arg]
 
 
 def make_user_input_event(data) -> Event:
@@ -76,7 +76,7 @@ def make_memory(content: str, scope: MemoryScope = MemoryScope.PRIVATE, tags: li
 
 class TestMemoryResolverBuildHappyPath:
     def test_build_returns_memory_resolver(self):
-        """build() returns a MemoryResolver when memory_store is in extras."""
+        """build() returns a MemoryResolver when memory_store is in typed field."""
         config = make_config()
         deps = make_deps_with_store()
         result = MemoryResolver.build(config, deps)
@@ -110,7 +110,7 @@ class TestMemoryResolverBuildHappyPath:
 
 class TestMemoryResolverBuildConfigError:
     def test_build_raises_config_error_when_store_absent(self):
-        """build() raises ConfigError when memory_store is not in deps.extras."""
+        """build() raises ConfigError when memory_store is not in deps."""
         config = make_config()
         deps = Dependencies()  # no extras at all
         with pytest.raises(ConfigError):
@@ -131,14 +131,14 @@ class TestMemoryResolverBuildConfigError:
         )
 
     def test_build_raises_config_error_when_extras_empty(self):
-        """build() raises ConfigError when extras is an empty dict."""
+        """build() raises ConfigError when deps has no memory_store."""
         config = make_config()
-        deps = Dependencies(extras={})
+        deps = Dependencies()
         with pytest.raises(ConfigError):
             MemoryResolver.build(config, deps)
 
     def test_build_config_error_message_mentions_memory_store(self):
-        """ConfigError message must reference 'memory_store' or 'memory'."""
+        """ConfigError message must reference 'memory_store'."""
         config = make_config()
         deps = Dependencies()
         with pytest.raises(ConfigError) as exc_info:

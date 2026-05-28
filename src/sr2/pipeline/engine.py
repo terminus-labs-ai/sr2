@@ -301,3 +301,13 @@ class PipelineEngine:
     def bus(self) -> EventBus:
         """Expose the bus for testing and inspection."""
         return self._bus
+
+    @property
+    def layers(self) -> list:
+        """Read-only view of the engine's layer list (for inspection and testing)."""
+        return list(self._layers)
+
+    @property
+    def provenance_store(self) -> "ProvenanceStore":
+        """Expose the active provenance store (for inspection and testing)."""
+        return self._provenance_store

@@ -22,13 +22,11 @@ from sr2.pipeline.models import TransformationResult
 class MemoryExtractionTransformer:
     """Extract memories from completed assistant responses and persist them.
 
-    Dependencies resolved in priority order (typed field > extras fallback):
+    Dependencies resolved from typed fields only:
     - ``memory_store`` (required): a MemoryStore implementation — raises
-      ConfigError at build time if absent. Pass via ``deps.memory_store``
-      (preferred) or ``deps.extras["memory_store"]`` (backward-compat).
+      ConfigError at build time if absent. Pass via ``deps.memory_store``.
     - ``memory_extractor`` (optional): a MemoryExtractor implementation.
-      Pass via ``deps.memory_extractor`` (preferred) or
-      ``deps.extras["memory_extractor"]`` (backward-compat).
+      Pass via ``deps.memory_extractor``.
       Defaults to RuleBasedExtractor() when absent (forward-compatible).
     """
 
@@ -63,26 +61,19 @@ class MemoryExtractionTransformer:
     ) -> "MemoryExtractionTransformer":
         """Construct from a TransformerConfig and a Dependencies container.
 
-        Resolution order for each dep:
-        1. Typed field on ``deps`` (preferred — explicit, type-checked).
-        2. ``deps.extras`` string-key fallback (backward-compat).
+        Reads deps via typed fields only:
+        - ``deps.memory_store`` (required)
+        - ``deps.memory_extractor`` (optional, falls back to registry default)
         """
-        # Resolve memory_store: typed field first, extras fallback
-        store: MemoryStore | None = getattr(deps, "memory_store", None)
-        if store is None:
-            store = deps.extras.get("memory_store")  # type: ignore[assignment]
+        store: MemoryStore | None = deps.memory_store
 
         if store is None:
             raise ConfigError(
                 "transformer 'memory_extraction' requires a memory_store. "
-                "Pass it as deps.memory_store (preferred) or "
-                "deps.extras['memory_store'] (legacy)."
+                "Pass it as deps.memory_store."
             )
 
-        # Resolve memory_extractor: typed field first, extras fallback, registry default
-        extractor: MemoryExtractor | None = getattr(deps, "memory_extractor", None)
-        if extractor is None:
-            extractor = deps.extras.get("memory_extractor")  # type: ignore[assignment]
+        extractor: MemoryExtractor | None = deps.memory_extractor
         if extractor is None:
             extractor_name: str = config.config.get("extractor", "rule_based")
             extractor = EXTRACTORS.get(extractor_name)()

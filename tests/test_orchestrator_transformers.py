@@ -178,7 +178,7 @@ class TestAC9EmptyOrAbsentTransformers:
         config = _make_minimal_config(layer_transformers=None)
 
         sr2 = _make_sr2(config)
-        layer = sr2._engine._layers[0]
+        layer = sr2._engine.layers[0]
 
         assert layer.transformers == []
 
@@ -187,7 +187,7 @@ class TestAC9EmptyOrAbsentTransformers:
         config = _make_minimal_config(layer_transformers=[])
 
         sr2 = _make_sr2(config)
-        layer = sr2._engine._layers[0]
+        layer = sr2._engine.layers[0]
 
         assert layer.transformers == []
 
@@ -216,7 +216,7 @@ class TestAC9EmptyOrAbsentTransformers:
         sr2 = _make_sr2(config)
         assert sr2 is not None
 
-        for layer in sr2._engine._layers:
+        for layer in sr2._engine.layers:
             assert layer.transformers == []
 
 
@@ -265,7 +265,7 @@ class TestAC11NoRegressions:
 
         sr2 = _make_sr2(config)
         assert sr2 is not None
-        assert len(sr2._engine._layers) == 2
+        assert len(sr2._engine.layers) == 2
 
     def test_unknown_resolver_type_raises_plugin_not_found_error(self):
         """Unknown resolver type raises PluginNotFoundError (cutover from ValueError)."""

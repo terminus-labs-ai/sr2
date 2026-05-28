@@ -226,18 +226,18 @@ class TestMemoryResolver:
             assert count <= 2
 
     async def test_resolver_build_with_custom_store(self):
-        """Build pulls custom MemoryStore from deps extras."""
+        """Build pulls custom MemoryStore from deps typed field."""
         custom_store = InMemoryMemoryStore()
         custom_store.save(Memory(content="custom store memory", scope=MemoryScope.SHARED, tags=["test"]))
 
         resolver = MemoryResolver.build(
             ResolverConfig(type="memory"),
-            Dependencies(extras={"memory_store": custom_store}),
+            Dependencies(memory_store=custom_store),  # type: ignore[call-arg]
         )
         assert resolver._store is custom_store
 
     async def test_resolver_build_requires_store_in_extras(self):
-        """Build raises ConfigError when no memory_store is provided in extras."""
+        """Build raises ConfigError when no memory_store is provided."""
         import pytest
         from sr2.config.models import ConfigError
         with pytest.raises(ConfigError):

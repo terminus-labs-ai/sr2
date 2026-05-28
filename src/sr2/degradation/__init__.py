@@ -5,13 +5,13 @@ Public API:
   shedding        — shed()
   circuit_breaker — CircuitBreaker, CircuitState
   fallback        — FallbackProvider
-  registry        — DegradationPolicy, DegradationPolicyRegistry
+  registry        — DegradationPolicy, DegradationPolicyStore, DegradationPolicyRegistry
 """
 
 from sr2.degradation.circuit_breaker import CircuitBreaker, CircuitState
 from sr2.degradation.fallback import FallbackProvider
 from sr2.degradation.ladder import DegradationLadder, DegradationLevel
-from sr2.degradation.registry import DegradationPolicy, DegradationPolicyRegistry
+from sr2.degradation.registry import DegradationPolicy, DegradationPolicyRegistry, DegradationPolicyStore
 from sr2.degradation.shedding import shed
 
 __all__ = [
@@ -22,5 +22,6 @@ __all__ = [
     "DegradationLevel",
     "DegradationPolicy",
     "DegradationPolicyRegistry",
+    "DegradationPolicyStore",
     "shed",
 ]

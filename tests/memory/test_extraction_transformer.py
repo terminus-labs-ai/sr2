@@ -1,9 +1,9 @@
 """Tests for MemoryExtractionTransformer.
 
 Acceptance criteria covered:
-  - build() raises ConfigError when memory_store absent from deps.extras
-  - build() succeeds when memory_store present
-  - build() uses memory_extractor from extras if present, else defaults to RuleBasedExtractor
+  - build() raises ConfigError when memory_store absent from deps
+  - build() succeeds when memory_store present via typed field
+  - build() uses memory_extractor from typed field if present, else defaults to RuleBasedExtractor
   - subscriptions() returns subscription to assistant_response.COMPLETED
   - transform() extracts memories from response text and saves to store
   - transform() returns TransformationResult with content=None (pass-through)
@@ -48,15 +48,11 @@ def make_deps(
     memory_extractor=None,
     extras: dict | None = None,
 ) -> Dependencies:
-    """Build Dependencies with given extras."""
-    ex: dict = {}
-    if memory_store is not None:
-        ex["memory_store"] = memory_store
-    if memory_extractor is not None:
-        ex["memory_extractor"] = memory_extractor
-    if extras:
-        ex.update(extras)
-    return Dependencies(extras=ex)
+    """Build Dependencies using typed fields."""
+    return Dependencies(  # type: ignore[call-arg]
+        memory_store=memory_store,
+        memory_extractor=memory_extractor,
+    )
 
 
 def make_completed_event(text: str = "I prefer dark mode") -> Event:
@@ -112,10 +108,10 @@ class EmptyExtractor(StubExtractor):
 
 
 class TestBuildConfigError:
-    """build() raises ConfigError when memory_store is absent from deps.extras."""
+    """build() raises ConfigError when memory_store is absent from deps."""
 
     def test_raises_config_error_when_store_absent(self):
-        """ConfigError raised when deps.extras has no memory_store key."""
+        """ConfigError raised when deps has no memory_store."""
         deps = make_deps()  # no memory_store
         config = make_config()
 
@@ -151,9 +147,9 @@ class TestBuildConfigError:
 
         assert "memory_store" in str(exc_info.value).lower()
 
-    def test_empty_extras_also_raises(self):
-        """Empty extras dict raises ConfigError (not just missing key)."""
-        deps = Dependencies(extras={})
+    def test_empty_deps_also_raises(self):
+        """Empty Dependencies raises ConfigError when memory_store is absent."""
+        deps = Dependencies()
         config = make_config()
 
         with pytest.raises(ConfigError):
@@ -167,7 +163,7 @@ class TestBuildConfigError:
 
 
 class TestBuildSuccess:
-    """build() succeeds when memory_store is present in deps.extras."""
+    """build() succeeds when memory_store is present in deps typed field."""
 
     def test_build_succeeds_with_memory_store(self):
         """build() does not raise when memory_store is in deps.extras."""
@@ -215,7 +211,7 @@ class TestBuildSuccess:
 
 
 class TestExtractorInjection:
-    """build() uses memory_extractor from extras if present, else defaults to RuleBasedExtractor."""
+    """build() uses memory_extractor from typed field if present, else defaults to RuleBasedExtractor."""
 
     def test_uses_provided_extractor(self):
         """When memory_extractor is in extras, it is used (not RuleBasedExtractor)."""

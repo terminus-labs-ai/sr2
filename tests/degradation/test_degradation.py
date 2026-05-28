@@ -511,36 +511,36 @@ class TestFallbackContent:
 
 
 class TestPolicyRegistry:
-    """DegradationPolicyRegistry stores and retrieves per-provider policies."""
+    """DegradationPolicyStore stores and retrieves per-provider policies."""
 
     def test_register_and_retrieve_policy(self):
         """A registered policy can be retrieved by provider name."""
-        from sr2.degradation.registry import DegradationPolicyRegistry, DegradationPolicy
+        from sr2.degradation.registry import DegradationPolicyStore, DegradationPolicy
 
-        registry = DegradationPolicyRegistry()
+        store = DegradationPolicyStore()
         policy = DegradationPolicy(
             provider_name="memory",
             fallback_mode="none",
             circuit_breaker_threshold=3,
             priority=5,
         )
-        registry.register(policy)
-        retrieved = registry.get("memory")
+        store.register(policy)
+        retrieved = store.get("memory")
         assert retrieved is not None
         assert retrieved.provider_name == "memory"
 
     def test_get_unknown_provider_returns_none(self):
         """Retrieving a policy for an unknown provider returns None."""
-        from sr2.degradation.registry import DegradationPolicyRegistry
+        from sr2.degradation.registry import DegradationPolicyStore
 
-        registry = DegradationPolicyRegistry()
-        assert registry.get("nonexistent") is None
+        store = DegradationPolicyStore()
+        assert store.get("nonexistent") is None
 
     def test_register_overwrites_existing(self):
         """Re-registering a provider replaces the old policy."""
-        from sr2.degradation.registry import DegradationPolicyRegistry, DegradationPolicy
+        from sr2.degradation.registry import DegradationPolicyStore, DegradationPolicy
 
-        registry = DegradationPolicyRegistry()
+        store = DegradationPolicyStore()
         old_policy = DegradationPolicy(
             provider_name="tools",
             fallback_mode="none",
@@ -553,21 +553,21 @@ class TestPolicyRegistry:
             circuit_breaker_threshold=5,
             priority=2,
         )
-        registry.register(old_policy)
-        registry.register(new_policy)
-        result = registry.get("tools")
+        store.register(old_policy)
+        store.register(new_policy)
+        result = store.get("tools")
         assert result.circuit_breaker_threshold == 5
 
     def test_list_all_returns_registered_policies(self):
         """list_all() returns all registered policies."""
-        from sr2.degradation.registry import DegradationPolicyRegistry, DegradationPolicy
+        from sr2.degradation.registry import DegradationPolicyStore, DegradationPolicy
 
-        registry = DegradationPolicyRegistry()
+        store = DegradationPolicyStore()
         p1 = DegradationPolicy("memory", "none", 3, priority=5)
         p2 = DegradationPolicy("tools", "static", 5, priority=2)
-        registry.register(p1)
-        registry.register(p2)
-        all_policies = registry.list_all()
+        store.register(p1)
+        store.register(p2)
+        all_policies = store.list_all()
         assert len(all_policies) == 2
         names = {p.provider_name for p in all_policies}
         assert names == {"memory", "tools"}
@@ -745,35 +745,38 @@ class TestDegradationPolicyDataclassRetained:
         assert policy.priority == 3
 
     def test_degradation_policy_is_not_discovered_via_entry_points(self):
-        """DegradationPolicy instances are registered directly, not via entry points."""
-        registry = DegradationPolicyRegistry()
+        """DegradationPolicy instances are registered directly via DegradationPolicyStore."""
+        from sr2.degradation.registry import DegradationPolicyStore
+        store = DegradationPolicyStore()
         policy = DegradationPolicy(
             provider_name="tools",
             fallback_mode="cached",
             circuit_breaker_threshold=3,
             priority=1,
         )
-        registry.register(policy)
-        retrieved = registry.get("tools")
+        store.register(policy)
+        retrieved = store.get("tools")
         assert retrieved is not None
         assert retrieved.provider_name == "tools"
 
     def test_register_and_get_policy_config_unchanged(self):
-        """Existing policy config store API (register/get) continues to work."""
-        registry = DegradationPolicyRegistry()
+        """DegradationPolicyStore register/get API works correctly."""
+        from sr2.degradation.registry import DegradationPolicyStore
+        store = DegradationPolicyStore()
         p1 = DegradationPolicy("memory", "none", 3, priority=5)
         p2 = DegradationPolicy("tools", "static", 5, priority=2)
-        registry.register(p1)
-        registry.register(p2)
-        assert registry.get("memory").fallback_mode == "none"
-        assert registry.get("tools").circuit_breaker_threshold == 5
+        store.register(p1)
+        store.register(p2)
+        assert store.get("memory").fallback_mode == "none"
+        assert store.get("tools").circuit_breaker_threshold == 5
 
     def test_list_all_returns_config_objects_not_strategy_classes(self):
         """list_all() returns DegradationPolicy config objects, not strategy classes."""
-        registry = DegradationPolicyRegistry()
+        from sr2.degradation.registry import DegradationPolicyStore
+        store = DegradationPolicyStore()
         p1 = DegradationPolicy("memory", "none", 3, priority=5)
-        registry.register(p1)
-        results = registry.list_all()
+        store.register(p1)
+        results = store.list_all()
         assert len(results) == 1
         assert isinstance(results[0], DegradationPolicy)
 
@@ -788,6 +791,11 @@ class TestDegradationPublicApiStability:
         """DegradationPolicyRegistry is importable from sr2.degradation."""
         from sr2.degradation import DegradationPolicyRegistry as DPR
         assert DPR is not None
+
+    def test_degradation_policy_store_importable_from_sr2_degradation(self):
+        """DegradationPolicyStore is importable from sr2.degradation."""
+        from sr2.degradation import DegradationPolicyStore as DPS
+        assert DPS is not None
 
     def test_plugin_registry_importable_from_sr2_plugins(self):
         """PluginRegistry remains accessible."""

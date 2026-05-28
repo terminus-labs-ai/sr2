@@ -671,7 +671,7 @@ class TestSR2EndToEndWithSummarize:
             token_counter=TOKEN_COUNTER,
         )
 
-        layers = instance._engine._layers
+        layers = instance._engine.layers
         assert len(layers) == 2
         # system layer: no transformers
         assert len(layers[0].transformers) == 0

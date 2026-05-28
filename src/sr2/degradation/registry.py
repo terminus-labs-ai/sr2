@@ -1,8 +1,8 @@
 """Policy registry for degradation configuration.
 
 DegradationPolicy holds per-provider degradation settings.
-DegradationPolicyRegistry stores and retrieves them by provider name,
-and also delegates strategy-class discovery to PluginRegistry.
+DegradationPolicyStore stores and retrieves them by provider name.
+DegradationPolicyRegistry discovers strategy classes via entry points.
 """
 
 from __future__ import annotations
@@ -42,36 +42,51 @@ class DegradationPolicy:
     priority: int
 
 
+class DegradationPolicyStore:
+    """Stores DegradationPolicy config objects keyed by provider name.
+
+    Single responsibility: runtime configuration object storage.
+    Strategy-class discovery lives in :class:`DegradationPolicyRegistry`.
+    """
+
+    def __init__(self) -> None:
+        self._policies: dict[str, DegradationPolicy] = {}
+
+    def register(self, policy: DegradationPolicy) -> None:
+        """Add or replace the policy for *policy.provider_name*."""
+        self._policies[policy.provider_name] = policy
+
+    def get(self, provider_name: str) -> DegradationPolicy | None:
+        """Return the policy for *provider_name*, or None if not registered."""
+        return self._policies.get(provider_name)
+
+    def list_all(self) -> list[DegradationPolicy]:
+        """Return all registered policies (order not guaranteed)."""
+        return list(self._policies.values())
+
+
 class DegradationPolicyRegistry:
-    """Stores DegradationPolicy config objects and delegates strategy-class
-    discovery to PluginRegistry.
+    """Discovers and validates degradation strategy classes via entry points.
 
-    Two orthogonal concerns coexist in this class:
+    Single responsibility: plugin discovery for the ``sr2.degradation_policies``
+    entry-point group via :class:`~sr2.plugins.registry.PluginRegistry`.
 
-    * **Config store** (``register`` / ``get`` / ``list_all``): holds
-      :class:`DegradationPolicy` dataclass instances keyed by provider name.
-      These are runtime configuration objects, not plugin classes.
-
-    * **Strategy registry** (``get_strategy`` / ``list_strategy_names``):
-      delegates to an internal :class:`~sr2.plugins.registry.PluginRegistry`
-      that discovers degradation strategy *classes* from the
-      ``sr2.degradation_policies`` entry-point group.
+    For per-provider config storage use :class:`DegradationPolicyStore`.
     """
 
     _ENTRY_POINT_GROUP = "sr2.degradation_policies"
 
     def __init__(self) -> None:
-        # Config-object store (hand-rolled, keyed by provider_name)
-        self._policies: dict[str, DegradationPolicy] = {}
-
-        # Strategy-class registry (entry-point discovery, lazy)
         self._registry: PluginRegistry[DegradationStrategyProtocol] = PluginRegistry(
             self._ENTRY_POINT_GROUP,
             DegradationStrategyProtocol,
         )
+        # Config-object store delegated to DegradationPolicyStore.
+        # Kept here for backward compatibility — prefer DegradationPolicyStore directly.
+        self._policies: dict[str, DegradationPolicy] = {}
 
     # ------------------------------------------------------------------
-    # Config-object API (unchanged)
+    # Backward-compat config-object API (delegates to internal dict)
     # ------------------------------------------------------------------
 
     def register(self, policy: DegradationPolicy) -> None:
