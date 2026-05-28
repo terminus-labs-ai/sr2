@@ -27,7 +27,7 @@ from sr2.config.models import (
     PipelineConfig,
     ResolverConfig,
 )
-from sr2.models import TextBlock, TokenUsage
+from sr2.models import TextBlock, ToolUseBlock, TokenUsage
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.protocols.llm import (
     CompletionRequest,
@@ -515,6 +515,162 @@ class TestPostProcess:
 # ---------------------------------------------------------------------------
 # 7. Error handling
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 8. Regression: sr2-9 — tool_use stream events must appear in assistant_response
+# ---------------------------------------------------------------------------
+# These tests are INTENTIONALLY RED against the current implementation.
+# orchestrator.turn() accumulates only text events and builds a text-only
+# CompletionResponse.content, dropping all tool_use StreamEvents.
+# They will turn green once sr2-9 is fixed.
+
+
+class TestTurnToolUseRegression:
+    """Regression tests for sr2-9: tool_use StreamEvents dropped from assistant_response."""
+
+    @pytest.mark.asyncio
+    async def test_assistant_response_contains_tool_use_block(self):
+        """CompletionResponse.content must include a ToolUseBlock when the stream yields tool_use.
+
+        Stream: text + tool_use + end.
+        Expected: content has both a TextBlock and a ToolUseBlock.
+        Current behaviour (BUG): content is text-only — test is RED.
+        """
+        from sr2.orchestrator import SR2
+        from sr2.pipeline.events import Event
+
+        tool_stream = MockLLM(events=[
+            StreamEvent(type="text", text="Let me check"),
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ])
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": tool_stream},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        captured: list[Event] = []
+        sr2._engine.bus.subscribe("assistant_response", lambda e: captured.append(e))
+
+        async for _ in sr2.turn(make_user_input()):
+            pass
+
+        await asyncio.sleep(0)
+
+        assert len(captured) >= 1
+        response: CompletionResponse = captured[0].data
+
+        tool_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
+        assert len(tool_blocks) == 1, (
+            f"Expected 1 ToolUseBlock in content, got {len(tool_blocks)}. "
+            f"Full content: {response.content!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_tool_use_block_has_correct_id_name_input(self):
+        """ToolUseBlock in the response must carry the id, name, and input from the stream event.
+
+        Current behaviour (BUG): no ToolUseBlock is present — test is RED.
+        """
+        from sr2.orchestrator import SR2
+        from sr2.pipeline.events import Event
+
+        tool_stream = MockLLM(events=[
+            StreamEvent(type="text", text="Let me check"),
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ])
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": tool_stream},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        captured: list[Event] = []
+        sr2._engine.bus.subscribe("assistant_response", lambda e: captured.append(e))
+
+        async for _ in sr2.turn(make_user_input()):
+            pass
+
+        await asyncio.sleep(0)
+
+        assert len(captured) >= 1
+        response: CompletionResponse = captured[0].data
+
+        tool_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
+        assert len(tool_blocks) == 1, (
+            f"Expected 1 ToolUseBlock, got {len(tool_blocks)}. content={response.content!r}"
+        )
+        tb = tool_blocks[0]
+        assert tb.id == "tc_1", f"Expected id='tc_1', got {tb.id!r}"
+        assert tb.name == "get_weather", f"Expected name='get_weather', got {tb.name!r}"
+        assert tb.input == {"location": "Oslo"}, f"Expected input={{'location': 'Oslo'}}, got {tb.input!r}"
+
+    @pytest.mark.asyncio
+    async def test_assistant_response_retains_text_block_alongside_tool_use(self):
+        """TextBlock must also be present in content when stream has both text and tool_use.
+
+        Current behaviour (BUG): text IS present (text accumulation works), but
+        ToolUseBlock is missing — the second assertion is RED.
+        """
+        from sr2.orchestrator import SR2
+        from sr2.pipeline.events import Event
+
+        tool_stream = MockLLM(events=[
+            StreamEvent(type="text", text="Let me check"),
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ])
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": tool_stream},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        captured: list[Event] = []
+        sr2._engine.bus.subscribe("assistant_response", lambda e: captured.append(e))
+
+        async for _ in sr2.turn(make_user_input()):
+            pass
+
+        await asyncio.sleep(0)
+
+        assert len(captured) >= 1
+        response: CompletionResponse = captured[0].data
+
+        text_blocks = [b for b in response.content if isinstance(b, TextBlock)]
+        assert len(text_blocks) >= 1, (
+            f"Expected at least 1 TextBlock in content, got {len(text_blocks)}. "
+            f"Full content: {response.content!r}"
+        )
+        full_text = "".join(b.text for b in text_blocks)
+        assert "Let me check" in full_text, f"Expected 'Let me check' in text, got {full_text!r}"
+
+        tool_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
+        assert len(tool_blocks) == 1, (
+            f"Expected 1 ToolUseBlock alongside TextBlock, got {len(tool_blocks)}. "
+            f"Full content: {response.content!r}"
+        )
 
 
 class TestTurnErrorHandling:
