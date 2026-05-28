@@ -12,7 +12,7 @@ from typing import Any, Callable, TYPE_CHECKING
 
 from ulid import ULID
 
-from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig, ToolProviderConfig, TransformerConfig
+from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig, ToolLoopLimitError, ToolProviderConfig, TransformerConfig
 from sr2.pipeline.provenance import ProvenanceStore
 
 if TYPE_CHECKING:
@@ -86,6 +86,9 @@ def _build_layer(layer_config: LayerConfig, token_counter: TokenCounter, deps: D
     )
 
 
+_DEFAULT_MAX_TOOL_ITERATIONS = 25
+
+
 class SR2:
     """Top-level orchestrator: turns a PipelineConfig into a streaming turn loop."""
 
@@ -101,6 +104,7 @@ class SR2:
         memory_store: "MemoryStore | None" = None,
         memory_extractor: "MemoryExtractor | None" = None,
         tool_executor: "ToolExecutor | None" = None,
+        max_tool_iterations: int = _DEFAULT_MAX_TOOL_ITERATIONS,
     ) -> None:
         # Normalise: bare LLMCallable → single-entry dict under "default".
         # Dict form: no "default" key requirement — callers may use any key names.
@@ -117,6 +121,7 @@ class SR2:
         self._token_counter = token_counter
         self._tracer = tracer
         self._tool_executor: ToolExecutor | None = tool_executor
+        self._max_tool_iterations = max_tool_iterations
         self.session_id = session_id if session_id is not None else str(ULID())
 
         deps = Dependencies(
@@ -152,68 +157,196 @@ class SR2:
     # ------------------------------------------------------------------
 
     async def turn(self, user_input: list) -> AsyncIterator[StreamEvent]:
-        """Async generator: runs the pipeline and streams LLM events."""
+        """Async generator: runs the pipeline and streams LLM events.
+
+        Implements the multi-iteration tool loop (FR3):
+          start_turn → stream LLM → detect tool_use → execute tools →
+          continue_turn → repeat until no tool_use → end_turn
+
+        FR11: post_process is awaited once after the full loop (not per iteration).
+        FR14: exactly one StreamEvent(type="end") is emitted to the caller.
+        FR7:  raises ToolLoopLimitError if iterations exceed max_tool_iterations.
+        """
         # Reset all pipeline components so turn 2+ re-fires them.
         self._engine.reset_execution_counts()
 
-        result = await self._engine.run(user_input)
+        # Start the turn via the new engine API.
+        next_seq = self._engine._turn_seq + 1
+        await self._engine.start_turn(turn_seq=next_seq)
 
-        accumulated_text: list[str] = []
-        accumulated_tool_use: list[StreamEvent] = []
-        accumulated_usage: TokenUsage | None = None
+        # Inject user_input as an event.
+        if user_input:
+            self._engine.bus.queue(
+                Event(
+                    name="user_input",
+                    phase=EventPhase.COMPLETED,
+                    source_layer="engine",
+                    data=user_input,
+                )
+            )
+            await self._engine._run_loop()
 
-        async def _stream() -> AsyncIterator[StreamEvent]:
-            nonlocal accumulated_usage
-            async for event in self._llm.stream(result.request):
+        # Compile the initial request after user_input is settled.
+        compiled = self._engine._compile_request()
+
+        # ----------------------------------------------------------------
+        # Multi-iteration tool loop
+        # ----------------------------------------------------------------
+        iteration_seq = 0
+        final_response: CompletionResponse | None = None
+
+        # Build the mutable request we'll feed to the LLM each iteration.
+        # Between iterations we'll add assistant + tool_result messages directly.
+        current_request = compiled
+
+        while True:
+            # Accumulate stream events for this iteration.
+            iter_text: list[str] = []
+            iter_tool_use: list[StreamEvent] = []
+            iter_usage: TokenUsage | None = None
+
+            async for event in self._llm.stream(current_request):
                 if event.type == "text" and event.text:
-                    accumulated_text.append(event.text)
+                    iter_text.append(event.text)
+                    yield event
                 elif event.type == "tool_use":
-                    if self._tool_executor is None:
-                        raise ConfigError(
-                            "tool_executor not configured — set tool_executor= on SR2 to handle tool calls"
-                        )
-                    accumulated_tool_use.append(event)
+                    iter_tool_use.append(event)
+                    # Do NOT yield tool_use events to the caller — they are
+                    # internal to the loop; callers see only text and end.
                 elif event.type == "usage" and event.usage is not None:
-                    accumulated_usage = event.usage
-                yield event
+                    iter_usage = event.usage
+                    yield event
+                # Suppress intermediate "end" events (FR14 — single end at finish).
+                # They will be replaced by the single end event we yield below.
 
-        async for stream_event in _stream():
-            yield stream_event
+            full_iter_text = "".join(iter_text)
+            usage = iter_usage if iter_usage is not None else TokenUsage()
 
-        # Build CompletionResponse from accumulated stream events
-        full_text = "".join(accumulated_text)
-        content: list = []
-        if full_text:
-            content.append(TextBlock(text=full_text))
-        for tu in accumulated_tool_use:
-            tool_block = ToolUseBlock(id=tu.tool_use_id, name=tu.tool_name, input=tu.tool_input)
-            content.append(tool_block)
-            if self._tool_executor is not None:
-                result_block = await self._tool_executor(tool_block)
-                content.append(result_block)
+            if not iter_tool_use:
+                # No tool calls — this is the final LLM response. Build the
+                # CompletionResponse and exit the loop.
+                content: list = []
+                if full_iter_text:
+                    content.append(TextBlock(text=full_iter_text))
+                stop_reason = "end_turn"
+                final_response = CompletionResponse(
+                    id="turn-response",
+                    content=content,
+                    stop_reason=stop_reason,
+                    usage=usage,
+                )
+                break
 
-        stop_reason = "tool_use" if accumulated_tool_use else "end_turn"
-        usage = accumulated_usage if accumulated_usage is not None else TokenUsage()
+            # There are tool_use blocks — check the iteration limit before executing.
+            if iteration_seq >= self._max_tool_iterations:
+                raise ToolLoopLimitError(
+                    f"Tool loop limit exceeded: {iteration_seq} iterations reached "
+                    f"(max_tool_iterations={self._max_tool_iterations}). "
+                    f"The LLM kept requesting tools without converging."
+                )
 
-        response = CompletionResponse(
-            id="turn-response",
-            content=content,
-            stop_reason=stop_reason,
-            usage=usage,
-        )
+            # Execute tools: wrap errors as ToolResultBlock(is_error=True).
+            # CancelledError is never wrapped — it propagates immediately.
+            assistant_content: list = []
+            if full_iter_text:
+                assistant_content.append(TextBlock(text=full_iter_text))
 
-        # Queue assistant_response on the engine bus
+            tool_result_blocks: list[ToolResultBlock] = []
+            for tu_event in iter_tool_use:
+                tool_block = ToolUseBlock(
+                    id=tu_event.tool_use_id,
+                    name=tu_event.tool_name,
+                    input=tu_event.tool_input,
+                )
+                assistant_content.append(tool_block)
+
+                if self._tool_executor is None:
+                    raise ConfigError(
+                        "tool_executor not configured — set tool_executor= on SR2 to handle tool calls"
+                    )
+                # Call the executor. If it returns a non-awaitable (i.e. the caller
+                # passed a sync callable by mistake), the TypeError propagates
+                # immediately — it's a configuration error, not a tool error.
+                maybe_coro = self._tool_executor(tool_block)
+                import inspect as _inspect
+                if not _inspect.isawaitable(maybe_coro):
+                    raise TypeError(
+                        f"tool_executor must be an async callable (coroutine function); "
+                        f"got non-awaitable result {type(maybe_coro)!r}"
+                    )
+                try:
+                    result_block = await maybe_coro
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    result_block = ToolResultBlock(
+                        tool_use_id=tool_block.id,
+                        content=str(exc),
+                        is_error=True,
+                    )
+                tool_result_blocks.append(result_block)
+
+            # Append assistant message (with tool_use blocks) and tool_result
+            # user message to the conversation for the next LLM call.
+            from sr2.models import Message as _Message
+            assistant_msg = _Message(role="assistant", content=assistant_content)
+            tool_result_msg = _Message(
+                role="user",
+                content=list(tool_result_blocks),  # type: ignore[arg-type]
+            )
+
+            # Build the next request by extending messages.
+            next_messages = list(current_request.messages) + [assistant_msg, tool_result_msg]
+            current_request = CompletionRequest(
+                system=current_request.system,
+                messages=next_messages,
+                tools=current_request.tools,
+            )
+
+            # Inform the engine about the tool results so session/state resolvers
+            # can capture them for future turns.
+            tool_result_events = [
+                Event(
+                    name="tool_result",
+                    phase=EventPhase.COMPLETED,
+                    source_layer="orchestrator",
+                    data=rb,
+                )
+                for rb in tool_result_blocks
+            ]
+            await self._engine.continue_turn(tool_result_events, iteration_seq)
+
+            # FR13: emit iteration_complete to signal the end of this tool iteration.
+            yield StreamEvent(type="iteration_complete")
+
+            iteration_seq += 1
+
+        # ----------------------------------------------------------------
+        # Turn complete — emit a single end event (FR14).
+        # ----------------------------------------------------------------
+        if final_response is None:
+            # Defensive: build an empty response if the loop exited unexpectedly.
+            final_response = CompletionResponse(
+                id="turn-response",
+                content=[],
+                stop_reason="end_turn",
+                usage=TokenUsage(),
+            )
+
+        # Queue assistant_response on the engine bus so session resolver captures it.
         self._engine.bus.queue(
             Event(
                 name="assistant_response",
                 phase=EventPhase.COMPLETED,
                 source_layer="orchestrator",
-                data=response,
+                data=final_response,
             )
         )
 
-        # Fire-and-forget post-processing
-        asyncio.create_task(self.post_process(response))
+        yield StreamEvent(type="end")
+
+        # FR11: await post_process (NOT fire-and-forget) before the generator exits.
+        await self.post_process(final_response)
 
     # ------------------------------------------------------------------
     # Post-processing (MVP no-op)

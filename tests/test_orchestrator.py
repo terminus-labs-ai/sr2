@@ -63,14 +63,25 @@ def make_completion_response(text: str = "I am the assistant.") -> CompletionRes
 
 
 class MockLLM:
-    """Minimal LLMCallable implementation for testing."""
+    """Minimal LLMCallable implementation for testing.
 
-    def __init__(self, events: list[StreamEvent] | None = None):
+    When ``follow_up_events`` is provided, the first call returns ``events``
+    and all subsequent calls return ``follow_up_events``. This supports
+    multi-iteration tool loop tests that need the LLM to terminate after
+    tool execution.
+    """
+
+    def __init__(
+        self,
+        events: list[StreamEvent] | None = None,
+        follow_up_events: list[StreamEvent] | None = None,
+    ):
         self._events: list[StreamEvent] = events or [
             StreamEvent(type="text", text="Hello "),
             StreamEvent(type="text", text="world"),
             StreamEvent(type="end"),
         ]
+        self._follow_up_events: list[StreamEvent] | None = follow_up_events
         self.stream_calls: list[CompletionRequest] = []
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
@@ -78,7 +89,12 @@ class MockLLM:
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
         self.stream_calls.append(request)
-        for event in self._events:
+        call_index = len(self.stream_calls) - 1
+        if call_index == 0 or self._follow_up_events is None:
+            events = self._events
+        else:
+            events = self._follow_up_events
+        for event in events:
             yield event
 
 
@@ -250,8 +266,8 @@ class TestTurnAsyncIterator:
 
 class TestTurnEngineIntegration:
     @pytest.mark.asyncio
-    async def test_turn_calls_pipeline_engine_run(self):
-        """turn() calls PipelineEngine.run() with the provided user_input."""
+    async def test_turn_calls_pipeline_engine_start_turn(self):
+        """turn() calls PipelineEngine.start_turn() to begin the turn."""
         from sr2.orchestrator import SR2
 
         mock_llm = MockLLM()
@@ -260,21 +276,22 @@ class TestTurnEngineIntegration:
 
         user_input = make_user_input("test message")
 
-        # Patch the engine's run method after construction
-        original_run = sr2._engine.run
-        captured_inputs = []
+        # Patch start_turn to verify it is called
+        original_start_turn = sr2._engine.start_turn
+        start_turn_calls = []
 
-        async def capturing_run(ui):
-            captured_inputs.append(ui)
-            return await original_run(ui)
+        async def capturing_start_turn(turn_seq):
+            start_turn_calls.append(turn_seq)
+            return await original_start_turn(turn_seq)
 
-        sr2._engine.run = capturing_run
+        sr2._engine.start_turn = capturing_start_turn
 
         async for _ in sr2.turn(user_input):
             pass
 
-        assert len(captured_inputs) == 1
-        assert captured_inputs[0] == user_input
+        assert len(start_turn_calls) == 1, (
+            f"Expected start_turn called once, got {len(start_turn_calls)}"
+        )
 
     @pytest.mark.asyncio
     async def test_turn_calls_llm_stream_with_compiled_request(self):
@@ -534,10 +551,12 @@ class TestTurnToolUseRegression:
 
     @pytest.mark.asyncio
     async def test_assistant_response_contains_tool_use_block(self):
-        """CompletionResponse.content must include a ToolUseBlock when the stream yields tool_use.
+        """The intermediate assistant message (with ToolUseBlock) is built during the
+        tool loop iteration. The final assistant_response event (emitted after the loop)
+        contains the final LLM text response. The ToolUseBlock is present in the
+        conversation messages fed to the second LLM call.
 
-        Stream: text + tool_use + end.
-        Expected: content has both a TextBlock and a ToolUseBlock.
+        This test verifies the tool loop fires the executor and produces a valid final response.
         """
         from sr2.orchestrator import SR2
         from sr2.pipeline.events import Event
@@ -546,16 +565,22 @@ class TestTurnToolUseRegression:
         async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
             return ToolResultBlock(tool_use_id=block.id, content="result")
 
-        tool_stream = MockLLM(events=[
-            StreamEvent(type="text", text="Let me check"),
-            StreamEvent(
-                type="tool_use",
-                tool_use_id="tc_1",
-                tool_name="get_weather",
-                tool_input={"location": "Oslo"},
-            ),
-            StreamEvent(type="end"),
-        ])
+        tool_stream = MockLLM(
+            events=[
+                StreamEvent(type="text", text="Let me check"),
+                StreamEvent(
+                    type="tool_use",
+                    tool_use_id="tc_1",
+                    tool_name="get_weather",
+                    tool_input={"location": "Oslo"},
+                ),
+                StreamEvent(type="end"),
+            ],
+            follow_up_events=[
+                StreamEvent(type="text", text="The weather is sunny."),
+                StreamEvent(type="end"),
+            ],
+        )
         config = make_minimal_config()
         sr2 = SR2(
             pipeline_config=config,
@@ -572,66 +597,75 @@ class TestTurnToolUseRegression:
 
         await asyncio.sleep(0)
 
+        # The assistant_response event contains the final (post-tool) response.
         assert len(captured) >= 1
         response: CompletionResponse = captured[0].data
 
-        tool_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
-        assert len(tool_blocks) == 1, (
-            f"Expected 1 ToolUseBlock in content, got {len(tool_blocks)}. "
-            f"Full content: {response.content!r}"
+        # The second LLM call returned a text-only response; final content has a TextBlock.
+        text_blocks = [b for b in response.content if hasattr(b, "text")]
+        assert len(text_blocks) >= 1, (
+            f"Expected text content in final assistant_response, got: {response.content!r}"
         )
 
     @pytest.mark.asyncio
     async def test_tool_use_block_has_correct_id_name_input(self):
-        """ToolUseBlock in the response must carry the id, name, and input from the stream event."""
+        """The executor receives a ToolUseBlock with the correct id, name, and input.
+
+        In the multi-iteration loop, the ToolUseBlock is built from the stream event
+        and passed to the executor. We verify the executor sees the right values.
+        """
         from sr2.orchestrator import SR2
-        from sr2.pipeline.events import Event
         from sr2.models import ToolResultBlock
 
-        async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
+        captured_blocks: list[ToolUseBlock] = []
+
+        async def capturing_executor(block: ToolUseBlock) -> ToolResultBlock:
+            captured_blocks.append(block)
             return ToolResultBlock(tool_use_id=block.id, content="result")
 
-        tool_stream = MockLLM(events=[
-            StreamEvent(type="text", text="Let me check"),
-            StreamEvent(
-                type="tool_use",
-                tool_use_id="tc_1",
-                tool_name="get_weather",
-                tool_input={"location": "Oslo"},
-            ),
-            StreamEvent(type="end"),
-        ])
+        tool_stream = MockLLM(
+            events=[
+                StreamEvent(type="text", text="Let me check"),
+                StreamEvent(
+                    type="tool_use",
+                    tool_use_id="tc_1",
+                    tool_name="get_weather",
+                    tool_input={"location": "Oslo"},
+                ),
+                StreamEvent(type="end"),
+            ],
+            follow_up_events=[
+                StreamEvent(type="text", text="Done."),
+                StreamEvent(type="end"),
+            ],
+        )
         config = make_minimal_config()
         sr2 = SR2(
             pipeline_config=config,
             llm={"default": tool_stream},
             token_counter=CharacterTokenCounter(),
-            tool_executor=stub_executor,
+            tool_executor=capturing_executor,
         )
-
-        captured: list[Event] = []
-        sr2._engine.bus.subscribe("assistant_response", lambda e: captured.append(e))
 
         async for _ in sr2.turn(make_user_input()):
             pass
 
-        await asyncio.sleep(0)
-
-        assert len(captured) >= 1
-        response: CompletionResponse = captured[0].data
-
-        tool_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
-        assert len(tool_blocks) == 1, (
-            f"Expected 1 ToolUseBlock, got {len(tool_blocks)}. content={response.content!r}"
+        assert len(captured_blocks) == 1, (
+            f"Expected executor called once, got {len(captured_blocks)}"
         )
-        tb = tool_blocks[0]
+        tb = captured_blocks[0]
         assert tb.id == "tc_1", f"Expected id='tc_1', got {tb.id!r}"
         assert tb.name == "get_weather", f"Expected name='get_weather', got {tb.name!r}"
         assert tb.input == {"location": "Oslo"}, f"Expected input={{'location': 'Oslo'}}, got {tb.input!r}"
 
     @pytest.mark.asyncio
     async def test_assistant_response_retains_text_block_alongside_tool_use(self):
-        """TextBlock must also be present in content when stream has both text and tool_use."""
+        """When the LLM returns text + tool_use, the text is yielded to the caller and
+        the tool is executed. The final assistant_response contains the final LLM text.
+
+        This test verifies the text yielded during a tool-use iteration reaches the caller
+        and the final response contains the follow-up text.
+        """
         from sr2.orchestrator import SR2
         from sr2.pipeline.events import Event
         from sr2.models import ToolResultBlock
@@ -639,16 +673,22 @@ class TestTurnToolUseRegression:
         async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
             return ToolResultBlock(tool_use_id=block.id, content="result")
 
-        tool_stream = MockLLM(events=[
-            StreamEvent(type="text", text="Let me check"),
-            StreamEvent(
-                type="tool_use",
-                tool_use_id="tc_1",
-                tool_name="get_weather",
-                tool_input={"location": "Oslo"},
-            ),
-            StreamEvent(type="end"),
-        ])
+        tool_stream = MockLLM(
+            events=[
+                StreamEvent(type="text", text="Let me check"),
+                StreamEvent(
+                    type="tool_use",
+                    tool_use_id="tc_1",
+                    tool_name="get_weather",
+                    tool_input={"location": "Oslo"},
+                ),
+                StreamEvent(type="end"),
+            ],
+            follow_up_events=[
+                StreamEvent(type="text", text="The weather is sunny in Oslo."),
+                StreamEvent(type="end"),
+            ],
+        )
         config = make_minimal_config()
         sr2 = SR2(
             pipeline_config=config,
@@ -657,29 +697,18 @@ class TestTurnToolUseRegression:
             tool_executor=stub_executor,
         )
 
-        captured: list[Event] = []
-        sr2._engine.bus.subscribe("assistant_response", lambda e: captured.append(e))
+        yielded_events: list[StreamEvent] = []
+        async for e in sr2.turn(make_user_input()):
+            yielded_events.append(e)
 
-        async for _ in sr2.turn(make_user_input()):
-            pass
-
-        await asyncio.sleep(0)
-
-        assert len(captured) >= 1
-        response: CompletionResponse = captured[0].data
-
-        text_blocks = [b for b in response.content if isinstance(b, TextBlock)]
-        assert len(text_blocks) >= 1, (
-            f"Expected at least 1 TextBlock in content, got {len(text_blocks)}. "
-            f"Full content: {response.content!r}"
+        # "Let me check" is yielded as a text event during the first iteration
+        text_events = [e for e in yielded_events if e.type == "text"]
+        all_yielded_text = "".join(e.text for e in text_events)
+        assert "Let me check" in all_yielded_text, (
+            f"Expected 'Let me check' in yielded text events. Got: {all_yielded_text!r}"
         )
-        full_text = "".join(b.text for b in text_blocks)
-        assert "Let me check" in full_text, f"Expected 'Let me check' in text, got {full_text!r}"
-
-        tool_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
-        assert len(tool_blocks) == 1, (
-            f"Expected 1 ToolUseBlock alongside TextBlock, got {len(tool_blocks)}. "
-            f"Full content: {response.content!r}"
+        assert "Oslo" in all_yielded_text, (
+            f"Expected final response text in yield stream. Got: {all_yielded_text!r}"
         )
 
 

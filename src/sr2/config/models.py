@@ -7,6 +7,10 @@ from pydantic.functional_validators import PlainValidator
 class ConfigError(Exception):
     """Raised when a pipeline configuration is invalid."""
 
+
+class ToolLoopLimitError(Exception):
+    """Raised when the tool iteration limit is exceeded within a single turn."""
+
 # A dict field that Pydantic does not copy — preserves the original object's
 # identity so that callers who mutate the dict after construction see the
 # change at resolve/transform time (hot-reload, AC15).

@@ -28,18 +28,35 @@ from sr2.protocols.llm import CompletionRequest, CompletionResponse, StreamEvent
 
 
 class MockLLM:
-    """Minimal LLMCallable for testing — returns configurable stream events."""
+    """Minimal LLMCallable for testing — returns configurable stream events.
 
-    def __init__(self, events: list[StreamEvent] | None = None) -> None:
+    Supports two modes:
+    - Single sequence: ``events`` is returned on every call (first call only if
+      ``follow_up_events`` is provided).
+    - Two-phase: first call returns ``events``, subsequent calls return
+      ``follow_up_events`` (defaults to a plain text response).
+    """
+
+    def __init__(
+        self,
+        events: list[StreamEvent] | None = None,
+        follow_up_events: list[StreamEvent] | None = None,
+    ) -> None:
         self._events: list[StreamEvent] = events or [
             StreamEvent(type="text", text="Hello"),
+            StreamEvent(type="end"),
+        ]
+        self._follow_up_events: list[StreamEvent] = follow_up_events or [
+            StreamEvent(type="text", text="Tool executed successfully."),
             StreamEvent(type="end"),
         ]
         self.stream_calls: list[CompletionRequest] = []
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
         self.stream_calls.append(request)
-        for event in self._events:
+        call_index = len(self.stream_calls) - 1
+        events = self._events if call_index == 0 else self._follow_up_events
+        for event in events:
             yield event
 
 

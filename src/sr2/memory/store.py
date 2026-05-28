@@ -8,11 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from .protocol import MemoryStore
 from .schema import Memory, MemoryScope, MemorySearchResult
 
 
-class InMemoryMemoryStore(MemoryStore):
+class InMemoryMemoryStore:
     """Dict-backed memory store for development and testing."""
 
     def __init__(self) -> None:
