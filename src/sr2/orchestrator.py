@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sr2.pipeline.tracing import Tracer
-from sr2.models import Message, TextBlock, TokenUsage
+from sr2.models import Message, TextBlock, TokenUsage, ToolUseBlock
 from sr2.pipeline.compilation import AppendStrategy, PrefixStrategy
 from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.engine import PipelineEngine
@@ -147,24 +147,40 @@ class SR2:
 
         result = await self._engine.run(user_input)
 
-        accumulated: list[str] = []
+        accumulated_text: list[str] = []
+        accumulated_tool_use: list[StreamEvent] = []
+        accumulated_usage: TokenUsage | None = None
 
         async def _stream() -> AsyncIterator[StreamEvent]:
+            nonlocal accumulated_usage
             async for event in self._llm.stream(result.request):
                 if event.type == "text" and event.text:
-                    accumulated.append(event.text)
+                    accumulated_text.append(event.text)
+                elif event.type == "tool_use":
+                    accumulated_tool_use.append(event)
+                elif event.type == "usage" and event.usage is not None:
+                    accumulated_usage = event.usage
                 yield event
 
         async for stream_event in _stream():
             yield stream_event
 
-        # Build CompletionResponse from accumulated text
-        full_text = "".join(accumulated)
+        # Build CompletionResponse from accumulated stream events
+        full_text = "".join(accumulated_text)
+        content: list = []
+        if full_text:
+            content.append(TextBlock(text=full_text))
+        for tu in accumulated_tool_use:
+            content.append(ToolUseBlock(id=tu.tool_use_id, name=tu.tool_name, input=tu.tool_input))
+
+        stop_reason = "tool_use" if accumulated_tool_use else "end_turn"
+        usage = accumulated_usage if accumulated_usage is not None else TokenUsage()
+
         response = CompletionResponse(
             id="turn-response",
-            content=[TextBlock(text=full_text)],
-            stop_reason="end_turn",
-            usage=TokenUsage(),
+            content=content,
+            stop_reason=stop_reason,
+            usage=usage,
         )
 
         # Queue assistant_response on the engine bus
