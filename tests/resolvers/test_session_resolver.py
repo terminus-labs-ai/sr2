@@ -98,15 +98,20 @@ class TestSessionResolverConstruction:
         names = [s.event_name for s in resolver.subscriptions]
         assert "assistant_response" in names
 
-    def test_default_max_executions_is_one(self):
-        """Default max_executions from ResolverConfig is 1."""
+    def test_default_max_executions_is_unbounded(self):
+        """SessionResolver is an accumulator — max_executions defaults to sys.maxsize
+        so it fires on every matching event throughout a turn (including mid-turn
+        tool loop iterations), regardless of the config value."""
+        import sys
         resolver = SessionResolver(make_config())
-        assert resolver.max_executions == 1
+        assert resolver.max_executions == sys.maxsize
 
-    def test_max_executions_reads_from_config(self):
-        """max_executions is read from ResolverConfig, not hardcoded."""
+    def test_max_executions_is_always_unbounded(self):
+        """max_executions is always sys.maxsize regardless of config.max_executions.
+        SessionResolver overrides it in __init__ to enable accumulator behaviour."""
+        import sys
         resolver = SessionResolver(make_config(max_executions=10))
-        assert resolver.max_executions == 10
+        assert resolver.max_executions == sys.maxsize
 
 
 # ---------------------------------------------------------------------------

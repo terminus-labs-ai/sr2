@@ -169,6 +169,8 @@ class Layer:
                     tokens_after = self._token_counter.count(content_after)
                     tokens_delta = tokens_after - tokens_before
                 duration_ms = (time.perf_counter() - t_start) * 1000
+                # Use the iteration_seq from triggering events (default 1 when absent)
+                iter_seq = events[0].iteration_seq if events else 1
                 record = FiringRecord(
                     turn_seq=self._turn_seq,
                     firing_seq=self._next_firing_seq(),
@@ -183,6 +185,7 @@ class Layer:
                     tokens_delta=tokens_delta,
                     duration_ms=duration_ms,
                     status="ok",
+                    iteration_seq=iter_seq,
                 )
                 self._tracer.on_firing(record)
 
@@ -197,6 +200,7 @@ class Layer:
                     tokens_after = self._token_counter.count(content_after)
                     tokens_delta = tokens_after - tokens_before
                 duration_ms = (time.perf_counter() - t_start) * 1000
+                iter_seq = events[0].iteration_seq if events else 1
                 record = FiringRecord(
                     turn_seq=self._turn_seq,
                     firing_seq=self._next_firing_seq(),
@@ -212,6 +216,7 @@ class Layer:
                     duration_ms=duration_ms,
                     status="failed",
                     error=str(exc),
+                    iteration_seq=iter_seq,
                 )
                 self._tracer.on_firing(record)
             raise

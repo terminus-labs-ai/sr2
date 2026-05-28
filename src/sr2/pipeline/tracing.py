@@ -31,6 +31,7 @@ class FiringRecord:
     duration_ms: float
     status: Literal["ok", "failed"] = "ok"
     error: str | None = None
+    iteration_seq: int = 1
 
 
 @runtime_checkable
@@ -67,7 +68,9 @@ class CollectingTracer:
 def render_trace(records: list[FiringRecord]) -> str:
     """Render a human-readable timeline of pipeline firings.
 
-    Groups records by turn_seq (sorted), then by firing_seq within each turn.
+    Groups records by turn_seq (sorted), then by iteration_seq within each turn,
+    then by firing_seq within each iteration. Iteration sub-headers are shown
+    when a turn has more than one iteration.
     """
     if not records:
         return "(no records)\n"
@@ -75,43 +78,52 @@ def render_trace(records: list[FiringRecord]) -> str:
     lines: list[str] = []
     width = 57
 
-    sorted_records = sorted(records, key=lambda r: (r.turn_seq, r.firing_seq))
+    sorted_records = sorted(records, key=lambda r: (r.turn_seq, r.iteration_seq, r.firing_seq))
 
-    for turn_seq, turn_records in groupby(sorted_records, key=lambda r: r.turn_seq):
+    for turn_seq, turn_iter in groupby(sorted_records, key=lambda r: r.turn_seq):
         # Turn header
         header = f"── Turn {turn_seq} "
         header = header + "─" * max(0, width - len(header))
         lines.append(header)
 
-        for rec in turn_records:
-            # Token delta with mandatory sign
-            delta = rec.tokens_delta
-            delta_str = f"+{delta}" if delta >= 0 else f"{delta}"
+        turn_records = list(turn_iter)
+        # Determine if this turn has multiple iterations
+        unique_iters = sorted({r.iteration_seq for r in turn_records})
+        multi_iter = len(unique_iters) > 1
 
-            # Status suffix
-            status_suffix = " [FAILED]" if rec.status == "failed" else ""
+        for iter_seq, iter_iter in groupby(turn_records, key=lambda r: r.iteration_seq):
+            if multi_iter:
+                lines.append(f"  [Iter {iter_seq}]")
 
-            # Main firing line: #<seq>  [<layer>]  <kind>/<name>  <delta> tok  <dur>ms
-            firing_line = (
-                f"#{ rec.firing_seq}  [{rec.layer}]  {rec.component_name}"
-                f"  {delta_str} tok  {rec.duration_ms:.3g}ms{status_suffix}"
-            )
-            lines.append(firing_line)
+            for rec in iter_iter:
+                # Token delta with mandatory sign
+                delta = rec.tokens_delta
+                delta_str = f"+{delta}" if delta >= 0 else f"{delta}"
 
-            # Error line (only when failed)
-            if rec.status == "failed" and rec.error:
-                lines.append(f"      error: {rec.error}")
+                # Status suffix
+                status_suffix = " [FAILED]" if rec.status == "failed" else ""
 
-            # Before line (only shown when empty)
-            if not rec.content_before:
-                lines.append("      before: (empty)")
+                # Main firing line: #<seq>  [<layer>]  <kind>/<name>  <delta> tok  <dur>ms
+                firing_line = (
+                    f"#{ rec.firing_seq}  [{rec.layer}]  {rec.component_name}"
+                    f"  {delta_str} tok  {rec.duration_ms:.3g}ms{status_suffix}"
+                )
+                lines.append(firing_line)
 
-            # After line — always shown
-            if not rec.content_after:
-                lines.append(f"      after:  [] (0 items)")
-            else:
-                items_repr = ", ".join(repr(item) for item in rec.content_after)
-                lines.append(f"      after:  {items_repr}")
+                # Error line (only when failed)
+                if rec.status == "failed" and rec.error:
+                    lines.append(f"      error: {rec.error}")
+
+                # Before line (only shown when empty)
+                if not rec.content_before:
+                    lines.append("      before: (empty)")
+
+                # After line — always shown
+                if not rec.content_after:
+                    lines.append(f"      after:  [] (0 items)")
+                else:
+                    items_repr = ", ".join(repr(item) for item in rec.content_after)
+                    lines.append(f"      after:  {items_repr}")
 
         lines.append("─" * width)
 

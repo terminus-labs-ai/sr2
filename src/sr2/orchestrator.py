@@ -304,6 +304,46 @@ class SR2:
                 await asyncio.gather(*(_run_one(b) for b in tool_use_blocks))
             )
 
+            # FR9: Queue tool_use_emitted on the engine bus (internal subscribers).
+            self._engine.bus.queue(
+                Event(
+                    name="tool_use_emitted",
+                    phase=EventPhase.COMPLETED,
+                    source_layer="orchestrator",
+                    data=tool_use_blocks,
+                    iteration_seq=iteration_seq,
+                )
+            )
+
+            # FR9: Queue tool_result_received on the engine bus (internal subscribers).
+            self._engine.bus.queue(
+                Event(
+                    name="tool_result_received",
+                    phase=EventPhase.COMPLETED,
+                    source_layer="orchestrator",
+                    data=tool_result_blocks,
+                    iteration_seq=iteration_seq,
+                )
+            )
+
+            # FR10: Queue assistant_iteration_response — the intermediate CompletionResponse
+            # from this tool-use iteration (NOT the final turn response).
+            intermediate_response = CompletionResponse(
+                id="iter-response",
+                content=list(assistant_content),
+                stop_reason="tool_use",
+                usage=usage,
+            )
+            self._engine.bus.queue(
+                Event(
+                    name="assistant_iteration_response",
+                    phase=EventPhase.COMPLETED,
+                    source_layer="orchestrator",
+                    data=intermediate_response,
+                    iteration_seq=iteration_seq,
+                )
+            )
+
             # Emit tool_use_emitted after all tool blocks are collected.
             yield StreamEvent(type="tool_use_emitted", tool_uses=tool_use_blocks)
 

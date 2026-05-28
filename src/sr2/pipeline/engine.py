@@ -102,6 +102,7 @@ class PipelineEngine:
             layer._next_firing_seq = self._next_firing_seq
         for layer in self._layers:
             layer.set_content([])
+            layer._pending_events = []
             if layer.tool_providers:
                 layer.reset_tools()
 
@@ -121,9 +122,12 @@ class PipelineEngine:
 
         Args:
             events: Events to inject into the bus for this iteration.
-            iteration_seq: Iteration number (informational, not currently used internally).
+            iteration_seq: Iteration number — stamped onto each event so that
+                FiringRecords produced during this iteration carry the correct
+                iteration_seq for grouping in render_trace.
         """
         for event in events:
+            event.iteration_seq = iteration_seq
             self._bus.queue(event)
         await self._run_loop()
 

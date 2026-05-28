@@ -27,6 +27,7 @@ class Event:
     phase: EventPhase
     source_layer: str
     data: Any = None
+    iteration_seq: int = 1
 
 
 @dataclass
