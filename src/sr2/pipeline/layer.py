@@ -39,7 +39,7 @@ class Layer:
         event_bus: EventBus,
         provenance_store: ProvenanceStore | None = None,
         token_threshold_pct: float | None = None,
-        tool_providers: list = [],
+        tool_providers: list | None = None,
         tracer: "Tracer | None" = None,
     ) -> None:
         self.name = name
@@ -49,7 +49,7 @@ class Layer:
         self.token_threshold_pct = token_threshold_pct
         self.resolvers = resolvers
         self.transformers = transformers
-        self.tool_providers = list(tool_providers)
+        self.tool_providers = list(tool_providers) if tool_providers is not None else []
         self._token_counter = token_counter
         self._event_bus = event_bus
         self._provenance_store: ProvenanceStore = (
