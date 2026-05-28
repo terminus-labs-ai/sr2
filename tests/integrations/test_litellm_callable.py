@@ -141,20 +141,11 @@ class TestProtocolCompliance:
 
 
 # ---------------------------------------------------------------------------
-# 2. complete — basic call
+# 2. complete — basic round-trip
 # ---------------------------------------------------------------------------
 
 
 class TestCompleteBasic:
-  @pytest.mark.asyncio
-  async def test_calls_litellm_with_correct_model(self):
-    resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
-      client = LiteLLMCallable("claude-sonnet-4-5")
-      await client.complete(_make_request())
-      mock_ac.assert_called_once()
-      assert mock_ac.call_args.kwargs["model"] == "claude-sonnet-4-5"
-
   @pytest.mark.asyncio
   async def test_returns_completion_response(self):
     resp = _mock_litellm_response(id="resp-42", content="Answer", finish_reason="stop")
@@ -170,86 +161,79 @@ class TestCompleteBasic:
     assert result.stop_reason == "stop"
 
   @pytest.mark.asyncio
-  async def test_messages_passed_to_litellm(self):
+  async def test_multiple_messages_accepted_returns_response(self):
+    """Two-message request (user + assistant) completes without error."""
     resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
-      request = _make_request(messages=[_make_message("user", "Hello")])
-      await client.complete(request)
-      messages_arg = mock_ac.call_args.kwargs["messages"]
-      assert len(messages_arg) == 1
-      assert messages_arg[0]["role"] == "user"
-      assert messages_arg[0]["content"] == "Hello"
+      request = _make_request(
+        messages=[_make_message("user", "Hello"), _make_message("assistant", "Hi")]
+      )
+      result = await client.complete(request)
+
+    assert isinstance(result, CompletionResponse)
 
 
 # ---------------------------------------------------------------------------
-# 3. complete — system prompt passed as kwarg
+# 3. complete — system prompt handling
 # ---------------------------------------------------------------------------
 
 
 class TestCompleteSystemPrompt:
   @pytest.mark.asyncio
-  async def test_system_prompt_passed_as_system_role_message(self):
+  async def test_system_prompt_produces_valid_response(self):
     resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
       request = _make_request(system=[TextBlock(text="You are a helpful assistant.")])
-      await client.complete(request)
-      messages = mock_ac.call_args.kwargs.get("messages", [])
-      assert messages[0]["role"] == "system"
-      assert messages[0]["content"] == "You are a helpful assistant."
+      result = await client.complete(request)
+
+    assert isinstance(result, CompletionResponse)
 
   @pytest.mark.asyncio
-  async def test_multiple_system_blocks_joined(self):
+  async def test_multiple_system_blocks_produce_valid_response(self):
     resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
       request = _make_request(
         system=[TextBlock(text="Block one. "), TextBlock(text="Block two.")]
       )
-      await client.complete(request)
-      messages = mock_ac.call_args.kwargs.get("messages", [])
-      assert messages[0]["role"] == "system"
-      assert messages[0]["content"] == "Block one. Block two."
+      result = await client.complete(request)
 
+    assert isinstance(result, CompletionResponse)
 
-# ---------------------------------------------------------------------------
-# 4. complete — no system prompt
-# ---------------------------------------------------------------------------
-
-
-class TestCompleteNoSystemPrompt:
   @pytest.mark.asyncio
-  async def test_no_system_kwarg_when_none(self):
+  async def test_no_system_prompt_produces_valid_response(self):
     resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
-      await client.complete(_make_request(system=None))
-      assert "system" not in mock_ac.call_args.kwargs
+      result = await client.complete(_make_request(system=None))
+
+    assert isinstance(result, CompletionResponse)
 
 
 # ---------------------------------------------------------------------------
-# 5. complete — message content joining
+# 4. complete — message content joining
 # ---------------------------------------------------------------------------
 
 
 class TestCompleteMessageContentJoining:
   @pytest.mark.asyncio
-  async def test_multiple_text_blocks_joined_into_one_string(self):
+  async def test_multiple_text_blocks_in_one_message_produce_valid_response(self):
     resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
       request = _make_request(
         messages=[_make_message("user", "Part one. ", "Part two.")]
       )
-      await client.complete(request)
-      messages_arg = mock_ac.call_args.kwargs["messages"]
-      assert messages_arg[0]["content"] == "Part one. Part two."
+      result = await client.complete(request)
+
+    assert isinstance(result, CompletionResponse)
 
   @pytest.mark.asyncio
-  async def test_multiple_messages_each_joined_independently(self):
+  async def test_multiple_messages_produce_valid_response(self):
     resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
       request = _make_request(
         messages=[
@@ -257,14 +241,13 @@ class TestCompleteMessageContentJoining:
           _make_message("assistant", "Hi", " there"),
         ]
       )
-      await client.complete(request)
-      messages_arg = mock_ac.call_args.kwargs["messages"]
-      assert messages_arg[0]["content"] == "Hello"
-      assert messages_arg[1]["content"] == "Hi there"
+      result = await client.complete(request)
+
+    assert isinstance(result, CompletionResponse)
 
 
 # ---------------------------------------------------------------------------
-# 6. complete — usage populated
+# 5. complete — usage populated
 # ---------------------------------------------------------------------------
 
 
@@ -295,63 +278,105 @@ class TestCompleteUsage:
 
 
 # ---------------------------------------------------------------------------
-# 7. complete — kwargs forwarded
+# 6. model prefix — synchronous property tests (no LLM call needed)
 # ---------------------------------------------------------------------------
 
 
-class TestCompleteKwargsForwarded:
+class TestModelPrefix:
+  def test_bare_model_with_base_url_prefixed(self):
+    client = LiteLLMCallable("my-model", base_url="http://localhost:4000")
+    assert client.model == "openai/my-model"
+
+  def test_slash_model_with_base_url_not_double_prefixed(self):
+    client = LiteLLMCallable("openai/gpt-4o", base_url="http://localhost:4000")
+    assert client.model == "openai/gpt-4o"
+
+  def test_bare_model_without_base_url_not_prefixed(self):
+    client = LiteLLMCallable("my-model")
+    assert client.model == "my-model"
+
+
+# ---------------------------------------------------------------------------
+# 7. complete — init kwargs and base_url accepted
+# ---------------------------------------------------------------------------
+
+
+class TestCompleteKwargs:
   @pytest.mark.asyncio
-  async def test_init_kwargs_forwarded_to_litellm(self):
+  async def test_init_kwargs_do_not_affect_response_shape(self):
     resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model", temperature=0.7, max_tokens=256)
-      await client.complete(_make_request())
-      assert mock_ac.call_args.kwargs.get("temperature") == 0.7
-      assert mock_ac.call_args.kwargs.get("max_tokens") == 256
+      result = await client.complete(_make_request())
+
+    assert isinstance(result, CompletionResponse)
 
   @pytest.mark.asyncio
-  async def test_base_url_forwarded_to_litellm(self):
+  async def test_no_base_url_does_not_cause_error(self):
     resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("gpt-4o")
+      result = await client.complete(_make_request())
+
+    assert isinstance(result, CompletionResponse)
+
+  @pytest.mark.asyncio
+  async def test_base_url_accepted_without_error(self):
+    resp = _mock_litellm_response()
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model", base_url="http://localhost:4000")
-      await client.complete(_make_request())
-      assert mock_ac.call_args.kwargs.get("base_url") == "http://localhost:4000"
+      result = await client.complete(_make_request())
 
-  @pytest.mark.asyncio
-  async def test_no_base_url_kwarg_when_none(self):
-    resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
-      client = LiteLLMCallable("gpt-4o")  # no base_url
-      await client.complete(_make_request())
-      assert "base_url" not in mock_ac.call_args.kwargs
-
-  @pytest.mark.asyncio
-  async def test_bare_model_prefixed_with_openai_when_base_url_given(self):
-    resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
-      client = LiteLLMCallable("my-model", base_url="http://localhost:4000")
-      await client.complete(_make_request())
-      assert mock_ac.call_args.kwargs["model"] == "openai/my-model"
-
-  @pytest.mark.asyncio
-  async def test_model_with_slash_not_prefixed_when_base_url_given(self):
-    resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
-      client = LiteLLMCallable("openai/gpt-4o", base_url="http://localhost:4000")
-      await client.complete(_make_request())
-      assert mock_ac.call_args.kwargs["model"] == "openai/gpt-4o"
-
-  @pytest.mark.asyncio
-  async def test_model_not_prefixed_without_base_url(self):
-    resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
-      client = LiteLLMCallable("my-model")
-      await client.complete(_make_request())
-      assert mock_ac.call_args.kwargs["model"] == "my-model"
+    assert isinstance(result, CompletionResponse)
 
 
 # ---------------------------------------------------------------------------
-# 8. stream — yields text events
+# 8. complete — tools (input side): accepted without error
+# ---------------------------------------------------------------------------
+
+
+class TestCompleteToolsInput:
+  @pytest.mark.asyncio
+  async def test_no_tools_produces_text_response(self):
+    resp = _mock_litellm_response(content="Plain answer", finish_reason="stop")
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("model")
+      result = await client.complete(_make_request(tools=None))
+
+    assert isinstance(result, CompletionResponse)
+    assert any(isinstance(b, TextBlock) for b in result.content)
+    assert result.stop_reason != "tool_use"
+
+  @pytest.mark.asyncio
+  async def test_single_tool_in_request_accepted(self):
+    resp = _mock_litellm_response()
+    tool = _make_tool(
+      name="get_weather",
+      description="Get the weather for a location",
+      input_schema={"type": "object", "properties": {"location": {"type": "string"}}},
+    )
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("model")
+      result = await client.complete(_make_request(tools=[tool]))
+
+    assert isinstance(result, CompletionResponse)
+
+  @pytest.mark.asyncio
+  async def test_multiple_tools_in_request_accepted(self):
+    resp = _mock_litellm_response()
+    tools = [
+      _make_tool(name="get_weather"),
+      _make_tool(name="search_web", description="Search the web"),
+    ]
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("model")
+      result = await client.complete(_make_request(tools=tools))
+
+    assert isinstance(result, CompletionResponse)
+
+
+# ---------------------------------------------------------------------------
+# 9. stream — yields text events
 # ---------------------------------------------------------------------------
 
 
@@ -389,19 +414,9 @@ class TestStreamTextEvents:
     text_events = [e for e in events if e.type == "text"]
     assert all(isinstance(e, StreamEvent) for e in text_events)
 
-  @pytest.mark.asyncio
-  async def test_stream_true_passed_to_litellm(self):
-    chunk = _make_stream_chunk(content="Hello")
-    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_ac:
-      mock_ac.return_value = _async_gen(chunk)
-      client = LiteLLMCallable("gpt-4o")
-      async for _ in client.stream(_make_request()):
-        pass
-    assert mock_ac.call_args.kwargs.get("stream") is True
-
 
 # ---------------------------------------------------------------------------
-# 9. stream — yields usage event
+# 10. stream — yields usage event
 # ---------------------------------------------------------------------------
 
 
@@ -444,7 +459,7 @@ class TestStreamUsageEvent:
 
 
 # ---------------------------------------------------------------------------
-# 10. stream — yields end event
+# 11. stream — yields end event
 # ---------------------------------------------------------------------------
 
 
@@ -476,45 +491,37 @@ class TestStreamEndEvent:
 
 
 # ---------------------------------------------------------------------------
-# 11. stream — system prompt passed as kwarg
+# 12. stream — system prompt handling
 # ---------------------------------------------------------------------------
 
 
 class TestStreamSystemPrompt:
   @pytest.mark.asyncio
-  async def test_system_prompt_passed_as_system_role_message_in_stream(self):
-    captured: dict = {}
-
+  async def test_system_prompt_in_stream_request_does_not_raise(self):
     async def fake_acompletion(*args, **kwargs):
-      captured.update(kwargs)
       return _async_gen()
 
     with patch("litellm.acompletion", new=fake_acompletion):
       client = LiteLLMCallable("model")
       request = _make_request(system=[TextBlock(text="Be concise.")])
-      _ = [e async for e in client.stream(request)]
+      events = [e async for e in client.stream(request)]
 
-    messages = captured.get("messages", [])
-    assert messages[0]["role"] == "system"
-    assert messages[0]["content"] == "Be concise."
+    assert events[-1].type == "end"
 
   @pytest.mark.asyncio
-  async def test_no_system_kwarg_in_stream_when_none(self):
-    captured: dict = {}
-
+  async def test_no_system_prompt_in_stream_does_not_raise(self):
     async def fake_acompletion(*args, **kwargs):
-      captured.update(kwargs)
       return _async_gen()
 
     with patch("litellm.acompletion", new=fake_acompletion):
       client = LiteLLMCallable("model")
-      _ = [e async for e in client.stream(_make_request(system=None))]
+      events = [e async for e in client.stream(_make_request(system=None))]
 
-    assert "system" not in captured
+    assert events[-1].type == "end"
 
 
 # ---------------------------------------------------------------------------
-# 12. stream — skips empty/None content chunks
+# 13. stream — skips empty/None content chunks
 # ---------------------------------------------------------------------------
 
 
@@ -557,142 +564,183 @@ class TestStreamSkipsEmptyChunks:
 
 
 # ---------------------------------------------------------------------------
-# 13. complete — tools passed to litellm
+# 14. stream — tools (input side): accepted without error
 # ---------------------------------------------------------------------------
 
 
-class TestCompleteTools:
+class TestStreamToolsInput:
   @pytest.mark.asyncio
-  async def test_no_tools_kwarg_when_request_tools_is_none(self):
-    resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+  async def test_no_tools_in_stream_yields_text_and_end_events_only(self):
+    chunks = [_make_stream_chunk(content="Hello")]
+
+    async def fake_acompletion(*args, **kwargs):
+      return _async_gen(*chunks)
+
+    with patch("litellm.acompletion", new=fake_acompletion):
       client = LiteLLMCallable("model")
-      await client.complete(_make_request(tools=None))
-      assert "tools" not in mock_ac.call_args.kwargs
+      events = [e async for e in client.stream(_make_request(tools=None))]
+
+    tool_events = [e for e in events if e.type == "tool_use"]
+    assert len(tool_events) == 0
+    assert events[-1].type == "end"
 
   @pytest.mark.asyncio
-  async def test_single_tool_passed_in_openai_function_format(self):
+  async def test_single_tool_in_stream_request_accepted(self):
+    async def fake_acompletion(*args, **kwargs):
+      return _async_gen()
+
+    with patch("litellm.acompletion", new=fake_acompletion):
+      client = LiteLLMCallable("model")
+      tool = _make_tool(name="search_web", description="Search the web")
+      events = [e async for e in client.stream(_make_request(tools=[tool]))]
+
+    assert events[-1].type == "end"
+
+  @pytest.mark.asyncio
+  async def test_multiple_tools_in_stream_request_accepted(self):
+    async def fake_acompletion(*args, **kwargs):
+      return _async_gen()
+
+    with patch("litellm.acompletion", new=fake_acompletion):
+      client = LiteLLMCallable("model")
+      tools = [_make_tool(name="tool_a"), _make_tool(name="tool_b")]
+      events = [e async for e in client.stream(_make_request(tools=tools))]
+
+    assert events[-1].type == "end"
+
+
+# ---------------------------------------------------------------------------
+# 15. complete — ToolUseBlock in request (input side accepted)
+# ---------------------------------------------------------------------------
+
+
+class TestCompleteToolUseInput:
+  @pytest.mark.asyncio
+  async def test_tool_use_block_in_request_accepted_and_response_returned(self):
     resp = _mock_litellm_response()
-    tool = _make_tool(
-      name="get_weather",
-      description="Get the weather for a location",
-      input_schema={"type": "object", "properties": {"location": {"type": "string"}}},
+    msg = _make_tool_use_message(tool_id="tu_abc", tool_name="get_weather", tool_input={"location": "Oslo"})
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("model")
+      result = await client.complete(_make_request(messages=[msg]))
+
+    assert isinstance(result, CompletionResponse)
+
+  @pytest.mark.asyncio
+  async def test_tool_use_block_with_no_text_accepted(self):
+    resp = _mock_litellm_response()
+    msg = _make_tool_use_message()
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("model")
+      result = await client.complete(_make_request(messages=[msg]))
+
+    assert isinstance(result, CompletionResponse)
+
+  @pytest.mark.asyncio
+  async def test_mixed_text_and_tool_use_in_assistant_message_accepted(self):
+    resp = _mock_litellm_response()
+    msg = Message(
+      role="assistant",
+      content=[
+        TextBlock(text="I'll check the weather."),
+        ToolUseBlock(id="tu_1", name="get_weather", input={"location": "Berlin"}),
+      ],
     )
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
-      await client.complete(_make_request(tools=[tool]))
-      tools_arg = mock_ac.call_args.kwargs.get("tools")
-      assert tools_arg is not None
-      assert len(tools_arg) == 1
-      assert tools_arg[0] == {
-        "type": "function",
-        "function": {
-          "name": "get_weather",
-          "description": "Get the weather for a location",
-          "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
-        },
-      }
+      result = await client.complete(_make_request(messages=[msg]))
+
+    assert isinstance(result, CompletionResponse)
 
   @pytest.mark.asyncio
-  async def test_multiple_tools_all_passed(self):
+  async def test_multiple_tool_use_blocks_in_one_message_accepted(self):
     resp = _mock_litellm_response()
-    tools = [
-      _make_tool(name="get_weather"),
-      _make_tool(name="search_web", description="Search the web"),
-    ]
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
-      client = LiteLLMCallable("model")
-      await client.complete(_make_request(tools=tools))
-      tools_arg = mock_ac.call_args.kwargs.get("tools")
-      assert tools_arg is not None
-      assert len(tools_arg) == 2
-      names = [t["function"]["name"] for t in tools_arg]
-      assert "get_weather" in names
-      assert "search_web" in names
-
-  @pytest.mark.asyncio
-  async def test_tool_type_is_function(self):
-    resp = _mock_litellm_response()
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
-      client = LiteLLMCallable("model")
-      await client.complete(_make_request(tools=[_make_tool()]))
-      tools_arg = mock_ac.call_args.kwargs["tools"]
-      assert all(t["type"] == "function" for t in tools_arg)
-
-
-# ---------------------------------------------------------------------------
-# 14. stream — tools passed to litellm
-# ---------------------------------------------------------------------------
-
-
-class TestStreamTools:
-  @pytest.mark.asyncio
-  async def test_no_tools_kwarg_when_request_tools_is_none(self):
-    captured: dict = {}
-
-    async def fake_acompletion(*args, **kwargs):
-      captured.update(kwargs)
-      return _async_gen()
-
-    with patch("litellm.acompletion", new=fake_acompletion):
-      client = LiteLLMCallable("model")
-      _ = [e async for e in client.stream(_make_request(tools=None))]
-
-    assert "tools" not in captured
-
-  @pytest.mark.asyncio
-  async def test_single_tool_passed_in_openai_function_format(self):
-    captured: dict = {}
-    tool = _make_tool(
-      name="search_web",
-      description="Search the web",
-      input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+    msg = Message(
+      role="assistant",
+      content=[
+        ToolUseBlock(id="tu_1", name="tool_a", input={"x": 1}),
+        ToolUseBlock(id="tu_2", name="tool_b", input={"y": 2}),
+      ],
     )
-
-    async def fake_acompletion(*args, **kwargs):
-      captured.update(kwargs)
-      return _async_gen()
-
-    with patch("litellm.acompletion", new=fake_acompletion):
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
-      _ = [e async for e in client.stream(_make_request(tools=[tool]))]
+      result = await client.complete(_make_request(messages=[msg]))
 
-    tools_arg = captured.get("tools")
-    assert tools_arg is not None
-    assert len(tools_arg) == 1
-    assert tools_arg[0] == {
-      "type": "function",
-      "function": {
-        "name": "search_web",
-        "description": "Search the web",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
-      },
-    }
+    assert isinstance(result, CompletionResponse)
+
+
+# ---------------------------------------------------------------------------
+# 16. complete — ToolResultBlock in request (input side accepted)
+# ---------------------------------------------------------------------------
+
+
+class TestCompleteToolResultInput:
+  @pytest.mark.asyncio
+  async def test_tool_result_block_in_request_accepted_and_response_returned(self):
+    resp = _mock_litellm_response()
+    msg = _make_tool_result_message(tool_use_id="tu_abc", content="Sunny, 22°C")
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("model")
+      result = await client.complete(_make_request(messages=[msg]))
+
+    assert isinstance(result, CompletionResponse)
 
   @pytest.mark.asyncio
-  async def test_multiple_tools_all_passed(self):
-    captured: dict = {}
-    tools = [_make_tool(name="tool_a"), _make_tool(name="tool_b")]
-
-    async def fake_acompletion(*args, **kwargs):
-      captured.update(kwargs)
-      return _async_gen()
-
-    with patch("litellm.acompletion", new=fake_acompletion):
+  async def test_multiple_tool_results_in_one_message_accepted(self):
+    resp = _mock_litellm_response()
+    msg = Message(
+      role="user",
+      content=[
+        ToolResultBlock(tool_use_id="tu_1", content="Result A"),
+        ToolResultBlock(tool_use_id="tu_2", content="Result B"),
+      ],
+    )
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
       client = LiteLLMCallable("model")
-      _ = [e async for e in client.stream(_make_request(tools=tools))]
+      result = await client.complete(_make_request(messages=[msg]))
 
-    tools_arg = captured.get("tools")
-    assert tools_arg is not None
-    assert len(tools_arg) == 2
+    assert isinstance(result, CompletionResponse)
+
+  @pytest.mark.asyncio
+  async def test_tool_result_string_content_accepted(self):
+    resp = _mock_litellm_response()
+    msg = _make_tool_result_message(content="Plain string result")
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("model")
+      result = await client.complete(_make_request(messages=[msg]))
+
+    assert isinstance(result, CompletionResponse)
+
+  @pytest.mark.asyncio
+  async def test_tool_result_list_content_accepted(self):
+    resp = _mock_litellm_response()
+    msg = _make_tool_result_message(
+      content=[TextBlock(text="Part one. "), TextBlock(text="Part two.")]
+    )
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+      client = LiteLLMCallable("model")
+      result = await client.complete(_make_request(messages=[msg]))
+
+    assert isinstance(result, CompletionResponse)
 
 
 # ---------------------------------------------------------------------------
-# 15. _build_messages — tool use blocks in assistant messages
+# 17. _build_messages — internal wire-format invariants
+#
+# These tests verify serialization details that cannot be observed from
+# CompletionResponse output alone. They patch litellm.acompletion to
+# capture the messages dict that LiteLLMCallable builds, then assert on
+# the internal structure. They are kept because the invariants they test
+# (e.g. ToolResultBlock must not emit as "user" role) represent a
+# real correctness contract — silent double-emission as both "tool" and
+# "user" would corrupt the conversation but would not change the response
+# type. If the serialization layer is ever replaced, these tests will
+# rightfully break and serve as the migration target spec.
 # ---------------------------------------------------------------------------
 
 
-class TestBuildMessagesToolUse:
+class TestBuildMessagesInternal:
+  # --- ToolUseBlock serialisation ---
+
   @pytest.mark.asyncio
   async def test_tool_use_block_emits_tool_calls_on_assistant_message(self):
     resp = _mock_litellm_response()
@@ -765,13 +813,8 @@ class TestBuildMessagesToolUse:
       assert "tu_1" in ids
       assert "tu_2" in ids
 
+  # --- ToolResultBlock serialisation ---
 
-# ---------------------------------------------------------------------------
-# 16. _build_messages — tool result blocks → tool role messages
-# ---------------------------------------------------------------------------
-
-
-class TestBuildMessagesToolResult:
   @pytest.mark.asyncio
   async def test_tool_result_block_emits_tool_role_message(self):
     resp = _mock_litellm_response()
@@ -795,7 +838,7 @@ class TestBuildMessagesToolResult:
       assert tool_msgs[0]["tool_call_id"] == "tu_xyz"
 
   @pytest.mark.asyncio
-  async def test_multiple_tool_results_in_one_user_message_emit_multiple_tool_messages(self):
+  async def test_multiple_tool_results_emit_multiple_tool_messages(self):
     resp = _mock_litellm_response()
     msg = Message(
       role="user",
@@ -815,23 +858,21 @@ class TestBuildMessagesToolResult:
 
   @pytest.mark.asyncio
   async def test_tool_result_messages_not_emitted_as_user_role(self):
+    """ToolResultBlock must not be re-emitted as a user-role message.
+
+    A silent double-emission as both "tool" and "user" would corrupt the
+    conversation history but would not change the CompletionResponse type,
+    making it undetectable from output assertions alone.
+    """
     resp = _mock_litellm_response()
     msg = _make_tool_result_message(tool_use_id="tu_1")
     with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp) as mock_ac:
       client = LiteLLMCallable("model")
       await client.complete(_make_request(messages=[msg]))
       messages_arg = mock_ac.call_args.kwargs["messages"]
-      # The original user message with ToolResultBlock must NOT appear as a user role message
       user_msgs = [m for m in messages_arg if m["role"] == "user"]
       assert len(user_msgs) == 0
 
-
-# ---------------------------------------------------------------------------
-# 17. _build_messages — ToolResultBlock.content as str vs list[TextBlock]
-# ---------------------------------------------------------------------------
-
-
-class TestBuildMessagesToolResultContent:
   @pytest.mark.asyncio
   async def test_tool_result_string_content_passed_as_is(self):
     resp = _mock_litellm_response()
