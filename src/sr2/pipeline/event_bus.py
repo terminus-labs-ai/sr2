@@ -62,6 +62,8 @@ class EventBus:
         self._queue: deque[Event] = deque()
         self._running_tasks: Set[asyncio.Task] = set()  # type: ignore[type-arg]
         self._max_drain_iterations = max_drain_iterations
+        # Accumulated error strings for surfacing via PipelineMetrics.bus_errors
+        self._errors: List[str] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -90,11 +92,16 @@ class EventBus:
             self._subs.append((event_name, callback, is_async))
 
     def reset(self) -> None:
-        """Clear per-turn state (queue, running tasks) but keep subscriptions."""
+        """Clear per-turn state (queue, running tasks, errors) but keep subscriptions."""
         self._queue.clear()
         for task in self._running_tasks:
             task.cancel()
         self._running_tasks.clear()
+        self._errors.clear()
+
+    def get_errors(self) -> List[str]:
+        """Return a snapshot of errors collected since the last reset()."""
+        return list(self._errors)
 
     def queue(self, event: Event) -> None:
         """Fire-and-forget enqueue. Sync — safe to call from callbacks.
@@ -112,6 +119,9 @@ class EventBus:
                         "EventBus sync callback raised an exception: %s",
                         exc,
                         exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+                    self._errors.append(
+                        f"sync callback error on event '{event.name}': {exc}"
                     )
 
     async def emit(self, event: Event) -> None:
@@ -159,6 +169,9 @@ class EventBus:
                             exc,
                             exc_info=(type(exc), exc, exc.__traceback__),
                         )
+                        self._errors.append(
+                            f"async callback error: {exc}"
+                        )
 
             iterations += 1
             if iterations >= self._max_drain_iterations:
@@ -166,6 +179,9 @@ class EventBus:
                     "EventBus drain exceeded max_drain_iterations=%d — "
                     "possible infinite cascade. Aborting drain.",
                     self._max_drain_iterations,
+                )
+                self._errors.append(
+                    f"drain aborted: exceeded max_drain_iterations={self._max_drain_iterations}"
                 )
                 return
 
@@ -197,6 +213,9 @@ class EventBus:
                     "EventBus bus_drained callback raised an exception: %s",
                     exc,
                     exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                self._errors.append(
+                    f"bus_drained callback error: {exc}"
                 )
 
         # Discard any events queued during notification

@@ -125,6 +125,7 @@ class SR2:
             llm=llm_dict,
             memory_store=memory_store,
             memory_extractor=memory_extractor,
+            session_id=self.session_id,
             extras=extras or {},
         )
         layers = [_build_layer(lc, token_counter, deps) for lc in pipeline_config.layers]

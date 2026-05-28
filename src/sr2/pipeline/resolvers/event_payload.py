@@ -21,9 +21,10 @@ class EventPayloadResolver:
 
     name: str = "event_payload"
 
-    def __init__(self, config: ResolverConfig) -> None:
+    def __init__(self, config: ResolverConfig, session_id: str = "") -> None:
         self.max_executions: int = config.max_executions
         self.execution_count: int = 0
+        self._session_id = session_id
 
         self.subscriptions: list[EventSubscription] = build_subscriptions(
             config.subscriptions, PHASE_MAP, []
@@ -31,7 +32,7 @@ class EventPayloadResolver:
 
     @classmethod
     def build(cls, config: ResolverConfig, deps: "Dependencies") -> "EventPayloadResolver":
-        return cls(config)
+        return cls(config, session_id=deps.session_id)
 
     async def resolve(self, events: list[Event]) -> ResolvedContent:
         self.execution_count += 1
@@ -53,7 +54,7 @@ class EventPayloadResolver:
                         sources=(),
                         origin=_ORIGIN,
                         layer="event_payload",
-                        session_id="",
+                        session_id=self._session_id,
                         created_at=datetime.now(tz=timezone.utc),
                     )
                 )

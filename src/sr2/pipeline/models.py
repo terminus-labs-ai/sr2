@@ -78,6 +78,12 @@ class PipelineMetrics:
   layers: Dict[str, LayerMetrics] = field(default_factory=dict)
   total_tokens: int = 0
   warnings: List[str] = field(default_factory=list)
+  bus_errors: List[str] = field(default_factory=list)
+  """Handler exceptions and drain-abort events collected by EventBus.
+
+  Each entry is a human-readable string describing the error.  The bus does
+  not re-raise these; this field is the only way callers can inspect them.
+  """
 
 
 @dataclass

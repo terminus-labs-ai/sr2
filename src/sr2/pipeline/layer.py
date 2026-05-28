@@ -379,13 +379,12 @@ class Layer:
     # -- compile --------------------------------------------------------------
 
     def compile(self) -> list[TextBlock] | list[Message] | list[ToolDefinition]:
-        if self.target == CompilationTarget.SYSTEM:
-            return self._compile_system()
-        if self.target == CompilationTarget.MESSAGES:
-            return self._compile_messages()
-        if self.target == CompilationTarget.TOOLS:
-            return self._compile_tools()
-        return []  # pragma: no cover
+        _COMPILE_DISPATCH: dict[CompilationTarget, Callable[[], list]] = {
+            CompilationTarget.SYSTEM: self._compile_system,
+            CompilationTarget.MESSAGES: self._compile_messages,
+            CompilationTarget.TOOLS: self._compile_tools,
+        }
+        return _COMPILE_DISPATCH[self.target]()
 
     def _compile_system(self) -> list[TextBlock]:
         out: list[TextBlock] = []

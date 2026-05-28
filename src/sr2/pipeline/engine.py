@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 from typing import TYPE_CHECKING
 
 from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
+from sr2.pipeline.compilation import get_compilation_targets
 from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase
 from sr2.pipeline.layer import Layer
@@ -196,15 +197,13 @@ class PipelineEngine:
         system_blocks: List[TextBlock] = []
         messages: List[Message] = []
         tools: List[ToolDefinition] = []
+        compilation_targets = get_compilation_targets()
 
         for layer in self._layers:
             compiled = layer.compile()
-            if layer.target == CompilationTarget.SYSTEM:
-                system_blocks.extend(compiled)
-            elif layer.target == CompilationTarget.MESSAGES:
-                messages.extend(compiled)
-            elif layer.target == CompilationTarget.TOOLS:
-                tools.extend(compiled)
+            compilation_targets[layer.target].collect(
+                compiled, system_blocks, messages, tools
+            )
 
         return CompletionRequest(
             system=system_blocks or None,
@@ -277,6 +276,7 @@ class PipelineEngine:
             layers=layers,
             total_tokens=total_tokens,
             warnings=warnings,
+            bus_errors=self._bus.get_errors(),
         )
 
     def seed(self, messages: List[Message]) -> None:

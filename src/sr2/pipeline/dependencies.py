@@ -19,4 +19,5 @@ class Dependencies:
     llm: dict[str, LLMCallable] | None = None
     memory_store: "MemoryStore | None" = None
     memory_extractor: "MemoryExtractor | None" = None
+    session_id: str = ""
     extras: Mapping[str, Any] = dataclasses.field(default_factory=dict)

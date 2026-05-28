@@ -12,11 +12,12 @@ from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import TransformationResult
 from sr2.pipeline.provenance import Entry, EntryOrigin
+from sr2.pipeline.protocols import TokenCounter
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.pipeline.utils import PHASE_MAP, build_subscriptions
 from sr2.protocols.llm import CompletionRequest, LLMCallable
 
-_COUNTER = CharacterTokenCounter()
+_DEFAULT_SUMMARIZATION_PROMPT = "Summarize the following conversation turns concisely."
 
 
 class SummarizationTransformer:
@@ -30,9 +31,17 @@ class SummarizationTransformer:
 
     name: str = "summarization"
 
-    def __init__(self, config: TransformerConfig, llm: LLMCallable) -> None:
+    def __init__(
+        self,
+        config: TransformerConfig,
+        llm: LLMCallable,
+        token_counter: TokenCounter | None = None,
+        session_id: str = "",
+    ) -> None:
         self._config = config
         self._llm = llm
+        self._token_counter: TokenCounter = token_counter or CharacterTokenCounter()
+        self._session_id = session_id
         self.max_executions: int = config.max_executions
         self.execution_count: int = 0
 
@@ -68,7 +77,7 @@ class SummarizationTransformer:
                     f"deps.llm has no 'default' entry (available: {list(deps.llm.keys())!r})"
                 )
             llm = deps.llm["default"]
-        return cls(config, llm)
+        return cls(config, llm, session_id=deps.session_id)
 
     # ------------------------------------------------------------------
     # Transformer protocol
@@ -145,7 +154,7 @@ class SummarizationTransformer:
         kept: list[ContentBlock] = []
         cumulative = 0
         for block in reversed(content):
-            block_tokens = _COUNTER.count([block])
+            block_tokens = self._token_counter.count([block])
             if cumulative + block_tokens <= budget:
                 kept.append(block)
                 cumulative += block_tokens
@@ -158,13 +167,24 @@ class SummarizationTransformer:
         to_summarize = list(content[: len(content) - n_kept])
         return to_summarize, kept
 
+    def _block_to_text(self, block: ContentBlock) -> str:
+        """Extract a text representation from any ContentBlock type."""
+        if isinstance(block, TextBlock):
+            return block.text
+        # For non-text blocks, emit a typed placeholder rather than str(block).
+        block_type = type(block).__name__
+        name_attr = getattr(block, "name", None)
+        if name_attr is not None:
+            return f"[{block_type}: {name_attr}]"
+        return f"[{block_type}]"
+
     async def _summarize(self, blocks: list[ContentBlock]) -> TextBlock:
         """Build a CompletionRequest and call the LLM, returning the summary TextBlock."""
-        turns_text = "\n".join(
-            b.text if isinstance(b, TextBlock) else str(b) for b in blocks
-        )
+        turns_text = "\n".join(self._block_to_text(b) for b in blocks)
+        cfg = self._config.config or {}
+        prompt = cfg.get("summarization_prompt") or _DEFAULT_SUMMARIZATION_PROMPT
         request = CompletionRequest(
-            system=[TextBlock(text="Summarize the following conversation turns concisely.")],
+            system=[TextBlock(text=prompt)],
             messages=[
                 Message(
                     role="user",
@@ -192,7 +212,7 @@ class SummarizationTransformer:
                 sources=(source_id,),
                 origin=EntryOrigin(kind="transformer", name=self.name),
                 layer="summarization",
-                session_id="summarization",
+                session_id=self._session_id,
                 created_at=now,
             )
             entries.append(entry)
