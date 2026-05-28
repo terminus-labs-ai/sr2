@@ -4,6 +4,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from pydantic import BaseModel, Field
 
 from sr2 import ContentBlock, Message, TextBlock, TokenUsage, ToolDefinition
+from sr2.models import ToolResultBlock, ToolUseBlock
 
 
 class CompletionRequest(BaseModel):
@@ -20,12 +21,15 @@ class CompletionResponse(BaseModel):
 
 
 class StreamEvent(BaseModel):
-  type: Literal["text", "usage", "end", "tool_use", "iteration_complete"]
+  type: Literal["text", "usage", "end", "tool_use", "iteration_complete", "tool_use_emitted", "tool_result_received"]
   text: str = ""
   usage: TokenUsage | None = None
   tool_use_id: str = ""
   tool_name: str = ""
   tool_input: dict[str, Any] = Field(default_factory=dict)
+  tool_uses: list[ToolUseBlock] | None = None
+  tool_results: list[ToolResultBlock] | None = None
+  iteration: int | None = None
 
 
 @runtime_checkable

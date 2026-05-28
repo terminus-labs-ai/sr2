@@ -59,3 +59,5 @@ class PipelineConfig(BaseModel):
   layers: list[LayerConfig]
   token_budget: int = 200_000
   enable_overflow_detection: bool = True
+  max_tool_iterations: int = 25
+  max_parallel_tools: int | None = None

@@ -86,9 +86,6 @@ def _build_layer(layer_config: LayerConfig, token_counter: TokenCounter, deps: D
     )
 
 
-_DEFAULT_MAX_TOOL_ITERATIONS = 25
-
-
 class SR2:
     """Top-level orchestrator: turns a PipelineConfig into a streaming turn loop."""
 
@@ -104,7 +101,6 @@ class SR2:
         memory_store: "MemoryStore | None" = None,
         memory_extractor: "MemoryExtractor | None" = None,
         tool_executor: "ToolExecutor | None" = None,
-        max_tool_iterations: int = _DEFAULT_MAX_TOOL_ITERATIONS,
     ) -> None:
         # Normalise: bare LLMCallable → single-entry dict under "default".
         # Dict form: no "default" key requirement — callers may use any key names.
@@ -121,7 +117,8 @@ class SR2:
         self._token_counter = token_counter
         self._tracer = tracer
         self._tool_executor: ToolExecutor | None = tool_executor
-        self._max_tool_iterations = max_tool_iterations
+        self._max_tool_iterations = pipeline_config.max_tool_iterations
+        self._max_parallel_tools = pipeline_config.max_parallel_tools
         self.session_id = session_id if session_id is not None else str(ULID())
 
         deps = Dependencies(
@@ -251,7 +248,13 @@ class SR2:
             if full_iter_text:
                 assistant_content.append(TextBlock(text=full_iter_text))
 
-            tool_result_blocks: list[ToolResultBlock] = []
+            if self._tool_executor is None:
+                raise ConfigError(
+                    "tool_executor not configured — set tool_executor= on SR2 to handle tool calls"
+                )
+
+            # Build all ToolUseBlocks in order (preserves mapping for result ordering).
+            tool_use_blocks: list[ToolUseBlock] = []
             for tu_event in iter_tool_use:
                 tool_block = ToolUseBlock(
                     id=tu_event.tool_use_id,
@@ -259,32 +262,53 @@ class SR2:
                     input=tu_event.tool_input,
                 )
                 assistant_content.append(tool_block)
+                tool_use_blocks.append(tool_block)
 
-                if self._tool_executor is None:
-                    raise ConfigError(
-                        "tool_executor not configured — set tool_executor= on SR2 to handle tool calls"
-                    )
-                # Call the executor. If it returns a non-awaitable (i.e. the caller
-                # passed a sync callable by mistake), the TypeError propagates
-                # immediately — it's a configuration error, not a tool error.
-                maybe_coro = self._tool_executor(tool_block)
-                import inspect as _inspect
-                if not _inspect.isawaitable(maybe_coro):
+            # FR4+FR15: execute all tool blocks concurrently via asyncio.gather.
+            # Optional semaphore caps concurrency when max_parallel_tools is set.
+            sem = (
+                asyncio.Semaphore(self._max_parallel_tools)
+                if self._max_parallel_tools is not None
+                else None
+            )
+
+            import inspect as _inspect
+
+            async def _run_one(block: ToolUseBlock) -> ToolResultBlock:
+                coro = self._tool_executor(block)  # type: ignore[misc]
+                # If the caller passed a sync callable by mistake, the returned
+                # value is not awaitable — that is a configuration error, not a
+                # tool error, so we propagate TypeError immediately (not wrapped).
+                if not _inspect.isawaitable(coro):
                     raise TypeError(
                         f"tool_executor must be an async callable (coroutine function); "
-                        f"got non-awaitable result {type(maybe_coro)!r}"
+                        f"got non-awaitable result {type(coro)!r}"
                     )
                 try:
-                    result_block = await maybe_coro
+                    if sem is not None:
+                        async with sem:
+                            return await coro
+                    else:
+                        return await coro
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    result_block = ToolResultBlock(
-                        tool_use_id=tool_block.id,
+                    return ToolResultBlock(
+                        tool_use_id=block.id,
                         content=str(exc),
                         is_error=True,
                     )
-                tool_result_blocks.append(result_block)
+
+            # asyncio.gather preserves input order: results[i] maps to tool_use_blocks[i].
+            tool_result_blocks: list[ToolResultBlock] = list(
+                await asyncio.gather(*(_run_one(b) for b in tool_use_blocks))
+            )
+
+            # Emit tool_use_emitted after all tool blocks are collected.
+            yield StreamEvent(type="tool_use_emitted", tool_uses=tool_use_blocks)
+
+            # Emit tool_result_received after all executor results are collected.
+            yield StreamEvent(type="tool_result_received", tool_results=tool_result_blocks)
 
             # Append assistant message (with tool_use blocks) and tool_result
             # user message to the conversation for the next LLM call.
@@ -317,7 +341,7 @@ class SR2:
             await self._engine.continue_turn(tool_result_events, iteration_seq)
 
             # FR13: emit iteration_complete to signal the end of this tool iteration.
-            yield StreamEvent(type="iteration_complete")
+            yield StreamEvent(type="iteration_complete", iteration=iteration_seq)
 
             iteration_seq += 1
 
