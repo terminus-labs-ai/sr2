@@ -69,6 +69,20 @@ class Layer:
         # Entries buffered for store write — flushed in process_pending
         self._pending_writes: list[Entry] = []
 
+    # -- session seeding ------------------------------------------------------
+
+    def seed(self, messages: list[Message]) -> None:
+        """Seed conversation history on any SessionResolver in this layer.
+
+        Calls seed() on each resolver that exposes the method. Resolvers that
+        don't implement seed() (i.e. non-session resolvers) are silently skipped.
+        """
+        from sr2.pipeline.resolvers.session import SessionResolver
+
+        for resolver in self.resolvers:
+            if isinstance(resolver, SessionResolver):
+                resolver.seed(messages)
+
     # -- subscriptions --------------------------------------------------------
 
     @property

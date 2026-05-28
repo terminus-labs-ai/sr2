@@ -44,6 +44,14 @@ class SessionResolver:
     def build(cls, config: ResolverConfig, deps: "Dependencies") -> "SessionResolver":
         return cls(config)
 
+    def seed(self, messages: list[Message]) -> None:
+        """Pre-populate conversation history.
+
+        Replaces any existing history with independent copies of *messages*.
+        Call before the first turn to inject prior context (e.g. restored sessions).
+        """
+        self._history = [m.model_copy() for m in messages]
+
     async def resolve(self, events: list[Event]) -> ResolvedContent:
         self.execution_count += 1
 

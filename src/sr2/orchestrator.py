@@ -27,7 +27,6 @@ from sr2.pipeline.events import Event, EventPhase
 from sr2.pipeline.layer import Layer
 from sr2.pipeline.models import infer_compilation_target
 from sr2.pipeline.protocols import Resolver, TokenCounter, Transformer
-from sr2.pipeline.resolvers.session import SessionResolver
 from sr2.plugins.registry import PluginRegistry
 from sr2.protocols.llm import (
     CompletionRequest,
@@ -132,14 +131,11 @@ class SR2:
     def seed_session(self, messages: list[Message]) -> None:
         """Pre-populate conversation history in all SessionResolver instances.
 
-        Walks engine layers and sets each SessionResolver's _history to an
-        independent copy of *messages*. Overwrites any existing history.
+        Delegates to engine.seed(), which propagates through Layer.seed() to
+        each SessionResolver.seed(). Overwrites any existing history.
         No-op if no SessionResolver instances are found.
         """
-        for layer in self._engine._layers:
-            for resolver in layer.resolvers:
-                if isinstance(resolver, SessionResolver):
-                    resolver._history = [m.model_copy() for m in messages]
+        self._engine.seed(messages)
 
     # ------------------------------------------------------------------
     # Core turn loop
@@ -148,9 +144,7 @@ class SR2:
     async def turn(self, user_input: list) -> AsyncIterator[StreamEvent]:
         """Async generator: runs the pipeline and streams LLM events."""
         # Reset all pipeline components so turn 2+ re-fires them.
-        for layer in self._engine._layers:
-            for comp in (*layer.resolvers, *layer.tool_providers, *layer.transformers):
-                comp.execution_count = 0
+        self._engine.reset_execution_counts()
 
         result = await self._engine.run(user_input)
 

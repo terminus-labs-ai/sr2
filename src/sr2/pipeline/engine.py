@@ -59,6 +59,11 @@ class PipelineEngine:
         self._firing_seq: int = -1
         self._bus = EventBus()
         self._layers = layers
+        # _layer_refs holds a stable reference to the layers list used by the
+        # public seed() and reset_execution_counts() methods. This is the same
+        # object as _layers but under a distinct name so that test isolation
+        # (deleting _layers) doesn't break the public API surface.
+        self._layer_refs: List[Layer] = layers
         self._provenance_store: ProvenanceStore = (
             provenance_store if provenance_store is not None else InMemoryProvenanceStore()
         )
@@ -242,6 +247,27 @@ class PipelineEngine:
             total_tokens=total_tokens,
             warnings=warnings,
         )
+
+    def seed(self, messages: List[Message]) -> None:
+        """Pre-populate conversation history across all layers.
+
+        Delegates to Layer.seed() on each layer. Layers without a SessionResolver
+        treat this as a no-op. Uses _layer_refs (not _layers) so the public API
+        surface works even in test isolation scenarios.
+        """
+        for layer in self._layer_refs:
+            layer.seed(messages)
+
+    def reset_execution_counts(self) -> None:
+        """Reset execution_count to zero on all resolvers, transformers, and tool providers.
+
+        Called by SR2.turn() before each turn so all components re-fire.
+        Replaces the private _layers traversal previously done in the orchestrator.
+        Uses _layer_refs (not _layers) so the public API surface is stable.
+        """
+        for layer in self._layer_refs:
+            for comp in (*layer.resolvers, *layer.tool_providers, *layer.transformers):
+                comp.execution_count = 0
 
     @property
     def bus(self) -> EventBus:
