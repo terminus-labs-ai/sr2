@@ -536,10 +536,13 @@ class TestTurnToolUseRegression:
 
         Stream: text + tool_use + end.
         Expected: content has both a TextBlock and a ToolUseBlock.
-        Current behaviour (BUG): content is text-only — test is RED.
         """
         from sr2.orchestrator import SR2
         from sr2.pipeline.events import Event
+        from sr2.models import ToolResultBlock
+
+        async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
+            return ToolResultBlock(tool_use_id=block.id, content="result")
 
         tool_stream = MockLLM(events=[
             StreamEvent(type="text", text="Let me check"),
@@ -556,6 +559,7 @@ class TestTurnToolUseRegression:
             pipeline_config=config,
             llm={"default": tool_stream},
             token_counter=CharacterTokenCounter(),
+            tool_executor=stub_executor,
         )
 
         captured: list[Event] = []
@@ -577,12 +581,13 @@ class TestTurnToolUseRegression:
 
     @pytest.mark.asyncio
     async def test_tool_use_block_has_correct_id_name_input(self):
-        """ToolUseBlock in the response must carry the id, name, and input from the stream event.
-
-        Current behaviour (BUG): no ToolUseBlock is present — test is RED.
-        """
+        """ToolUseBlock in the response must carry the id, name, and input from the stream event."""
         from sr2.orchestrator import SR2
         from sr2.pipeline.events import Event
+        from sr2.models import ToolResultBlock
+
+        async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
+            return ToolResultBlock(tool_use_id=block.id, content="result")
 
         tool_stream = MockLLM(events=[
             StreamEvent(type="text", text="Let me check"),
@@ -599,6 +604,7 @@ class TestTurnToolUseRegression:
             pipeline_config=config,
             llm={"default": tool_stream},
             token_counter=CharacterTokenCounter(),
+            tool_executor=stub_executor,
         )
 
         captured: list[Event] = []
@@ -623,13 +629,13 @@ class TestTurnToolUseRegression:
 
     @pytest.mark.asyncio
     async def test_assistant_response_retains_text_block_alongside_tool_use(self):
-        """TextBlock must also be present in content when stream has both text and tool_use.
-
-        Current behaviour (BUG): text IS present (text accumulation works), but
-        ToolUseBlock is missing — the second assertion is RED.
-        """
+        """TextBlock must also be present in content when stream has both text and tool_use."""
         from sr2.orchestrator import SR2
         from sr2.pipeline.events import Event
+        from sr2.models import ToolResultBlock
+
+        async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
+            return ToolResultBlock(tool_use_id=block.id, content="result")
 
         tool_stream = MockLLM(events=[
             StreamEvent(type="text", text="Let me check"),
@@ -646,6 +652,7 @@ class TestTurnToolUseRegression:
             pipeline_config=config,
             llm={"default": tool_stream},
             token_counter=CharacterTokenCounter(),
+            tool_executor=stub_executor,
         )
 
         captured: list[Event] = []

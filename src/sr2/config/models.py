@@ -53,6 +53,5 @@ class LayerConfig(BaseModel):
 
 class PipelineConfig(BaseModel):
   layers: list[LayerConfig]
-  max_iterations: int = 100
   token_budget: int = 200_000
   enable_overflow_detection: bool = True

@@ -7,8 +7,8 @@ responses, and emits the assistant_response event on the shared bus.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
-from typing import Any, TYPE_CHECKING
+from collections.abc import AsyncIterator, Awaitable, Mapping
+from typing import Any, Callable, TYPE_CHECKING
 
 from ulid import ULID
 
@@ -18,7 +18,7 @@ from sr2.pipeline.provenance import ProvenanceStore
 if TYPE_CHECKING:
     from sr2.pipeline.tracing import Tracer
     from sr2.memory.protocol import MemoryExtractor, MemoryStore
-from sr2.models import Message, TextBlock, TokenUsage, ToolUseBlock
+from sr2.models import Message, TextBlock, TokenUsage, ToolResultBlock, ToolUseBlock
 from sr2.pipeline.compilation import AppendStrategy, PrefixStrategy
 from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.engine import PipelineEngine
@@ -34,6 +34,9 @@ from sr2.protocols.llm import (
     LLMCallable,
     StreamEvent,
 )
+
+# FR1: Type alias for the tool executor callable.
+ToolExecutor = Callable[[ToolUseBlock], Awaitable[ToolResultBlock]]
 
 # Plugin registries (entry-point based, lazy discovery).
 # object is used as the protocol to skip isinstance class-level validation —
@@ -97,6 +100,7 @@ class SR2:
         tracer: "Tracer | None" = None,
         memory_store: "MemoryStore | None" = None,
         memory_extractor: "MemoryExtractor | None" = None,
+        tool_executor: "ToolExecutor | None" = None,
     ) -> None:
         # Normalise: bare LLMCallable → single-entry dict under "default".
         # Dict form: no "default" key requirement — callers may use any key names.
@@ -112,6 +116,7 @@ class SR2:
         self._llm = llm_dict.get("default") or next(iter(llm_dict.values()))
         self._token_counter = token_counter
         self._tracer = tracer
+        self._tool_executor: ToolExecutor | None = tool_executor
         self.session_id = session_id if session_id is not None else str(ULID())
 
         deps = Dependencies(
@@ -163,6 +168,10 @@ class SR2:
                 if event.type == "text" and event.text:
                     accumulated_text.append(event.text)
                 elif event.type == "tool_use":
+                    if self._tool_executor is None:
+                        raise ConfigError(
+                            "tool_executor not configured — set tool_executor= on SR2 to handle tool calls"
+                        )
                     accumulated_tool_use.append(event)
                 elif event.type == "usage" and event.usage is not None:
                     accumulated_usage = event.usage
@@ -177,7 +186,11 @@ class SR2:
         if full_text:
             content.append(TextBlock(text=full_text))
         for tu in accumulated_tool_use:
-            content.append(ToolUseBlock(id=tu.tool_use_id, name=tu.tool_name, input=tu.tool_input))
+            tool_block = ToolUseBlock(id=tu.tool_use_id, name=tu.tool_name, input=tu.tool_input)
+            content.append(tool_block)
+            if self._tool_executor is not None:
+                result_block = await self._tool_executor(tool_block)
+                content.append(result_block)
 
         stop_reason = "tool_use" if accumulated_tool_use else "end_turn"
         usage = accumulated_usage if accumulated_usage is not None else TokenUsage()
