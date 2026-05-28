@@ -144,16 +144,17 @@ class TestSR2Construction:
 
         assert sr2 is not None
 
-    def test_raises_if_default_key_missing(self):
-        """SR2 raises ValueError when 'default' key is absent from llm dict."""
+    def test_dict_without_default_key_is_valid(self):
+        """SR2 accepts a dict without a 'default' key (sr2-14: magic string removed)."""
         from sr2.orchestrator import SR2
 
         config = make_minimal_config()
         llm = {"other": MockLLM()}
         counter = CharacterTokenCounter()
 
-        with pytest.raises(ValueError, match="default"):
-            SR2(pipeline_config=config, llm=llm, token_counter=counter)
+        # A dict without "default" is now valid — first value is used as driver.
+        sr2 = SR2(pipeline_config=config, llm=llm, token_counter=counter)
+        assert sr2 is not None
 
     def test_raises_if_llm_dict_empty(self):
         """SR2 raises ValueError when llm dict is empty (no 'default' key)."""

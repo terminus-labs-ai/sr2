@@ -87,19 +87,25 @@ def make_config(
     keep_last_n: int = 3,
     keep_tokens: int | None = None,
     subscriptions: list[dict] | None = None,
-    model: str = "claude-3-haiku",
+    model: str | None = None,
     max_executions: int = 10,
 ) -> object:
-    """Build a TransformerConfig for SummarizationTransformer."""
+    """Build a TransformerConfig for SummarizationTransformer.
+
+    ``model`` defaults to None (no model key in config), which means build()
+    will use deps.llm["default"].  Pass an explicit model string only when the
+    test specifically exercises named-key resolution.
+    """
     from sr2.config.models import EventSubscriptionConfig, TransformerConfig
 
     sub_configs = subscriptions or [{"event": "turn_start"}]
     subs = [EventSubscriptionConfig(**s) for s in sub_configs]
-    inner = {
+    inner: dict = {
         "keep_strategy": keep_strategy,
         "keep_last_n": keep_last_n,
-        "model": model,
     }
+    if model is not None:
+        inner["model"] = model
     if keep_tokens is not None:
         inner["keep_tokens"] = keep_tokens
     return TransformerConfig(
@@ -1008,12 +1014,13 @@ class TestSummarizationTransformerBuild:
         assert result._llm is named_llm
 
     # ------------------------------------------------------------------
-    # FR6: config["model"] key absent from deps.llm → falls back to default
+    # FR6: config["model"] key absent from deps.llm → raises ConfigError
+    # (sr2-14: silent fallback was the bug; explicit error is the fix)
     # ------------------------------------------------------------------
 
-    def test_fr6_missing_model_key_falls_back_to_default(self, transformer_cls, default_llm):
-        """FR6: config['model'] set but key absent from deps.llm → falls back to default."""
-        from sr2.config.models import TransformerConfig, EventSubscriptionConfig
+    def test_fr6_missing_model_key_raises_config_error(self, transformer_cls, default_llm):
+        """FR6: config['model'] set but key absent from deps.llm → raises ConfigError."""
+        from sr2.config.models import ConfigError, TransformerConfig, EventSubscriptionConfig
 
         subs = [EventSubscriptionConfig(event="turn_start")]
         config = TransformerConfig(
@@ -1022,28 +1029,27 @@ class TestSummarizationTransformerBuild:
             config={"model": "nonexistent-model"},
             max_executions=1,
         )
-        deps = self.make_deps(default=default_llm)  # only "default" key
+        deps = self.make_deps(default=default_llm)  # only "default" key, not "nonexistent-model"
 
-        result = transformer_cls.build(config, deps)
+        with pytest.raises((ConfigError, KeyError, ValueError)):
+            transformer_cls.build(config, deps)
 
-        assert result._llm is default_llm
-
-    def test_fr6_fallback_does_not_raise(self, transformer_cls, default_llm):
-        """FR6: Falling back to default when named key is absent does not raise."""
+    def test_fr6_named_key_present_does_not_raise(self, transformer_cls, default_llm, named_llm):
+        """FR6: When named key IS present in deps.llm, build() succeeds."""
         from sr2.config.models import TransformerConfig, EventSubscriptionConfig
 
         subs = [EventSubscriptionConfig(event="turn_start")]
         config = TransformerConfig(
             type="summarization",
             subscriptions=subs,
-            config={"model": "absent-key"},
+            config={"model": "haiku"},
             max_executions=1,
         )
-        deps = self.make_deps(default=default_llm)
+        deps = self.make_deps(default=default_llm, extras={"haiku": named_llm})
 
-        # Must not raise
         result = transformer_cls.build(config, deps)
         assert result is not None
+        assert result._llm is named_llm
 
     # ------------------------------------------------------------------
     # FR7: config.config is None or empty → uses deps.llm["default"]

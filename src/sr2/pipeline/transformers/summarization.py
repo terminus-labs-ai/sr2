@@ -49,8 +49,25 @@ class SummarizationTransformer:
         """Construct from a TransformerConfig and a Dependencies container."""
         if deps.llm is None:
             raise ConfigError("transformer 'summarize' requires an LLM but none was provided")
-        key = config.config.get("model", "default") if config.config else "default"
-        llm = deps.llm.get(key, deps.llm.get("default"))
+        cfg = config.config or {}
+        key = cfg.get("model") if cfg.get("model") else None
+
+        if key is not None:
+            # Explicit model key: must be present — no silent fallback.
+            if key not in deps.llm:
+                raise ConfigError(
+                    f"transformer 'summarization' configured model={key!r} "
+                    f"but that key is absent from deps.llm (available: {list(deps.llm.keys())!r})"
+                )
+            llm = deps.llm[key]
+        else:
+            # No model key in config: use "default" if present, else raise.
+            if "default" not in deps.llm:
+                raise ConfigError(
+                    "transformer 'summarization' has no 'model' config key and "
+                    f"deps.llm has no 'default' entry (available: {list(deps.llm.keys())!r})"
+                )
+            llm = deps.llm["default"]
         return cls(config, llm)
 
     # ------------------------------------------------------------------

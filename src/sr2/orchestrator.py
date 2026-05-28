@@ -89,7 +89,7 @@ class SR2:
     def __init__(
         self,
         pipeline_config: PipelineConfig,
-        llm: dict[str, LLMCallable],
+        llm: "LLMCallable | dict[str, LLMCallable]",
         token_counter: TokenCounter,
         session_id: str | None = None,
         provenance_store: ProvenanceStore | None = None,
@@ -98,19 +98,24 @@ class SR2:
         memory_store: "MemoryStore | None" = None,
         memory_extractor: "MemoryExtractor | None" = None,
     ) -> None:
-        if "default" not in llm:
-            raise ValueError(
-                "llm dict must contain a 'default' key. "
-                f"Got keys: {list(llm.keys())!r}"
-            )
+        # Normalise: bare LLMCallable → single-entry dict under "default".
+        # Dict form: no "default" key requirement — callers may use any key names.
+        if isinstance(llm, dict):
+            llm_dict: dict[str, LLMCallable] = llm
+        else:
+            llm_dict = {"default": llm}  # type: ignore[assignment]
 
-        self._llm = llm["default"]
+        if not llm_dict:
+            raise ValueError("llm must not be empty")
+
+        # Driver: explicit "default" key takes precedence; otherwise use first value.
+        self._llm = llm_dict.get("default") or next(iter(llm_dict.values()))
         self._token_counter = token_counter
         self._tracer = tracer
         self.session_id = session_id if session_id is not None else str(ULID())
 
         deps = Dependencies(
-            llm=llm,
+            llm=llm_dict,
             memory_store=memory_store,
             memory_extractor=memory_extractor,
             extras=extras or {},

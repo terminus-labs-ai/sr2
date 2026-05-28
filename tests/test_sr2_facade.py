@@ -150,17 +150,18 @@ class TestFacadeConstruction:
         )
         assert sr2 is not None
 
-    def test_raises_if_default_key_missing_from_llm(self):
-        """SR2 raises ValueError when 'default' key is absent from llm dict."""
+    def test_dict_without_default_key_is_accepted(self):
+        """SR2 accepts a dict without a 'default' key (sr2-14: magic string removed)."""
         from sr2.sr2 import SR2
 
         config = make_minimal_config()
-        with pytest.raises((ValueError, TypeError)):
-            SR2(
-                pipeline_config=config,
-                llm={"other": MockLLM()},
-                token_counter=CharacterTokenCounter(),
-            )
+        # A dict without "default" is now valid — first value used as driver.
+        instance = SR2(
+            pipeline_config=config,
+            llm={"other": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+        assert instance is not None
 
     def test_facade_has_seed_session_method(self):
         """SR2 facade exposes a seed_session method."""

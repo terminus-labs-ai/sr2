@@ -138,19 +138,17 @@ class TestAC9ModelKeyResolution:
         assert len(llm_a.calls) == 0
 
     @pytest.mark.asyncio
-    async def test_explicit_model_key_miss_falls_back_to_default(self):
-        """config["model"] = "nonexistent" and llm has no such key → "default" LLM is called."""
+    async def test_explicit_model_key_miss_raises(self):
+        """config["model"] = "nonexistent" and llm has no such key → raises (sr2-14: no silent fallback)."""
+        from sr2.config.models import ConfigError
+
         llm_a = MockLLM("default")
         deps = Dependencies(llm={"default": llm_a})
 
         config = _summarize_transformer_config(model="nonexistent")
-        transformer = _build_transformer(config, deps)
 
-        assert isinstance(transformer, SummarizationTransformer)
-        content = [TextBlock(text=f"turn_{i}") for i in range(5)]
-        await transformer.transform(content, [])
-
-        assert len(llm_a.calls) == 1
+        with pytest.raises((ConfigError, KeyError, ValueError)):
+            _build_transformer(config, deps)
 
     @pytest.mark.asyncio
     async def test_no_model_key_uses_default(self):

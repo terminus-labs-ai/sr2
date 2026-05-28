@@ -272,18 +272,19 @@ class TestAC11NoRegressions:
         with pytest.raises(PluginNotFoundError, match="nonexistent_resolver"):
             _make_sr2(config)
 
-    def test_missing_default_llm_key_still_raises_value_error(self):
-        """Missing 'default' key in llm dict still raises ValueError (pre-existing)."""
+    def test_dict_without_default_key_is_accepted(self):
+        """SR2 accepts a dict without a 'default' key (sr2-14: magic string removed)."""
         from sr2.orchestrator import SR2
 
         config = _make_minimal_config(layer_transformers=None)
 
-        with pytest.raises(ValueError, match="default"):
-            SR2(
-                pipeline_config=config,
-                llm={"other": _MockLLM()},
-                token_counter=CharacterTokenCounter(),
-            )
+        # A dict without "default" is now valid — first value used as driver.
+        instance = SR2(
+            pipeline_config=config,
+            llm={"other": _MockLLM()},
+            token_counter=CharacterTokenCounter(),
+        )
+        assert instance is not None
 
     def test_config_error_not_raised_for_empty_transformers(self):
         """ConfigError (old behavior) is NOT raised when transformers=[] after the fix."""

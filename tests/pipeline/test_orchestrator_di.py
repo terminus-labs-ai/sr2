@@ -350,13 +350,14 @@ class TestSR2DepsConstruction:
 
         assert instance is not None
 
-    def test_sr2_still_raises_without_default_key(self):
-        """SR2 still validates that llm dict contains a 'default' key."""
+    def test_sr2_accepts_dict_without_default_key(self):
+        """SR2 accepts a dict without a 'default' key (sr2-14: magic string removed)."""
         config = _minimal_pipeline_config()
         llm = {"other": MockLLM()}
 
-        with pytest.raises(ValueError, match="default"):
-            SR2(pipeline_config=config, llm=llm, token_counter=TOKEN_COUNTER)
+        # A dict without "default" is now valid — first value used as driver.
+        instance = SR2(pipeline_config=config, llm=llm, token_counter=TOKEN_COUNTER)
+        assert instance is not None
 
 
 # ---------------------------------------------------------------------------
