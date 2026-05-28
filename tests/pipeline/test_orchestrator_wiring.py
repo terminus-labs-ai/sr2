@@ -79,6 +79,7 @@ def _summarize_transformer_config(model: str | None = None) -> TransformerConfig
 def _minimal_layer_config(transformers: list[TransformerConfig] | None = None) -> LayerConfig:
     return LayerConfig(
         name="conversation",
+        target="messages",
         resolvers=[ResolverConfig(type="static", config={"text": "hello"})],
         transformers=transformers,
     )

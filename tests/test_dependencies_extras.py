@@ -69,6 +69,7 @@ def _make_minimal_config(resolver_type: str = "static") -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[ResolverConfig(type=resolver_type, config=config_kwargs)],
             )
         ]
@@ -357,6 +358,7 @@ class TestExtrasReachesComponentBuild:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[ResolverConfig(type="spy")],
                 )
             ]
@@ -412,6 +414,7 @@ class TestExtrasReachesComponentBuild:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[ResolverConfig(type="safe_spy")],
                 )
             ]
@@ -481,6 +484,7 @@ class TestExtrasNoneEquivalentToEmpty:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[ResolverConfig(type="extras_spy")],
                 )
             ]

@@ -175,6 +175,7 @@ class TestLayerConfigToolProviders:
 
         cfg = LayerConfig(
             name="tools",
+            target="tools",
             resolvers=[],
             tool_providers=[ToolProviderConfig(type="x")],
         )
@@ -185,7 +186,7 @@ class TestLayerConfigToolProviders:
         """A4: LayerConfig.tool_providers defaults to None when omitted."""
         from sr2.config.models import LayerConfig
 
-        cfg = LayerConfig(name="system", resolvers=[])
+        cfg = LayerConfig(name="system", target="system", resolvers=[])
         assert cfg.tool_providers is None
 
 
@@ -547,6 +548,7 @@ class TestEndToEnd:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[
                         ResolverConfig(
                             type="static",
@@ -556,6 +558,7 @@ class TestEndToEnd:
                 ),
                 LayerConfig(
                     name="tools",
+                    target="tools",
                     resolvers=[],
                     tool_providers=[ToolProviderConfig(type="e2e_spy")],
                 ),
@@ -607,6 +610,7 @@ class TestEndToEnd:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[
                         ResolverConfig(
                             type="static",
@@ -616,6 +620,7 @@ class TestEndToEnd:
                 ),
                 LayerConfig(
                     name="tools",
+                    target="tools",
                     resolvers=[],
                     tool_providers=[ToolProviderConfig(type="e2e_spy")],
                 ),
@@ -663,6 +668,7 @@ class TestEndToEnd:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[
                         ResolverConfig(
                             type="static",

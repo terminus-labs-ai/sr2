@@ -154,6 +154,7 @@ class TestLayerConfig:
 
         layer = LayerConfig(
             name="system",
+            target="system",
             cache="static",
             token_budget=4000,
             resolvers=[ResolverConfig(type="static_template")],
@@ -166,14 +167,15 @@ class TestLayerConfig:
     def test_transformers_still_optional(self):
         from sr2.config.models import LayerConfig, ResolverConfig
 
-        layer = LayerConfig(name="core", resolvers=[ResolverConfig(type="input")])
+        layer = LayerConfig(name="core", target="messages", resolvers=[ResolverConfig(type="input")])
         assert layer.transformers is None
 
-    def test_target_defaults_to_none(self):
+    def test_target_is_required(self):
+        from pydantic import ValidationError
         from sr2.config.models import LayerConfig, ResolverConfig
 
-        layer = LayerConfig(name="system", resolvers=[ResolverConfig(type="input")])
-        assert layer.target is None
+        with pytest.raises(ValidationError):
+            LayerConfig(name="system", resolvers=[ResolverConfig(type="input")])
 
     def test_target_explicit(self):
         from sr2.config.models import LayerConfig, ResolverConfig
@@ -188,7 +190,7 @@ class TestLayerConfig:
     def test_position_defaults_to_append(self):
         from sr2.config.models import LayerConfig, ResolverConfig
 
-        layer = LayerConfig(name="system", resolvers=[ResolverConfig(type="input")])
+        layer = LayerConfig(name="system", target="system", resolvers=[ResolverConfig(type="input")])
         assert layer.position == "append"
 
     def test_position_explicit(self):
@@ -196,6 +198,7 @@ class TestLayerConfig:
 
         layer = LayerConfig(
             name="system",
+            target="system",
             position="prepend",
             resolvers=[ResolverConfig(type="input")],
         )
@@ -208,6 +211,7 @@ class TestLayerConfig:
         for cache_val in ("static", "ephemeral", "append_only", None):
             layer = LayerConfig(
                 name="test",
+                target="messages",
                 cache=cache_val,
                 resolvers=[ResolverConfig(type="input")],
             )
@@ -225,7 +229,7 @@ class TestPipelineConfig:
 
         cfg = PipelineConfig(
             layers=[
-                LayerConfig(name="system", resolvers=[ResolverConfig(type="input")]),
+                LayerConfig(name="system", target="system", resolvers=[ResolverConfig(type="input")]),
             ]
         )
         assert len(cfg.layers) == 1
@@ -244,9 +248,9 @@ class TestPipelineConfig:
 
         cfg = PipelineConfig(
             layers=[
-                LayerConfig(name="system", resolvers=[ResolverConfig(type="static_template")]),
-                LayerConfig(name="memory", resolvers=[ResolverConfig(type="retrieval")]),
-                LayerConfig(name="conversation", resolvers=[ResolverConfig(type="session")]),
+                LayerConfig(name="system", target="system", resolvers=[ResolverConfig(type="static_template")]),
+                LayerConfig(name="memory", target="messages", resolvers=[ResolverConfig(type="retrieval")]),
+                LayerConfig(name="conversation", target="messages", resolvers=[ResolverConfig(type="session")]),
             ]
         )
         assert len(cfg.layers) == 3
@@ -288,6 +292,7 @@ class TestYAMLRoundTrip:
             "layers": [
                 {
                     "name": "system",
+                    "target": "system",
                     "resolvers": [{"type": "static_template"}],
                 }
             ]
@@ -329,6 +334,7 @@ class TestYAMLRoundTrip:
                 },
                 {
                     "name": "conversation",
+                    "target": "messages",
                     "cache": "append_only",
                     "resolvers": [
                         {"type": "session"},
@@ -367,7 +373,7 @@ class TestYAMLRoundTrip:
         # Layer 1 — conversation (minimal, defaults)
         conv_layer = cfg.layers[1]
         assert conv_layer.name == "conversation"
-        assert conv_layer.target is None
+        assert conv_layer.target == "messages"
         assert conv_layer.position == "append"
         assert len(conv_layer.resolvers) == 2
         assert conv_layer.transformers is None

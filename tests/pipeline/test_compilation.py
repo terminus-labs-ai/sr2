@@ -44,94 +44,60 @@ class TestCompilationTarget:
 
 
 # ---------------------------------------------------------------------------
-# 2. infer_compilation_target — name-based inference
+# 2. infer_compilation_target — removed (sr2-40 OCP cleanup)
 # ---------------------------------------------------------------------------
 
 
-class TestInferCompilationTargetFromName:
-    def test_system_exact(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
+class TestInferCompilationTargetRemoved:
+    """FR: infer_compilation_target magic-string heuristic has been deleted.
 
-        assert infer_compilation_target("system") == CompilationTarget.SYSTEM
+    Target must be set explicitly on LayerConfig. These tests verify the old
+    function no longer exists and that LayerConfig enforces explicit target.
+    """
 
-    def test_system_prompt_exact(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
+    def test_infer_compilation_target_not_importable(self):
+        """infer_compilation_target must no longer exist in sr2.pipeline.models."""
+        import sr2.pipeline.models as models_mod
 
-        assert infer_compilation_target("system_prompt") == CompilationTarget.SYSTEM
+        assert not hasattr(models_mod, "infer_compilation_target")
 
-    def test_contains_system(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
+    def test_infer_compilation_target_not_in_package_init(self):
+        """infer_compilation_target must not be re-exported from sr2.pipeline."""
+        import sr2.pipeline as pipeline_pkg
 
-        assert infer_compilation_target("my_system_layer") == CompilationTarget.SYSTEM
+        assert not hasattr(pipeline_pkg, "infer_compilation_target")
 
-    def test_tools_exact(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
+    def test_layer_config_target_required(self):
+        """LayerConfig.target is now a required field — omitting it raises ValidationError."""
+        from pydantic import ValidationError
+        from sr2.config.models import LayerConfig, ResolverConfig
 
-        assert infer_compilation_target("tools") == CompilationTarget.TOOLS
+        with pytest.raises(ValidationError):
+            LayerConfig(name="system", resolvers=[ResolverConfig(type="input")])
 
-    def test_tool_exact(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
+    def test_layer_config_target_system(self):
+        """LayerConfig accepts target='system' explicitly."""
+        from sr2.config.models import LayerConfig, ResolverConfig
+        from sr2.pipeline.models import CompilationTarget
 
-        assert infer_compilation_target("tool") == CompilationTarget.TOOLS
+        cfg = LayerConfig(name="system", target="system", resolvers=[])
+        assert CompilationTarget(cfg.target) == CompilationTarget.SYSTEM
 
-    def test_contains_tool(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
+    def test_layer_config_target_messages(self):
+        """LayerConfig accepts target='messages' explicitly."""
+        from sr2.config.models import LayerConfig
+        from sr2.pipeline.models import CompilationTarget
 
-        assert infer_compilation_target("tool_definitions") == CompilationTarget.TOOLS
+        cfg = LayerConfig(name="conversation", target="messages", resolvers=[])
+        assert CompilationTarget(cfg.target) == CompilationTarget.MESSAGES
 
-    def test_conversation_defaults_to_messages(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
+    def test_layer_config_target_tools(self):
+        """LayerConfig accepts target='tools' explicitly."""
+        from sr2.config.models import LayerConfig
+        from sr2.pipeline.models import CompilationTarget
 
-        assert infer_compilation_target("conversation") == CompilationTarget.MESSAGES
-
-    def test_memory_defaults_to_messages(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
-
-        assert infer_compilation_target("memory") == CompilationTarget.MESSAGES
-
-    def test_anything_else_defaults_to_messages(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
-
-        assert infer_compilation_target("anything_else") == CompilationTarget.MESSAGES
-
-
-# ---------------------------------------------------------------------------
-# 3. infer_compilation_target — explicit target override
-# ---------------------------------------------------------------------------
-
-
-class TestInferCompilationTargetExplicitOverride:
-    def test_explicit_system(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
-
-        result = infer_compilation_target("conversation", explicit_target="system")
-        assert result == CompilationTarget.SYSTEM
-
-    def test_explicit_messages(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
-
-        result = infer_compilation_target("conversation", explicit_target="messages")
-        assert result == CompilationTarget.MESSAGES
-
-    def test_explicit_tools(self):
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
-
-        result = infer_compilation_target("conversation", explicit_target="tools")
-        assert result == CompilationTarget.TOOLS
-
-    def test_explicit_overrides_name_inference(self):
-        """Layer named 'system' with explicit_target='messages' → MESSAGES."""
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
-
-        result = infer_compilation_target("system", explicit_target="messages")
-        assert result == CompilationTarget.MESSAGES
-
-    def test_explicit_none_falls_back_to_inference(self):
-        """explicit_target=None means infer from name (default behavior)."""
-        from sr2.pipeline.models import CompilationTarget, infer_compilation_target
-
-        result = infer_compilation_target("system", explicit_target=None)
-        assert result == CompilationTarget.SYSTEM
+        cfg = LayerConfig(name="tools", target="tools", resolvers=[])
+        assert CompilationTarget(cfg.target) == CompilationTarget.TOOLS
 
 
 # ---------------------------------------------------------------------------

@@ -24,28 +24,6 @@ class CompilationTarget(Enum):
     TOOLS = "tools"
 
 
-def infer_compilation_target(
-    layer_name: str,
-    explicit_target: Optional[str] = None,
-) -> CompilationTarget:
-    """Infer the compilation target from a layer name, with optional explicit override.
-
-    Rules:
-      1. If explicit_target is not None, look up the corresponding CompilationTarget.
-      2. Else if the layer name contains "system" -> SYSTEM.
-      3. Else if the layer name contains "tool" -> TOOLS.
-      4. Else -> MESSAGES.
-    """
-    if explicit_target is not None:
-        return CompilationTarget(explicit_target)
-
-    name = layer_name.lower()
-    if "system" in name:
-        return CompilationTarget.SYSTEM
-    if "tool" in name:
-        return CompilationTarget.TOOLS
-    return CompilationTarget.MESSAGES
-
 # ---------------------------------------------------------------------------
 # Handler output
 # ---------------------------------------------------------------------------

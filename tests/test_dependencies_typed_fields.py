@@ -350,6 +350,7 @@ class TestSR2AcceptsTypedMemoryStoreKwarg:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[ResolverConfig(type="static", config={"text": "Hello"})],
                 )
             ]

@@ -82,6 +82,7 @@ def make_minimal_config() -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",
@@ -91,6 +92,7 @@ def make_minimal_config() -> PipelineConfig:
             ),
             LayerConfig(
                 name="conversation",
+                target="messages",
                 resolvers=[
                     ResolverConfig(type="session"),
                     ResolverConfig(
@@ -110,6 +112,7 @@ def make_config_no_session() -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",
@@ -119,6 +122,7 @@ def make_config_no_session() -> PipelineConfig:
             ),
             LayerConfig(
                 name="input_only",
+                target="messages",
                 resolvers=[
                     ResolverConfig(
                         type="input",

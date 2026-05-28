@@ -47,7 +47,7 @@ class LayerConfig(BaseModel):
   resolvers: list[ResolverConfig]
   transformers: list[TransformerConfig] | None = None
   tool_providers: list[ToolProviderConfig] | None = None
-  target: str | None = None
+  target: str
   position: str = "append"
 
 

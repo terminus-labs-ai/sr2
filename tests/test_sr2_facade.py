@@ -83,6 +83,7 @@ def make_minimal_config() -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",
@@ -92,6 +93,7 @@ def make_minimal_config() -> PipelineConfig:
             ),
             LayerConfig(
                 name="conversation",
+                target="messages",
                 resolvers=[
                     ResolverConfig(type="session"),
                     ResolverConfig(
@@ -354,6 +356,7 @@ def _make_config_with_tool_provider() -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",
@@ -363,6 +366,7 @@ def _make_config_with_tool_provider() -> PipelineConfig:
             ),
             LayerConfig(
                 name="tools",
+                target="tools",
                 resolvers=[],
                 tool_providers=[ToolProviderConfig(type="spy_tp")],
             ),
@@ -569,6 +573,7 @@ class TestExtrasFlowToToolProviderBuild:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[
                         ResolverConfig(
                             type="static",
@@ -578,6 +583,7 @@ class TestExtrasFlowToToolProviderBuild:
                 ),
                 LayerConfig(
                     name="tools",
+                    target="tools",
                     resolvers=[],
                     tool_providers=[ToolProviderConfig(type="extras_tp")],
                 ),
@@ -653,6 +659,7 @@ class TestExtrasFlowToToolProviderBuild:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[
                         ResolverConfig(
                             type="static",
@@ -662,6 +669,7 @@ class TestExtrasFlowToToolProviderBuild:
                 ),
                 LayerConfig(
                     name="tools",
+                    target="tools",
                     resolvers=[],
                     tool_providers=[ToolProviderConfig(type="none_tp")],
                 ),

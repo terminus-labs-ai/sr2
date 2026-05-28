@@ -25,7 +25,7 @@ from sr2.pipeline.engine import PipelineEngine
 from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase
 from sr2.pipeline.layer import Layer
-from sr2.pipeline.models import infer_compilation_target
+from sr2.pipeline.models import CompilationTarget
 from sr2.pipeline.protocols import Resolver, TokenCounter, Transformer
 from sr2.plugins.registry import PluginRegistry
 from sr2.protocols.llm import (
@@ -60,7 +60,7 @@ def _build_tool_provider(config: ToolProviderConfig, deps: Dependencies) -> Any:
 
 
 def _build_layer(layer_config: LayerConfig, token_counter: TokenCounter, deps: Dependencies) -> Layer:
-    target = infer_compilation_target(layer_config.name, layer_config.target)
+    target = CompilationTarget(layer_config.target)
 
     position_str = layer_config.position or "append"
     position = PrefixStrategy() if position_str == "prefix" else AppendStrategy()

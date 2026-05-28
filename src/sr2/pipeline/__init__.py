@@ -5,5 +5,4 @@ from .models import (
     PipelineResult,
     ResolvedContent,
     TransformationResult,
-    infer_compilation_target,
 )

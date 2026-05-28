@@ -65,6 +65,7 @@ def _make_config_with_resolver(resolver_type: str) -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[ResolverConfig(type=resolver_type)],
             )
         ]
@@ -77,6 +78,7 @@ def _make_config_with_transformer(transformer_type: str) -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",

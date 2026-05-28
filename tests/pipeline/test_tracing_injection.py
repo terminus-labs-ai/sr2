@@ -69,6 +69,7 @@ def _make_sr2(tracer=None):
         layers=[
             LayerConfig(
                 name="conversation",
+                target="messages",
                 resolvers=[ResolverConfig(type="static", config={"text": "hi"})],
             )
         ]

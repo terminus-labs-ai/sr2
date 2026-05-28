@@ -80,6 +80,7 @@ def make_minimal_config() -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",
@@ -89,6 +90,7 @@ def make_minimal_config() -> PipelineConfig:
             ),
             LayerConfig(
                 name="conversation",
+                target="messages",
                 resolvers=[
                     ResolverConfig(type="session"),
                     ResolverConfig(
@@ -109,6 +111,7 @@ def make_config_with_transformers(layer_name: str = "system") -> PipelineConfig:
         layers=[
             LayerConfig(
                 name=layer_name,
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",
@@ -121,6 +124,7 @@ def make_config_with_transformers(layer_name: str = "system") -> PipelineConfig:
             ),
             LayerConfig(
                 name="conversation",
+                target="messages",
                 resolvers=[
                     ResolverConfig(type="session"),
                     ResolverConfig(
@@ -162,6 +166,7 @@ def make_config_with_empty_transformers() -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",
@@ -172,6 +177,7 @@ def make_config_with_empty_transformers() -> PipelineConfig:
             ),
             LayerConfig(
                 name="conversation",
+                target="messages",
                 resolvers=[
                     ResolverConfig(type="session"),
                     ResolverConfig(
@@ -383,6 +389,7 @@ class TestTransformerConfigError:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[
                         ResolverConfig(
                             type="static",
@@ -393,6 +400,7 @@ class TestTransformerConfigError:
                 ),
                 LayerConfig(
                     name="conversation",
+                    target="messages",
                     resolvers=[
                         ResolverConfig(type="session"),
                         ResolverConfig(

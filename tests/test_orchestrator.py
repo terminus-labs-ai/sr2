@@ -99,6 +99,7 @@ def make_minimal_config() -> PipelineConfig:
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(
                         type="static",
@@ -109,6 +110,7 @@ def make_minimal_config() -> PipelineConfig:
             ),
             LayerConfig(
                 name="conversation",
+                target="messages",
                 resolvers=[
                     ResolverConfig(
                         type="session",

@@ -132,6 +132,7 @@ def _minimal_layer_config(
 ) -> LayerConfig:
     return LayerConfig(
         name="conversation",
+        target="messages",
         resolvers=[_minimal_resolver_config(resolver_type)],
         transformers=transformers,
     )
@@ -301,6 +302,7 @@ class TestBuildLayerSignature:
                 deps = Dependencies(llm={"default": llm_instance})
                 layer_config = LayerConfig(
                     name="conversation",
+                    target="messages",
                     resolvers=[_minimal_resolver_config("static")],
                     transformers=[TransformerConfig(type="fake_layer_thread")],
                 )
@@ -615,12 +617,14 @@ class TestSR2EndToEndWithSummarize:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[
                         ResolverConfig(type="static", config={"text": "You are helpful."})
                     ],
                 ),
                 LayerConfig(
                     name="conversation",
+                    target="messages",
                     resolvers=[ResolverConfig(type="session")],
                     transformers=[
                         TransformerConfig(type="summarize", config={"model": "summarization"})
@@ -647,11 +651,13 @@ class TestSR2EndToEndWithSummarize:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[ResolverConfig(type="static", config={"text": "sys"})],
                     transformers=None,
                 ),
                 LayerConfig(
                     name="conversation",
+                    target="messages",
                     resolvers=[ResolverConfig(type="session")],
                     transformers=[TransformerConfig(type="summarize")],
                 ),

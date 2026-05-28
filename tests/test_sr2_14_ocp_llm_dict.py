@@ -64,12 +64,14 @@ def make_minimal_pipeline_config():
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[
                     ResolverConfig(type="static", config={"text": "You are helpful."})
                 ],
             ),
             LayerConfig(
                 name="conversation",
+                target="messages",
                 resolvers=[ResolverConfig(type="session")],
             ),
         ]

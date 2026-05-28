@@ -81,6 +81,7 @@ class TestLayerConfigTokenThresholdPct:
         """FR2: LayerConfig.token_threshold_pct defaults to None."""
         config = LayerConfig(
             name="test",
+            target="messages",
             resolvers=[],
         )
         assert config.token_threshold_pct is None
@@ -89,6 +90,7 @@ class TestLayerConfigTokenThresholdPct:
         """FR2: LayerConfig.token_threshold_pct accepts a float value."""
         config = LayerConfig(
             name="test",
+            target="messages",
             resolvers=[],
             token_threshold_pct=0.8,
         )
@@ -98,6 +100,7 @@ class TestLayerConfigTokenThresholdPct:
         """FR2: LayerConfig.token_threshold_pct can be explicitly set to None."""
         config = LayerConfig(
             name="test",
+            target="messages",
             resolvers=[],
             token_threshold_pct=None,
         )

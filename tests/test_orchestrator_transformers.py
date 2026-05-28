@@ -62,6 +62,7 @@ def _make_minimal_config(layer_transformers: list[TransformerConfig] | None = No
         layers=[
             LayerConfig(
                 name="system",
+                target="system",
                 resolvers=[_make_system_resolver()],
                 transformers=layer_transformers,
             )
@@ -196,11 +197,13 @@ class TestAC9EmptyOrAbsentTransformers:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[_make_system_resolver()],
                     transformers=None,
                 ),
                 LayerConfig(
                     name="conversation",
+                    target="messages",
                     resolvers=[
                         ResolverConfig(type="session"),
                         ResolverConfig(type="input"),
@@ -246,10 +249,12 @@ class TestAC11NoRegressions:
             layers=[
                 LayerConfig(
                     name="system",
+                    target="system",
                     resolvers=[_make_system_resolver()],
                 ),
                 LayerConfig(
                     name="conversation",
+                    target="messages",
                     resolvers=[
                         ResolverConfig(type="session"),
                         ResolverConfig(type="input"),

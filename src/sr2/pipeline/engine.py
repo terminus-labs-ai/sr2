@@ -88,12 +88,13 @@ class PipelineEngine:
             for subscription in layer.subscriptions:
                 self._bus.subscribe(subscription, layer.handle_event)
 
-    async def run(
-        self,
-        user_input: List[ContentBlock],
-    ) -> PipelineResult:
-        """Run the pipeline for a single turn."""
-        self._turn_seq += 1
+    async def start_turn(self, turn_seq: int) -> None:
+        """Begin a new turn: reset state, emit turn_start, and drain the bus.
+
+        Args:
+            turn_seq: The sequence number for this turn (assigned directly).
+        """
+        self._turn_seq = turn_seq
         self._firing_seq = -1
         self._bus.reset()
         for layer in self._layers:
@@ -104,7 +105,6 @@ class PipelineEngine:
             if layer.tool_providers:
                 layer.reset_tools()
 
-        # --- Emit lifecycle events ---
         self._bus.queue(
             Event(
                 name="turn_start",
@@ -112,20 +112,27 @@ class PipelineEngine:
                 source_layer="engine",
             )
         )
-        if user_input:
-            self._bus.queue(
-                Event(
-                    name="user_input",
-                    phase=EventPhase.COMPLETED,
-                    source_layer="engine",
-                    data=user_input,
-                )
-            )
-
-        # --- Drain-process loop ---
         await self._run_loop()
 
-        # --- Emit turn_end for post-processing transformers ---
+    async def continue_turn(self, events: List[Event], iteration_seq: int) -> None:
+        """Inject mid-turn events (e.g. tool results) and drain the bus.
+
+        Does NOT reset the bus — existing subscriptions and state are preserved.
+
+        Args:
+            events: Events to inject into the bus for this iteration.
+            iteration_seq: Iteration number (informational, not currently used internally).
+        """
+        for event in events:
+            self._bus.queue(event)
+        await self._run_loop()
+
+    async def end_turn(self) -> "PipelineResult":
+        """Finalise the turn: emit turn_end, drain, compile, and return result.
+
+        Returns:
+            PipelineResult with compiled CompletionRequest and metrics.
+        """
         self._bus.queue(
             Event(
                 name="turn_end",
@@ -135,13 +142,38 @@ class PipelineEngine:
         )
         await self._run_loop()
 
-        # --- Compile and collect metrics ---
         request = self._compile_request()
         if self._tracer is not None:
             self._tracer.on_compile(request)
         metrics = self._build_metrics()
 
         return PipelineResult(request=request, metrics=metrics)
+
+    async def run(
+        self,
+        user_input: List[ContentBlock],
+    ) -> PipelineResult:
+        """Run the pipeline for a single turn.
+
+        Wrapper around start_turn() / continue_turn() / end_turn(). Preserves
+        all existing behaviour: turn_seq auto-increments from -1, user_input is
+        injected as a user_input event if non-empty.
+        """
+        next_seq = self._turn_seq + 1
+        await self.start_turn(turn_seq=next_seq)
+
+        if user_input:
+            self._bus.queue(
+                Event(
+                    name="user_input",
+                    phase=EventPhase.COMPLETED,
+                    source_layer="engine",
+                    data=user_input,
+                )
+            )
+            await self._run_loop()
+
+        return await self.end_turn()
 
     async def _run_loop(self) -> None:
         """Drain the event bus and process layers until quiescent."""
