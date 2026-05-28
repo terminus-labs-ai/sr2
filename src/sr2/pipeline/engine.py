@@ -141,7 +141,7 @@ class PipelineEngine:
     async def _run_loop(self) -> None:
         """Drain the event bus and process layers until quiescent."""
         for _ in range(self._max_cycles):
-            await self._bus._drain()
+            await self._bus.drain()
             changed = await self._process_layers()
             if not changed and self._bus.is_empty():
                 break

@@ -117,18 +117,21 @@ class EventBus:
     async def emit(self, event: Event) -> None:
         """Queue an event and drain until the queue is empty and tasks done."""
         self.queue(event)
-        await self._drain()
+        await self.drain()
 
     def is_empty(self) -> bool:
         """Return ``True`` if no events are pending in the queue."""
         return len(self._queue) == 0
 
     # ------------------------------------------------------------------
-    # Internal drain loop
+    # Drain loop (public)
     # ------------------------------------------------------------------
 
-    async def _drain(self) -> None:
+    async def drain(self) -> None:
         """Drain the queue until empty and all running tasks complete.
+
+        Public method. The engine calls this after ``queue()``-ing lifecycle
+        events to flush the bus between layer-processing cycles.
 
         Only async callbacks are dispatched here — sync callbacks were already
         called by ``queue()``.
