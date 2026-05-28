@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ulid import ULID
 
 from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig, ToolProviderConfig, TransformerConfig
 from sr2.pipeline.provenance import ProvenanceStore
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sr2.pipeline.tracing import Tracer
+    from sr2.memory.protocol import MemoryExtractor, MemoryStore
 from sr2.models import Message, TextBlock, TokenUsage, ToolUseBlock
 from sr2.pipeline.compilation import AppendStrategy, PrefixStrategy
 from sr2.pipeline.dependencies import Dependencies
@@ -96,6 +96,8 @@ class SR2:
         provenance_store: ProvenanceStore | None = None,
         extras: Mapping[str, Any] | None = None,
         tracer: "Tracer | None" = None,
+        memory_store: "MemoryStore | None" = None,
+        memory_extractor: "MemoryExtractor | None" = None,
     ) -> None:
         if "default" not in llm:
             raise ValueError(
@@ -108,7 +110,12 @@ class SR2:
         self._tracer = tracer
         self.session_id = session_id if session_id is not None else str(ULID())
 
-        deps = Dependencies(llm=llm, extras=extras or {})
+        deps = Dependencies(
+            llm=llm,
+            memory_store=memory_store,
+            memory_extractor=memory_extractor,
+            extras=extras or {},
+        )
         layers = [_build_layer(lc, token_counter, deps) for lc in pipeline_config.layers]
         self._engine = PipelineEngine(
             layers=layers,

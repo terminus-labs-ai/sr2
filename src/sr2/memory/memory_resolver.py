@@ -55,12 +55,22 @@ class MemoryResolver:
 
     @classmethod
     def build(cls, config: ResolverConfig, deps: Dependencies) -> "MemoryResolver":
-        """Build from config, pulling MemoryStore from extras."""
-        extras = dict(deps.extras) if deps.extras else {}
-        store = extras.get("memory_store")
+        """Build from config, pulling MemoryStore from typed field or extras fallback.
+
+        Resolution order:
+        1. ``deps.memory_store`` typed field (preferred).
+        2. ``deps.extras["memory_store"]`` (backward-compat).
+        """
+        store: MemoryStore | None = getattr(deps, "memory_store", None)
+        if store is None:
+            store = (deps.extras or {}).get("memory_store")  # type: ignore[assignment]
 
         if store is None:
-            raise ConfigError("resolver 'memory' requires a memory_store in deps.extras")
+            raise ConfigError(
+                "resolver 'memory' requires a memory_store. "
+                "Pass it as deps.memory_store (preferred) or "
+                "deps.extras['memory_store'] (legacy)."
+            )
 
         return cls(config, store)
 
