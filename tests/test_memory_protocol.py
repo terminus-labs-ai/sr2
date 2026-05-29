@@ -1,12 +1,10 @@
-"""Interface tests for MemoryStore and MemoryExtractor protocols.
+"""Interface tests for MemoryStore, TaggedMemoryStore, and MemoryExtractor protocols.
 
 Verifies that concrete implementations satisfy the Protocol contract.
-Tests against a minimal stub implementation to validate the interface shape.
+Tests against minimal stub implementations to validate the interface shape.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 from sr2.memory import (
     ExtractionResult,
@@ -15,6 +13,7 @@ from sr2.memory import (
     MemoryScope,
     MemorySearchResult,
     MemoryStore,
+    TaggedMemoryStore,
 )
 
 
@@ -23,7 +22,7 @@ from sr2.memory import (
 # ---------------------------------------------------------------------------
 
 class StubStore:
-    """Minimal MemoryStore implementation for testing the protocol."""
+    """Minimal MemoryStore implementation — does NOT include get_by_tag."""
 
     def save(self, memory: Memory) -> Memory:
         return memory
@@ -31,13 +30,17 @@ class StubStore:
     def search(self, query: str, scope: MemoryScope | None = None, limit: int = 10) -> list[MemorySearchResult]:
         return []
 
-    def get_by_tag(self, tag: str, scope: MemoryScope | None = None, limit: int = 10) -> list[MemorySearchResult]:
-        return []
-
     def delete(self, memory_id: str) -> bool:
         return True
 
     def get_all(self, scope: MemoryScope | None = None) -> list[Memory]:
+        return []
+
+
+class StubTaggedStore(StubStore):
+    """Extends StubStore with get_by_tag to satisfy TaggedMemoryStore."""
+
+    def get_by_tag(self, tag: str, scope: MemoryScope | None = None, limit: int = 10) -> list[MemorySearchResult]:
         return []
 
 
@@ -49,13 +52,31 @@ class StubExtractor:
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Tests: base MemoryStore protocol
 # ---------------------------------------------------------------------------
 
 class TestMemoryStoreProtocol:
     def test_stub_satisfies_protocol(self):
         """StubStore is recognized as a MemoryStore."""
         store: MemoryStore = StubStore()
+        assert isinstance(store, MemoryStore)
+
+    def test_stub_without_get_by_tag_still_satisfies_protocol(self):
+        """A class without get_by_tag should still satisfy MemoryStore."""
+        class MinimalStore:
+            def save(self, memory: Memory) -> Memory:
+                return memory
+
+            def search(self, query: str, scope: MemoryScope | None = None, limit: int = 10) -> list[MemorySearchResult]:
+                return []
+
+            def delete(self, memory_id: str) -> bool:
+                return True
+
+            def get_all(self, scope: MemoryScope | None = None) -> list[Memory]:
+                return []
+
+        store = MinimalStore()
         assert isinstance(store, MemoryStore)
 
     def test_save_returns_memory(self):
@@ -74,11 +95,6 @@ class TestMemoryStoreProtocol:
     def test_search_with_scope_filter(self):
         store: MemoryStore = StubStore()
         results = store.search("query", scope=MemoryScope.PRIVATE, limit=5)
-        assert isinstance(results, list)
-
-    def test_get_by_tag_returns_list(self):
-        store: MemoryStore = StubStore()
-        results = store.get_by_tag("test")
         assert isinstance(results, list)
 
     def test_delete_returns_bool(self):
@@ -100,10 +116,45 @@ class TestMemoryStoreProtocol:
         """Search results are MemorySearchResult, not Memory."""
         store = StubStore()
         results = store.search("test")
-        # Empty list, but verify the return annotation is correct
         for r in results:
             assert isinstance(r, MemorySearchResult)
 
+
+# ---------------------------------------------------------------------------
+# Tests: TaggedMemoryStore protocol
+# ---------------------------------------------------------------------------
+
+class TestTaggedMemoryStoreProtocol:
+    def test_stub_satisfies_tagged_protocol(self):
+        """StubTaggedStore is recognized as a TaggedMemoryStore."""
+        store: TaggedMemoryStore = StubTaggedStore()
+        assert isinstance(store, TaggedMemoryStore)
+
+    def test_get_by_tag_returns_list(self):
+        """get_by_tag returns a list of MemorySearchResult."""
+        store: TaggedMemoryStore = StubTaggedStore()
+        results = store.get_by_tag("test")
+        assert isinstance(results, list)
+
+    def test_tagged_also_satisfies_base_protocol(self):
+        """TaggedMemoryStore is a superset — it also satisfies MemoryStore."""
+        store: TaggedMemoryStore = StubTaggedStore()
+        assert isinstance(store, MemoryStore)
+
+    def test_base_store_does_not_satisfy_tagged(self):
+        """A plain StubStore without get_by_tag does NOT satisfy TaggedMemoryStore."""
+        store = StubStore()
+        assert not isinstance(store, TaggedMemoryStore)
+
+    def test_tagged_store_method_signatures(self):
+        """get_by_tag is callable on a tagged store."""
+        store: TaggedMemoryStore = StubTaggedStore()
+        assert callable(getattr(store, "get_by_tag", None))
+
+
+# ---------------------------------------------------------------------------
+# Tests: MemoryExtractor protocol
+# ---------------------------------------------------------------------------
 
 class TestMemoryExtractorProtocol:
     def test_stub_satisfies_protocol(self):
@@ -128,13 +179,16 @@ class TestMemoryExtractorProtocol:
         assert result.memories == []
 
 
+# ---------------------------------------------------------------------------
+# Tests: protocol contract / method signatures
+# ---------------------------------------------------------------------------
+
 class TestProtocolContract:
     def test_memory_store_method_signatures(self):
-        """Verify all required methods exist and are callable."""
+        """Verify all required base methods exist and are callable."""
         store: MemoryStore = StubStore()
         assert callable(getattr(store, "save", None))
         assert callable(getattr(store, "search", None))
-        assert callable(getattr(store, "get_by_tag", None))
         assert callable(getattr(store, "delete", None))
         assert callable(getattr(store, "get_all", None))
 

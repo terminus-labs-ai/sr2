@@ -7,6 +7,7 @@ from .schema import (
 from .protocol import (
     MemoryExtractor,
     MemoryStore,
+    TaggedMemoryStore,
 )
 from .store import InMemoryMemoryStore
 from .extraction import RuleBasedExtractor
@@ -23,5 +24,6 @@ __all__ = [
     "MemorySearchResult",
     "MemoryExtractor",
     "MemoryStore",
+    "TaggedMemoryStore",
     "RuleBasedExtractor",
 ]
