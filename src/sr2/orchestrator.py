@@ -43,9 +43,9 @@ ToolExecutor = Callable[[ToolUseBlock], Awaitable[ToolResultBlock]]
 # object is used as the protocol to skip isinstance class-level validation —
 # the Resolver/Transformer protocols define instance attributes, so checking
 # the class itself yields false negatives. Correctness is enforced at build time.
-_RESOLVERS: PluginRegistry = PluginRegistry("sr2.resolvers", object)
-_TRANSFORMERS: PluginRegistry = PluginRegistry("sr2.transformers", object)
-_TOOL_PROVIDERS: PluginRegistry = PluginRegistry("sr2.tool_providers", object)
+_RESOLVERS: PluginRegistry = PluginRegistry("sr2.resolvers")
+_TRANSFORMERS: PluginRegistry = PluginRegistry("sr2.transformers")
+_TOOL_PROVIDERS: PluginRegistry = PluginRegistry("sr2.tool_providers")
 
 
 def _build_resolver(config: ResolverConfig, deps: Dependencies) -> Any:

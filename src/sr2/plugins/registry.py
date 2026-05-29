@@ -26,7 +26,7 @@ class PluginRegistry(Generic[T]):
         The runtime-checkable Protocol class that discovered classes must satisfy.
     """
 
-    def __init__(self, group: str, protocol: type) -> None:
+    def __init__(self, group: str, protocol: type | None = None) -> None:
         self._group = group
         self._protocol = protocol
 
@@ -95,6 +95,8 @@ class PluginRegistry(Generic[T]):
 
     def _validate_protocol(self, name: str, cls: type) -> None:
         """Raise TypeError if *cls* does not satisfy the registry protocol."""
+        if self._protocol is None:
+            return
         if not isinstance(cls, self._protocol):
             # Identify what's missing for a helpful message
             missing = []

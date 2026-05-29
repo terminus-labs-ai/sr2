@@ -343,3 +343,44 @@ class TestEntryPointsCallContract:
             registry = PluginRegistry("sr2.my_custom_group", FakeProtocol)
             registry.names()
         mock_ep.assert_called_once_with(group="sr2.my_custom_group")
+
+
+# ---------------------------------------------------------------------------
+# Optional protocol
+# ---------------------------------------------------------------------------
+
+class TestOptionalProtocol:
+    def test_no_protocol_arg_constructs_successfully(self):
+        """PluginRegistry("g") — omitting protocol entirely — must not raise."""
+        registry = PluginRegistry("g")
+        assert registry is not None
+
+    def test_none_protocol_arg_constructs_successfully(self):
+        """PluginRegistry("g", None) — explicit None — must not raise."""
+        registry = PluginRegistry("g", None)
+        assert registry is not None
+
+    def test_no_protocol_get_returns_class_without_validation(self):
+        """When protocol is None, get() returns the class without running isinstance check."""
+        ep = _make_entry_point("my_plugin", NonConformingClass)
+        with patch("sr2.plugins.registry.entry_points", return_value=[ep]):
+            registry = PluginRegistry("g")
+            result = registry.get("my_plugin")
+        assert result is NonConformingClass
+
+    def test_no_protocol_non_conforming_class_is_accepted(self):
+        """A class missing protocol members loads successfully when no protocol is set."""
+        ep = _make_entry_point("bare_plugin", NonConformingClass)
+        with patch("sr2.plugins.registry.entry_points", return_value=[ep]):
+            registry = PluginRegistry("g", None)
+            # Must not raise TypeError
+            result = registry.get("bare_plugin")
+        assert result is NonConformingClass
+
+    def test_explicit_protocol_still_validates(self):
+        """Passing a real protocol continues to reject non-conforming classes."""
+        ep = _make_entry_point("bad_plugin", NonConformingClass)
+        with patch("sr2.plugins.registry.entry_points", return_value=[ep]):
+            registry = PluginRegistry("g", FakeProtocol)
+            with pytest.raises(TypeError):
+                registry.get("bad_plugin")
