@@ -36,3 +36,6 @@ compaction = "sr2.compaction.transformer:CompactionTransformer"
 
 [dependency-groups]
 dev = ["pytest>=9.0.3", "pytest-asyncio>=0.25.0", "ruff>=0.15.11"]
+
+[tool.pytest.ini_options]
+pythonpath = ["tests"]

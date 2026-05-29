@@ -12,7 +12,6 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 
 import pytest
 
@@ -22,14 +21,14 @@ from sr2.config.models import (
     PipelineConfig,
     ResolverConfig,
 )
-from sr2.models import Message, TextBlock, TokenUsage
+from sr2.models import Message, TextBlock
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.pipeline.resolvers.session import SessionResolver
 from sr2.protocols.llm import (
     CompletionRequest,
-    CompletionResponse,
     StreamEvent,
 )
+from conftest import MockLLM, make_minimal_config, make_user_input
 
 
 # ---------------------------------------------------------------------------
@@ -48,61 +47,6 @@ def make_user_message(text: str = "Hello") -> Message:
 
 def make_assistant_message(text: str = "Hi there") -> Message:
     return make_message("assistant", text)
-
-
-def make_user_input(text: str = "current turn") -> list:
-    return [TextBlock(text=text)]
-
-
-class MockLLM:
-    """Minimal LLMCallable for testing — records stream calls."""
-
-    def __init__(self) -> None:
-        self.stream_calls: list[CompletionRequest] = []
-
-    async def complete(self, request: CompletionRequest) -> CompletionResponse:
-        return CompletionResponse(
-            id="mock-resp",
-            content=[TextBlock(text="mock response")],
-            stop_reason="end_turn",
-            usage=TokenUsage(),
-        )
-
-    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
-        self.stream_calls.append(request)
-        yield StreamEvent(type="text", text="mock response")
-        yield StreamEvent(type="end")
-
-
-def make_minimal_config() -> PipelineConfig:
-    """Single conversation layer with one SessionResolver."""
-    return PipelineConfig(
-        layers=[
-            LayerConfig(
-                name="system",
-                target="system",
-                resolvers=[
-                    ResolverConfig(
-                        type="static",
-                        config={"text": "You are a helpful assistant."},
-                    )
-                ],
-            ),
-            LayerConfig(
-                name="conversation",
-                target="messages",
-                resolvers=[
-                    ResolverConfig(type="session"),
-                    ResolverConfig(
-                        type="input",
-                        subscriptions=[
-                            EventSubscriptionConfig(event="user_input", phase="completed")
-                        ],
-                    ),
-                ],
-            ),
-        ]
-    )
 
 
 def make_config_no_session() -> PipelineConfig:

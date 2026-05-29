@@ -18,7 +18,6 @@ Mock the LLM callable at the boundary.
 from __future__ import annotations
 
 import importlib.metadata
-from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -31,13 +30,13 @@ from sr2.config.models import (
     ResolverConfig,
     ToolProviderConfig,
 )
-from sr2.models import Message, TextBlock, TokenUsage
+from sr2.models import Message, TextBlock
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.protocols.llm import (
     CompletionRequest,
-    CompletionResponse,
     StreamEvent,
 )
+from conftest import MockLLM, make_minimal_config, make_user_input
 
 
 # ---------------------------------------------------------------------------
@@ -45,67 +44,8 @@ from sr2.protocols.llm import (
 # ---------------------------------------------------------------------------
 
 
-class MockLLM:
-    """Minimal LLMCallable that records stream calls."""
-
-    def __init__(self, events: list[StreamEvent] | None = None) -> None:
-        self._events: list[StreamEvent] = events or [
-            StreamEvent(type="text", text="Hello"),
-            StreamEvent(type="end"),
-        ]
-        self.stream_calls: list[CompletionRequest] = []
-
-    async def complete(self, request: CompletionRequest) -> CompletionResponse:
-        return CompletionResponse(
-            id="mock-resp",
-            content=[TextBlock(text="Hello")],
-            stop_reason="end_turn",
-            usage=TokenUsage(),
-        )
-
-    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
-        self.stream_calls.append(request)
-        for event in self._events:
-            yield event
-
-
-def make_user_input(text: str = "hello") -> list:
-    return [TextBlock(text=text)]
-
-
 def make_message(role: str, text: str) -> Message:
     return Message(role=role, content=[TextBlock(text=text)])
-
-
-def make_minimal_config() -> PipelineConfig:
-    """Two-layer config: static system + session + input resolvers."""
-    return PipelineConfig(
-        layers=[
-            LayerConfig(
-                name="system",
-                target="system",
-                resolvers=[
-                    ResolverConfig(
-                        type="static",
-                        config={"text": "You are a helpful assistant."},
-                    )
-                ],
-            ),
-            LayerConfig(
-                name="conversation",
-                target="messages",
-                resolvers=[
-                    ResolverConfig(type="session"),
-                    ResolverConfig(
-                        type="input",
-                        subscriptions=[
-                            EventSubscriptionConfig(event="user_input", phase="completed")
-                        ],
-                    ),
-                ],
-            ),
-        ]
-    )
 
 
 def _all_message_text(request: CompletionRequest) -> str:

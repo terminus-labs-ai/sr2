@@ -38,15 +38,7 @@ from sr2.config.models import (
 from sr2.models import TextBlock, TokenUsage, ToolResultBlock, ToolUseBlock
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.protocols.llm import CompletionRequest, StreamEvent
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def make_user_input(text: str = "Hello") -> list:
-    return [TextBlock(text=text)]
+from conftest import make_user_input
 
 
 def make_minimal_config(**overrides: Any) -> PipelineConfig:

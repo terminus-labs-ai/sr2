@@ -16,10 +16,11 @@ from typing import Any, Callable
 
 import pytest
 
-from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig, EventSubscriptionConfig
-from sr2.models import TextBlock, TokenUsage, ToolResultBlock, ToolUseBlock
+from sr2.config.models import ConfigError
+from sr2.models import ToolResultBlock, ToolUseBlock
 from sr2.pipeline.token_counting import CharacterTokenCounter
-from sr2.protocols.llm import CompletionRequest, CompletionResponse, StreamEvent
+from sr2.protocols.llm import CompletionRequest, StreamEvent
+from conftest import make_minimal_config, make_user_input, stub_executor
 
 
 # ---------------------------------------------------------------------------
@@ -60,40 +61,6 @@ class MockLLM:
             yield event
 
 
-def make_user_input(text: str = "hello") -> list:
-    return [TextBlock(text=text)]
-
-
-def make_minimal_config() -> PipelineConfig:
-    return PipelineConfig(
-        layers=[
-            LayerConfig(
-                name="system",
-                target="system",
-                resolvers=[
-                    ResolverConfig(
-                        type="static",
-                        config={"text": "You are a helpful assistant."},
-                    )
-                ],
-            ),
-            LayerConfig(
-                name="conversation",
-                target="messages",
-                resolvers=[
-                    ResolverConfig(type="session"),
-                    ResolverConfig(
-                        type="input",
-                        subscriptions=[
-                            EventSubscriptionConfig(event="user_input", phase="completed")
-                        ],
-                    ),
-                ],
-            ),
-        ]
-    )
-
-
 def make_tool_use_stream() -> list[StreamEvent]:
     """Stream events that include a tool_use block."""
     return [
@@ -106,14 +73,6 @@ def make_tool_use_stream() -> list[StreamEvent]:
         ),
         StreamEvent(type="end"),
     ]
-
-
-async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
-    """A minimal valid ToolExecutor callable."""
-    return ToolResultBlock(
-        tool_use_id=block.id,
-        content=f"result for {block.name}",
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -13,102 +13,20 @@ Tests will FAIL until the feature is implemented (red phase).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
-from sr2.config.models import (
-    EventSubscriptionConfig,
-    LayerConfig,
-    PipelineConfig,
-    ResolverConfig,
-)
-from sr2.models import TextBlock, TokenUsage, ToolResultBlock, ToolUseBlock
+from sr2.models import ToolResultBlock, ToolUseBlock
 from sr2.pipeline.token_counting import CharacterTokenCounter
-from sr2.protocols.llm import CompletionRequest, CompletionResponse, StreamEvent
-
-
-# ---------------------------------------------------------------------------
-# Helpers & fakes
-# ---------------------------------------------------------------------------
-
-
-def make_user_input(text: str = "Hello") -> list:
-    return [TextBlock(text=text)]
-
-
-def make_minimal_config() -> PipelineConfig:
-    return PipelineConfig(
-        layers=[
-            LayerConfig(
-                name="system",
-                target="system",
-                resolvers=[
-                    ResolverConfig(
-                        type="static",
-                        config={"text": "You are a helpful assistant."},
-                    )
-                ],
-            ),
-            LayerConfig(
-                name="conversation",
-                target="messages",
-                resolvers=[
-                    ResolverConfig(type="session"),
-                    ResolverConfig(
-                        type="input",
-                        subscriptions=[
-                            EventSubscriptionConfig(event="user_input", phase="completed")
-                        ],
-                    ),
-                ],
-            ),
-        ]
-    )
-
-
-class SequentialMockLLM:
-    """LLM that returns a different event list on each successive stream() call.
-
-    Constructed with a list of call-sequences. Each element in `call_sequences`
-    is the list of StreamEvents returned on that call (0-indexed).
-
-    Once all sequences are exhausted, subsequent calls return the last sequence.
-    This makes writing multi-iteration tests declarative.
-    """
-
-    def __init__(self, call_sequences: list[list[StreamEvent]]) -> None:
-        assert call_sequences, "Must provide at least one call sequence"
-        self._sequences = call_sequences
-        self.stream_calls: list[CompletionRequest] = []
-
-    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
-        idx = min(len(self.stream_calls), len(self._sequences) - 1)
-        self.stream_calls.append(request)
-        for event in self._sequences[idx]:
-            yield event
-
-
-def tool_use_event(
-    tool_use_id: str = "call_001",
-    tool_name: str = "get_weather",
-    tool_input: dict[str, Any] | None = None,
-) -> StreamEvent:
-    return StreamEvent(
-        type="tool_use",
-        tool_use_id=tool_use_id,
-        tool_name=tool_name,
-        tool_input=tool_input or {"location": "Oslo"},
-    )
-
-
-async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
-    """Minimal executor that always returns a synthetic result."""
-    return ToolResultBlock(
-        tool_use_id=block.id,
-        content=f"result_for_{block.name}",
-    )
+from sr2.protocols.llm import CompletionRequest, StreamEvent
+from conftest import (
+    SequentialMockLLM,
+    make_minimal_config,
+    make_user_input,
+    stub_executor,
+    tool_use_event,
+)
 
 
 async def recording_executor_factory() -> tuple[list[ToolUseBlock], Any]:
