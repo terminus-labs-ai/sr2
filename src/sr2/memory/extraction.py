@@ -1,8 +1,12 @@
 """Rule-based memory extraction from conversation turns.
 
 Extracts factual statements, preferences, and decisions from assistant
-or user text into Memory objects. Uses heuristic patterns — designed to
-be swapped for an LLM-driven extractor later.
+or user text into Memory objects. Uses heuristic patterns.
+
+NOTE: RuleBasedExtractor is a dev/prototype-only implementation. The
+LLM-driven extractor (LLMExtractor) is the intended production path.
+RuleBasedExtractor should only be used for testing, offline tooling, or
+environments where LLM access is unavailable.
 """
 
 from __future__ import annotations
@@ -25,8 +29,15 @@ _FACT_PATTERNS: list[tuple[re.Pattern[str], MemoryScope, list[str]]] = [
     # Corrections/feedback
     (re.compile(r"(?:don't do that again|not (?:like|the way)|wrong\s+(?:approach|way))\b(.{5,100})", re.IGNORECASE),
      MemoryScope.SHARED, ["correction"]),
-    # Explicit facts stated
-    (re.compile(r"(?:the (?:project|code|system|repo)\s+)?(?:uses?|has|is|runs)\s+(.{5,100})", re.IGNORECASE),
+    # Explicit facts stated — requires a technical subject (project, code, system, etc.)
+    # Accepts: "the X", "our X", "this X" where X is a recognized technical term.
+    # Rejects bare pronouns (she/he/it/I) + verb.
+    (re.compile(
+        r"(?:the|our|this)\s+"
+        r"(?:project|code|system|repo|app|service|database|api|config|server)\s+"
+        r"(?:uses?|has|is|runs)\s+(.{5,100})",
+        re.IGNORECASE,
+    ),
      MemoryScope.PROJECT, ["fact"]),
     # Configuration/tooling facts
     (re.compile(r"(?:installed|configured|set up|enabled|disabled)\s+(.{5,100})", re.IGNORECASE),
