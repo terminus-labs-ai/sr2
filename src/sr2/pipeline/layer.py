@@ -114,6 +114,49 @@ class Layer:
         """
         self._pending_events.append(event)
 
+    def _snapshot_after(
+        self, kind: str, tokens_before: int
+    ) -> tuple[list, int, int]:
+        if kind == "tool_provider":
+            return [td.name for td in self._tool_definitions], 0, 0
+        content_after = list(self._content)
+        tokens_after = self._token_counter.count(content_after)
+        return content_after, tokens_after, tokens_after - tokens_before
+
+    def _build_record(
+        self,
+        *,
+        kind: str,
+        comp: object,
+        events: list[Event],
+        content_before: list,
+        tokens_before: int,
+        content_after: list,
+        tokens_after: int,
+        tokens_delta: int,
+        duration_ms: float,
+        iter_seq: int,
+        status: str,
+        error: str | None = None,
+    ) -> FiringRecord:
+        return FiringRecord(
+            turn_seq=self._turn_seq,
+            firing_seq=self._next_firing_seq(),
+            kind=kind,
+            component_name=comp.name,  # type: ignore[union-attr]
+            layer=self.name,
+            trigger_events=[e.name for e in events],
+            content_before=content_before,
+            content_after=content_after,
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+            tokens_delta=tokens_delta,
+            duration_ms=duration_ms,
+            status=status,
+            error=error,
+            iteration_seq=iter_seq,
+        )
+
     async def _fire_component(
         self,
         comp: object,
@@ -162,65 +205,29 @@ class Layer:
                 self.add_tool_definitions(result)
 
             if self._tracer is not None:
-                if kind == "tool_provider":
-                    content_after: list = [td.name for td in self._tool_definitions]
-                    tokens_after = 0
-                    tokens_delta = 0
-                else:
-                    content_after = list(self._content)
-                    tokens_after = self._token_counter.count(content_after)
-                    tokens_delta = tokens_after - tokens_before
+                content_after, tokens_after, tokens_delta = self._snapshot_after(kind, tokens_before)
                 duration_ms = (time.perf_counter() - t_start) * 1000
-                # Use the iteration_seq from triggering events (default 1 when absent)
                 iter_seq = events[0].iteration_seq if events else 1
-                record = FiringRecord(
-                    turn_seq=self._turn_seq,
-                    firing_seq=self._next_firing_seq(),
-                    kind=kind,
-                    component_name=comp.name,  # type: ignore[union-attr]
-                    layer=self.name,
-                    trigger_events=[e.name for e in events],
-                    content_before=content_before,
-                    content_after=content_after,
-                    tokens_before=tokens_before,
-                    tokens_after=tokens_after,
-                    tokens_delta=tokens_delta,
-                    duration_ms=duration_ms,
-                    status="ok",
-                    iteration_seq=iter_seq,
-                )
-                self._tracer.on_firing(record)
+                self._tracer.on_firing(self._build_record(
+                    kind=kind, comp=comp, events=events,
+                    content_before=content_before, tokens_before=tokens_before,
+                    content_after=content_after, tokens_after=tokens_after,
+                    tokens_delta=tokens_delta, duration_ms=duration_ms,
+                    iter_seq=iter_seq, status="ok",
+                ))
 
         except Exception as exc:
             if self._tracer is not None:
-                if kind == "tool_provider":
-                    content_after = [td.name for td in self._tool_definitions]
-                    tokens_after = 0
-                    tokens_delta = 0
-                else:
-                    content_after = list(self._content)
-                    tokens_after = self._token_counter.count(content_after)
-                    tokens_delta = tokens_after - tokens_before
+                content_after, tokens_after, tokens_delta = self._snapshot_after(kind, tokens_before)
                 duration_ms = (time.perf_counter() - t_start) * 1000
                 iter_seq = events[0].iteration_seq if events else 1
-                record = FiringRecord(
-                    turn_seq=self._turn_seq,
-                    firing_seq=self._next_firing_seq(),
-                    kind=kind,
-                    component_name=comp.name,  # type: ignore[union-attr]
-                    layer=self.name,
-                    trigger_events=[e.name for e in events],
-                    content_before=content_before,
-                    content_after=content_after,
-                    tokens_before=tokens_before,
-                    tokens_after=tokens_after,
-                    tokens_delta=tokens_delta,
-                    duration_ms=duration_ms,
-                    status="failed",
-                    error=str(exc),
-                    iteration_seq=iter_seq,
-                )
-                self._tracer.on_firing(record)
+                self._tracer.on_firing(self._build_record(
+                    kind=kind, comp=comp, events=events,
+                    content_before=content_before, tokens_before=tokens_before,
+                    content_after=content_after, tokens_after=tokens_after,
+                    tokens_delta=tokens_delta, duration_ms=duration_ms,
+                    iter_seq=iter_seq, status="failed", error=str(exc),
+                ))
             raise
 
         return result
