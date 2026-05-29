@@ -1,187 +1,233 @@
-# SR2 — Context Engineering Library for AI Agents
+# SR2 — A Context Runtime for AI Agents
 
 SR2 manages the full lifecycle of what goes into an LLM's context window:
-compaction, caching, summarization, graceful degradation, and KV-cache optimization.
+layer assembly, compaction, summarization, memory, token budgeting, KV-cache
+alignment, and graceful degradation.
 
-**Version:** 2.0.0-alpha (complete redesign from v1)
-
-**Repository:** `revamp` branch — clean-slate rebuild following the [v2 redesign plan](/data/obsidian/projects/sr2/PLAN-sr2-v2-redesign.md).
+**Version:** 2.0.0-alpha (`revamp` branch — clean-slate rebuild)
 
 ---
 
-## What it does
+## What SR2 is
 
-SR2 sits between your agent harness and the LLM. The harness:
-
-1. Calls `sr2.process(config, inputs)` to get compiled context
-2. Makes the LLM call (provider-specific — Anthropic, OpenAI, etc.)
-3. Feeds the response back as `TurnResult`
-4. Calls `sr2.post_process(turn_result)` for memory extraction and maintenance
-
-SR2 never makes the LLM call. It only manages context.
+SR2 is **not a library you call once, and not a harness.** It's a distinct
+middle tier in the agent stack: a **context runtime** that sits between your
+agent harness and the LLM provider.
 
 ```
-┌─────────────────────────────────────┐
-│         Public API (facade)         │  <-- only thing harness touches
-│  config in -> process() -> context out│
-│            post_process(turn_result) │
-├─────────────────────────────────────┤
-│         Plugin Registry             │  <-- entry-point discovery
-│  providers, reducers, stores,       │
-│  exporters                          │
-├─────────────────────────────────────┤
-│         Pipeline Engine             │  <-- interprets YAML config
-│  layers -> resolve -> budget -> reduce
-├─────────────────────────────────────┤
-│         Subsystems (internal)       │
-│  memory, compaction, summarization, │
-│  degradation, cache, metrics        │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ HARNESS              your agent / Claude Code / LangGraph   │
+│   owns: I/O, session identity, agent personality,           │
+│         tool *implementations*, config                       │
+└───────────────────────────┬─────────────────────────────────┘
+                            │  turn(user_input)
+                            ▼
+┌──────────────────────────────────────────────────────────┐
+│ SR2                  the context runtime                     │
+│   owns: WHAT fills the window + how it evolves               │
+│   drives the multi-iteration tool loop:                       │
+│     compile → call LLM → run tools → repeat → post-process    │
+│   layers · resolvers · transformers · memory · compaction     │
+│   summarization · budgeting · cache alignment · degradation   │
+└───────────────────────────┬─────────────────────────────────┘
+                            │  CompletionRequest      (injected ↓)
+                            ▼
+┌──────────────────────────────────────────────────────────┐
+│ LLMCallable          LiteLLMCallable (default) / your own     │
+│   owns: the raw provider HTTP call (Anthropic, OpenAI, …)     │
+└──────────────────────────────────────────────────────────┘
 ```
 
-## Core principles
+### Why it owns the LLM call
 
-- **Declarative-first** — YAML config is the API. Users describe what they want, SR2 executes it.
-- **Open/Closed Principle** — New capabilities added via plugins, never by modifying existing code.
-- **Hard public/internal boundary** — Harness gets a facade with defined inputs/outputs. Cannot reach into SR2 internals.
-- **Plugin model (open-core)** — Free plugins ship with core. Paid plugins register via entry points. Core never imports paid code.
+Context management is a **closed loop**, not a one-shot transform:
 
-## Design principles
+> compile context → call the model → observe the response → post-process
+> (memory extraction, compaction, summarization, cache tracking)
 
-SOLID, OCP, and DRY are enforced at every level:
+A pure "compile-only" library forces the harness into a two-call dance —
+compile, call the LLM yourself, then hand the response back — and every
+guarantee SR2 makes (cache-stable prefixes, correct conversation-zone
+transitions, reliable post-processing) depends on the harness getting that
+dance exactly right. So SR2 **owns the turn loop** instead.
 
-- **SRP** — Each protocol has one responsibility. Each module owns one concept.
-- **OCP** — Extension points via `runtime_checkable` protocols + Python entry points. New providers, reducers, stores, and exporters plug in without touching core.
-- **DRY** — Shared types defined once, reused everywhere. Generic `PluginRegistry[T]` serves all extension points.
+It does *not* own the provider HTTP call or tool execution. Both are
+**injected dependencies** (inversion of control):
 
-## Architecture
+| Dependency | Type | Provided by | SR2's use |
+|---|---|---|---|
+| `llm` | `LLMCallable` (`complete` / `stream`) | harness | called each LLM iteration |
+| `tool_executor` | `async (ToolUseBlock) -> ToolResultBlock` | harness | called per tool request; **SR2 never implements tools** |
+| `token_counter` | `TokenCounter` | harness | budget enforcement |
+| `memory_store`, `memory_extractor`, `tracer`, `provenance_store` | protocols | harness (optional) | memory, observability |
 
-### Facade Boundary
+This is how SR2 owns the *lifecycle* without becoming a provider client or a
+harness. The harness supplies adapters + I/O + personality; SR2 drives the
+turn.
 
-Two entry points — that's it:
+### Two delivery modes
 
-| Entry point | Timing | Returns |
-|---|---|---|
-| `process(config, inputs)` | Pre-LLM | `CompiledContext` with assembled layers + metrics |
-| `post_process(turn_result)` | Post-LLM | `PostProcessResult` with memory extraction + maintenance |
+The same SR2 core ships two ways:
 
-### Layer Model
+- **Embedded** — import SR2, inject `LiteLLMCallable`, call `turn()` in-process.
+  This is the primary mode (see Quick Start).
+- **Gateway** — SR2 behind an HTTP endpoint, for foreign harnesses (Claude
+  Code, Cursor, OpenAI-SDK clients) that can't embed it as a Python library.
+  This is what `sr2-relay` provides; it's a thin wire-format adapter over the
+  same `turn()`.
 
-Layers are containers with named content providers. Each provider has its own config and token budget. Example:
+## The turn loop
 
-```yaml
-layers:
-  - name: system_prompt
-    cache: static
+`SR2.turn(user_input) -> AsyncIterator[StreamEvent]` is the entry point. Per
+turn it:
 
-  - name: conversation
-    window: 10
-    max_tokens: 8000
-    session_history:
-      max_tokens: 8000
-    memory:
-      read:
-        scope: [private]
-        max_tokens: 2000
-      write:
-        scope: [private]
-    compaction:
-      rules: [schema_and_sample, result_summary]
-```
+1. Compiles context from the configured layers (resolvers → transformers → budget)
+2. Streams an LLM response via the injected `LLMCallable`
+3. If the model requested tools: runs them through the injected `tool_executor`
+   (concurrently, order-preserving), appends results, and loops
+4. Repeats until the model stops requesting tools (capped by `max_tool_iterations`)
+5. Emits a single `end` event, then `await`s `post_process`
 
-Layer order determines KV-cache efficiency. Stable layers (system prompt, project context, tools) go first — they stay cached across turns. Dynamic layers (conversation) go last.
-
-### Memory System
-
-Two placement modes, same retrieval engine:
-
-- **Standalone layer** — stable memories, can be cached. Changes rarely.
-- **Conversation-interleaved** — dynamic memories injected per-turn based on topic. Swept by summarization.
-
-Read and write are independent toggles with independent scopes: `private`, `project`, `team`, `shared`.
-
-### Degradation
-
-Degradation is *emergent from config*, not a hardcoded ladder:
-
-1. **Circuit breakers** — per-provider. 3 failures -> open -> cooldown -> half-open test
-2. **Priority shedding** — over budget? Shed lowest-priority layers first
-3. **Fallback content** — provider failed? Use cached, static, or skip
-
-No special-cased layer names. The user's priority assignments define their own degradation path.
-
-### Plugin System
-
-Four extension points, each defined by a runtime-checkable Protocol:
-
-| Extension | Protocol | Examples |
-|---|---|---|
-| Content providers | `ContentProvider` | session_history, memory, tools |
-| Reducers | `ContentReducer` | compaction, summarization, tool_summarizer |
-| Memory stores | `MemoryStore` | in_memory, sqlite, postgres |
-| Exporters | `MetricExporter` | OTel, Prometheus |
-
-Plugins register via Python packaging entry points. Lazy discovery — nothing activates unless YAML config names it.
-
-### Metrics
-
-Always-on, always embedded in the response. No extra calls or setup:
-
-```python
-result = sr2.process(config, inputs)
-result.context   # compiled messages
-result.metrics   # what SR2 did and why
-```
-
-Export plugins (OTel, Prometheus) consume the same snapshots — they subscribe, they don't collect.
+Callers see a clean stream: `text` and `usage` events, loop-progress events
+(`tool_use_emitted`, `tool_result_received`, `iteration_complete`), and exactly
+one `end`.
 
 ## Quick start
 
-See [QUICKSTART.md](QUICKSTART.md) for getting running in 5 minutes.
+```python
+import asyncio
+from sr2 import SR2
+from sr2.config.models import PipelineConfig
+from sr2.integrations.litellm import LiteLLMCallable
+from sr2.pipeline.token_counting import CharacterTokenCounter
+from sr2.models import TextBlock
+
+config = PipelineConfig(
+    layers=[
+        {"name": "system", "target": "system",
+         "resolvers": [{"type": "static",
+                        "config": {"text": "You are a helpful assistant."}}]},
+        {"name": "conversation", "target": "messages",
+         "resolvers": [{"type": "session"}, {"type": "input"}]},
+    ]
+)
+
+sr2 = SR2(
+    config,
+    llm=LiteLLMCallable("anthropic/claude-haiku-4-5-20251001"),
+    token_counter=CharacterTokenCounter(),
+)
+
+async def main():
+    async for event in sr2.turn([TextBlock(text="Hello")]):
+        if event.type == "text":
+            print(event.text, end="")
+
+asyncio.run(main())
+```
+
+Or run a config straight from the CLI:
+
+```bash
+sr2 configs/minimal.yaml
+```
+
+See [QUICKSTART.md](QUICKSTART.md) for the YAML config shape, tool wiring, and
+multi-turn sessions.
+
+## How context is built
+
+### Event-driven pipeline
+
+The pipeline runs on an **EventBus**, not a fixed sequence. Components subscribe
+to event names (`turn_start`, `user_input`, `assistant_response`, …); the engine
+drives a drain-process loop each turn until no component produces new work.
+
+### Layers
+
+A **layer** is the unit of context. Each layer holds **resolvers** (produce
+content), **transformers** (reshape content), and optional **tool providers**
+(produce tool definitions). Layers compile to one of three targets — `system`,
+`messages`, or `tools` — and enforce a per-layer token budget.
+
+Layer order drives KV-cache efficiency: stable layers (system prompt, project
+context) go first and stay cached; dynamic layers (conversation) go last.
+
+### Extension model
+
+Four extension points, each a `runtime_checkable` Protocol, discovered lazily
+via Python entry points — nothing activates unless your config names it:
+
+| Group | Protocol | Built-ins |
+|---|---|---|
+| `sr2.resolvers` | `Resolver` | `static`, `input`, `session`, `event_payload`, `memory` |
+| `sr2.transformers` | `Transformer` | `summarize`, `memory_extraction`, `compaction` |
+| `sr2.extractors` | `MemoryExtractor` | `rule_based` |
+| `sr2.tool_providers` | `ToolProvider` | *(extension point; no built-ins yet)* |
+
+Add a capability by registering an entry point — never by modifying the engine
+(Open/Closed).
+
+## Subsystems
+
+- **Memory** — `MemoryStore` / `MemoryExtractor` protocols; `MemoryResolver`
+  injects relevant memories on input, `MemoryExtractionTransformer` saves them
+  from responses. In-memory store ships with core.
+- **Compaction** — rule-based block compression (`schema_and_sample`,
+  `result_summary`) with an optional cost gate (cache-invalidation economics).
+- **Summarization** — LLM-powered compression of older content.
+- **Degradation** — per-provider `CircuitBreaker` (closed/open/half-open) plus a
+  5-level `DegradationLadder`.
+- **Provenance & tracing** — every content block's origin is recorded
+  (`InMemoryProvenanceStore` or durable `SQLiteProvenanceStore`); `Tracer`
+  captures per-component firing records with a human-readable timeline.
+
+## Design principles
+
+- **Context runtime, not a library or a harness** — owns the turn loop;
+  delegates the provider call and tool execution via dependency injection.
+- **Event-driven** — components react to events; no hardcoded execution order.
+- **Config-driven** — the pipeline is declared in YAML/Pydantic; no context
+  logic in agent code.
+- **Open/Closed** — new resolvers, transformers, extractors, stores plug in via
+  entry points without touching the engine.
+- **Single package** — v2 is one clean package (`src/sr2/`). The v1 multi-package
+  monorepo, runtime, bridge, and premium split are gone.
+- **Async throughout** — all I/O (LLM, stores, provenance) is async.
 
 ## Project structure
 
+The authoritative module map and architecture reference lives in
+[CLAUDE.md](CLAUDE.md). High level:
+
 ```
 src/sr2/
-  __init__.py           # Public API exports
-  sr2.py                # SR2 facade (process / post_process)
-
-  protocols/            # Extension point contracts (runtime_checkable)
-    __init__.py         # ContentProvider, ContentReducer, MemoryStore, MetricExporter
-
-  core/                 # Domain models & errors
-    models.py           # Memory, TurnResult, ToolCall, TokenUsage, enums
-    errors.py           # SR2Error hierarchy
-
-  config/               # Declarative YAML config
-    models.py           # PipelineConfig, LayerConfig, provider configs
-    loader.py           # YAML parsing with extends inheritance
-
-  pipeline/             # Context compilation engine
-    engine.py           # Layer resolution, budget enforcement, caching
-    result.py           # CompiledContext, PostProcessResult, PipelineMetrics
-
-  plugins/              # Plugin infrastructure
-    registry.py         # Generic PluginRegistry[T] with lazy entry-point discovery
-
-  degradation/          # Graceful failure handling
-    circuit_breaker.py  # Per-provider circuit breaker (closed/open/half-open)
-
-  tokenization/         # Token counting
-    counting.py         # tiktoken-based count_tokens() and truncate_to_tokens()
-
-  memory/               # Memory subsystem (in progress)
-  compaction/           # Content compaction (in progress)
-  summarization/        # Conversation summarization (in progress)
-  cache/                # KV-cache policies (in progress)
-  metrics/              # Metric collection (in progress)
-  resolvers/            # Content resolvers (in progress)
-  tools/                # Tool management (in progress)
+  __init__.py       # public API — `from sr2 import SR2`, plus core models
+  sr2.py            # facade re-export of the SR2 orchestrator
+  orchestrator.py   # SR2 class: the turn loop
+  models.py         # core data models (TextBlock, Message, ToolDefinition, …)
+  protocols/llm.py  # LLMCallable, CompletionRequest/Response, StreamEvent
+  integrations/     # LiteLLMCallable
+  config/           # Pydantic config models
+  pipeline/         # engine, event bus, layers, resolvers, transformers, tracing
+  memory/           # stores, extractors, resolver
+  compaction/       # rule engine + cost gate
+  degradation/      # circuit breaker, ladder
+  tokenization/     # tiktoken counter
 ```
 
 ## Status
 
-v2.0.0-alpha. Scaffolding and core contracts complete. Memory, compaction, summarization, and cache subsystems in progress.
+v2.0.0-alpha on `revamp`. Turn loop, event-driven pipeline, layers,
+resolvers/transformers, memory, compaction, degradation, provenance, and tracing
+are in place. `post_process` is a wired no-op pending the extraction/maintenance
+hookup.
+
+## Documentation
+
+- [QUICKSTART.md](QUICKSTART.md) — config shape, tools, multi-turn
+- [CLAUDE.md](CLAUDE.md) — full architecture reference and module map
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow and standards
 
 ## License
 

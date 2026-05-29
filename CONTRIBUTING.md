@@ -26,14 +26,18 @@ git checkout -b feat/memory-system
 When adding a new capability:
 
 ```python
-# GOOD — extend via protocol
-class MyStore(MemoryStore):
-    async def save(self, memory): ...
-    # register via entry point: sr2.stores = {my_store = "..."}
+# GOOD — extend via protocol + entry point
+class MyResolver:
+    async def resolve(self, events): ...
+    @classmethod
+    def build(cls, config, deps): ...
+    # register in pyproject.toml:
+    #   [project.entry-points."sr2.resolvers"]
+    #   my_resolver = "mypkg.module:MyResolver"
 
 # BAD — modify core to add special case
 # in pipeline/engine.py:
-# if store_type == "my_store":  # hardcoded branch
+# if resolver_type == "my_resolver":  # hardcoded branch
 ```
 
 ### DRY in practice
@@ -53,17 +57,18 @@ class ResolvedContent:
 
 ### Error handling
 
-All errors inherit from `SR2Error`. Use the specific error types:
+Use the specific error types — never raise bare `Exception` or `ValueError`:
 
 ```python
-from sr2.core.errors import ConfigError, PluginNotFoundError, PipelineError
+from sr2.config.models import ConfigError, ToolLoopLimitError
+from sr2.plugins.errors import PluginNotFoundError, PluginCollisionError
 
 def load_config(path):
     if not Path(path).exists():
         raise ConfigError(f"Config file not found: {path}")
 ```
 
-Never raise bare `Exception` or `ValueError` from SR2 code.
+Error messages must be actionable — tell the user how to fix the problem.
 
 ## Testing
 
@@ -164,7 +169,8 @@ When making a design choice, ask:
 
 /data/obsidian/projects/sr2/      # Project hub (plans, status)
   PLAN-sr2-v2-redesign.md         # Full redesign specification
-  CLAUDE.md                       # Project instructions
-
-/home/shepard/git/sr2-pro/        # Premium plugins (PostgreSQL, OTel, Prometheus)
+  CLAUDE.md                       # Thin pointer → this repo's CLAUDE.md
 ```
+
+> v2 is a single package. The v1 multi-package monorepo (sr2-runtime,
+> sr2-bridge, sr2-pro / premium plugins) is not part of the `revamp` branch.

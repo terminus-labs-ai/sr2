@@ -106,7 +106,7 @@ All component types are discovered lazily at runtime via `PluginRegistry` scanni
 ### SR2 Orchestrator
 
 `SR2` (`orchestrator.py`) is the single top-level entry point. It:
-1. Accepts a `PipelineConfig`, `llm: dict[str, LLMCallable]`, `TokenCounter`, and optional deps (provenance store, tracer, memory store/extractor).
+1. Accepts a `PipelineConfig`, an `llm` (a single `LLMCallable` or a `dict[str, LLMCallable]`), a `TokenCounter`, and optional deps (`tool_executor`, provenance store, tracer, memory store/extractor).
 2. Builds a `Dependencies` container and instantiates layers from config — each `LayerConfig` gets its resolvers, transformers, and tool providers resolved via `PluginRegistry`.
 3. Creates a `PipelineEngine` that owns a shared `EventBus`.
 4. Exposes `async turn(user_input)` → `AsyncIterator[StreamEvent]`.
@@ -118,7 +118,7 @@ async for event in sr2.turn([TextBlock(text="hello")]):
         print(event.text, end="")
 ```
 
-`post_process()` is a hook for post-turn work (memory extraction, summarization). Currently a no-op; called fire-and-forget after streaming completes.
+`post_process()` is a hook for post-turn work (memory extraction, summarization). Currently a no-op; `await`ed once after the stream completes, before the `turn()` generator exits (not fire-and-forget).
 
 ### Event-Driven Pipeline
 
@@ -148,9 +148,9 @@ A `Layer` is the core pipeline unit. It:
 - Holds `resolvers`, `transformers`, `tool_providers` (all implementing their respective protocols)
 - Subscribes components to the shared bus; accumulates content as events arrive
 - Enforces a `token_budget` (per-layer cap); emits `overflow` then `force_truncate` if exceeded
-- Compiles to one of three `CompilationTarget`s: `SYSTEM`, `MESSAGES`, `TOOLS`
-  - Target inferred from layer name (`"system"` → SYSTEM, `"tool"` → TOOLS, else MESSAGES)
-  - Or overridden explicitly via `LayerConfig.target`
+- Compiles to one of three `CompilationTarget`s, set explicitly via the
+  **required** `LayerConfig.target`: `"system"` → SYSTEM, `"messages"` → MESSAGES,
+  `"tools"` → TOOLS
 - Content placement: `append` (default) or `prefix` via `PositionStrategy`
 
 ### Protocols
@@ -191,6 +191,11 @@ class PipelineConfig(BaseModel):
     layers: list[LayerConfig]
     token_budget: int = 200_000
     enable_overflow_detection: bool = True
+    max_tool_iterations: int = 25          # tool-loop cap per turn
+    max_parallel_tools: int | None = None  # semaphore on concurrent tool exec
+    llm_timeout_seconds: float | None = None
+    circuit_breaker_failure_threshold: int = 3
+    circuit_breaker_recovery_timeout: float = 60.0
 
 class LayerConfig(BaseModel):
     name: str
@@ -200,11 +205,12 @@ class LayerConfig(BaseModel):
     resolvers: list[ResolverConfig]
     transformers: list[TransformerConfig] | None = None
     tool_providers: list[ToolProviderConfig] | None = None
-    target: str | None = None    # explicit CompilationTarget override
+    target: str                  # required: "system" | "messages" | "tools"
     position: str = "append"     # "append" | "prefix"
 
 class ResolverConfig(BaseModel):
     type: str                    # entry-point key (e.g. "static", "session")
+    name: str | None = None
     config: dict = {}            # resolver-specific options (live dict, not copied)
     subscriptions: list[EventSubscriptionConfig] = []
     max_executions: int = 1
@@ -218,12 +224,12 @@ class ResolverConfig(BaseModel):
 ```python
 class LLMCallable(Protocol):
     async def complete(self, request: CompletionRequest) -> CompletionResponse: ...
-    def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]: ...
+    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]: ...
 ```
 
 `LiteLLMCallable` (`integrations/litellm.py`) implements this via `litellm.acompletion`. Handles tool calls, streaming, OpenAI-compatible endpoints (auto-adds `openai/` prefix for bare model names with a `base_url`).
 
-The orchestrator takes `llm: dict[str, LLMCallable]` — must include `"default"` key. Named entries can be used by transformers that specify `config.model`.
+The orchestrator takes `llm` as either a single `LLMCallable` or a `dict[str, LLMCallable]`. The driver is the `"default"` entry if present, otherwise the first value. Named entries can be used by transformers that specify `config.model`.
 
 ### Token Counting
 
