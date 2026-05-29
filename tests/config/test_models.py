@@ -403,3 +403,160 @@ class TestYAMLRoundTrip:
         cfg2 = PipelineConfig(**dumped)
 
         assert cfg1 == cfg2
+
+
+# ---------------------------------------------------------------------------
+# 8. TestNamedMergeField — optional name field on resolver/transformer/tool-provider
+# ---------------------------------------------------------------------------
+
+
+class TestNamedMergeField:
+    """Requirements:
+    1. name: str | None = None on ResolverConfig, TransformerConfig, ToolProviderConfig
+    2. name defaults to None when not provided
+    3. name accepts a string value
+    4. Dict construction with 'name' key works (YAML compat)
+    5. model_dump() round-trip preserves name
+    6. Unnamed configs still parse correctly (backward compat)
+    """
+
+    # --- Requirement 2: name defaults to None ---
+
+    def test_resolver_name_defaults_to_none(self):
+        from sr2.config.models import ResolverConfig
+
+        r = ResolverConfig(type="input")
+        assert r.name is None
+
+    def test_transformer_name_defaults_to_none(self):
+        from sr2.config.models import TransformerConfig
+
+        t = TransformerConfig(type="compaction")
+        assert t.name is None
+
+    def test_tool_provider_name_defaults_to_none(self):
+        from sr2.config.models import ToolProviderConfig
+
+        tp = ToolProviderConfig(type="mcp")
+        assert tp.name is None
+
+    # --- Requirement 3: name accepts a string ---
+
+    def test_resolver_name_accepts_string(self):
+        from sr2.config.models import ResolverConfig
+
+        r = ResolverConfig(type="retrieval", name="semantic_search")
+        assert r.name == "semantic_search"
+
+    def test_transformer_name_accepts_string(self):
+        from sr2.config.models import TransformerConfig
+
+        t = TransformerConfig(type="compaction", name="context_compactor")
+        assert t.name == "context_compactor"
+
+    def test_tool_provider_name_accepts_string(self):
+        from sr2.config.models import ToolProviderConfig
+
+        tp = ToolProviderConfig(type="mcp", name="filesystem_tools")
+        assert tp.name == "filesystem_tools"
+
+    # --- Requirement 4: dict construction with 'name' key (YAML compat) ---
+
+    def test_resolver_name_from_dict(self):
+        from sr2.config.models import ResolverConfig
+
+        r = ResolverConfig(**{"type": "retrieval", "name": "named_retriever"})
+        assert r.name == "named_retriever"
+
+    def test_transformer_name_from_dict(self):
+        from sr2.config.models import TransformerConfig
+
+        t = TransformerConfig(**{"type": "summarization", "name": "summary_step"})
+        assert t.name == "summary_step"
+
+    def test_tool_provider_name_from_dict(self):
+        from sr2.config.models import ToolProviderConfig
+
+        tp = ToolProviderConfig(**{"type": "mcp", "name": "code_tools"})
+        assert tp.name == "code_tools"
+
+    # --- Requirement 5: model_dump() round-trip preserves name ---
+
+    def test_resolver_name_survives_round_trip(self):
+        from sr2.config.models import ResolverConfig
+
+        r1 = ResolverConfig(type="retrieval", name="my_resolver")
+        dumped = r1.model_dump()
+        r2 = ResolverConfig(**dumped)
+        assert r2.name == "my_resolver"
+
+    def test_transformer_name_survives_round_trip(self):
+        from sr2.config.models import TransformerConfig
+
+        t1 = TransformerConfig(type="compaction", name="my_transformer")
+        dumped = t1.model_dump()
+        t2 = TransformerConfig(**dumped)
+        assert t2.name == "my_transformer"
+
+    def test_tool_provider_name_survives_round_trip(self):
+        from sr2.config.models import ToolProviderConfig
+
+        tp1 = ToolProviderConfig(type="mcp", name="my_tools")
+        dumped = tp1.model_dump()
+        tp2 = ToolProviderConfig(**dumped)
+        assert tp2.name == "my_tools"
+
+    def test_none_name_survives_round_trip(self):
+        """model_dump() of an unnamed config round-trips to name=None."""
+        from sr2.config.models import ResolverConfig
+
+        r1 = ResolverConfig(type="input")
+        dumped = r1.model_dump()
+        assert dumped["name"] is None
+        r2 = ResolverConfig(**dumped)
+        assert r2.name is None
+
+    # --- Requirement 6: backward compat — unnamed configs still parse ---
+
+    def test_existing_resolver_config_unchanged(self):
+        """Config without name still constructs with all existing fields intact."""
+        from sr2.config.models import EventSubscriptionConfig, ResolverConfig
+
+        r = ResolverConfig(
+            type="retrieval",
+            config={"top_k": 5},
+            subscriptions=[EventSubscriptionConfig(event="turn_start")],
+            max_executions=2,
+        )
+        assert r.name is None
+        assert r.type == "retrieval"
+        assert r.config == {"top_k": 5}
+        assert len(r.subscriptions) == 1
+        assert r.max_executions == 2
+
+    def test_existing_transformer_config_unchanged(self):
+        """TransformerConfig without name still constructs correctly."""
+        from sr2.config.models import EventSubscriptionConfig, TransformerConfig
+
+        t = TransformerConfig(
+            type="compaction",
+            config={"strategy": "rule_based"},
+            subscriptions=[EventSubscriptionConfig(event="overflow", phase="post_resolve")],
+            max_executions=3,
+        )
+        assert t.name is None
+        assert t.type == "compaction"
+        assert t.max_executions == 3
+
+    def test_existing_tool_provider_config_unchanged(self):
+        """ToolProviderConfig without name still constructs correctly."""
+        from sr2.config.models import ToolProviderConfig
+
+        tp = ToolProviderConfig(
+            type="mcp",
+            config={"server_url": "http://localhost:8080"},
+            max_executions=1,
+        )
+        assert tp.name is None
+        assert tp.type == "mcp"
+        assert tp.config == {"server_url": "http://localhost:8080"}

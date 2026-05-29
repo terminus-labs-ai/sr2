@@ -24,6 +24,7 @@ class EventSubscriptionConfig(BaseModel):
 
 class TransformerConfig(BaseModel):
   type: str
+  name: str | None = None
   subscriptions: list[EventSubscriptionConfig] = []
   config: _LiveDict = {}
   max_executions: int = 1
@@ -31,6 +32,7 @@ class TransformerConfig(BaseModel):
 
 class ResolverConfig(BaseModel):
   type: str
+  name: str | None = None
   config: _LiveDict = {}
   subscriptions: list[EventSubscriptionConfig] = []
   max_executions: int = 1
@@ -38,6 +40,7 @@ class ResolverConfig(BaseModel):
 
 class ToolProviderConfig(BaseModel):
   type: str
+  name: str | None = None
   config: _LiveDict = {}
   subscriptions: list[EventSubscriptionConfig] = []
   max_executions: int = 1
