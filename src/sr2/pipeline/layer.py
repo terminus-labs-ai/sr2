@@ -36,7 +36,7 @@ class Layer:
         resolvers: list[Resolver],
         transformers: list[Transformer],
         token_counter: TokenCounter,
-        event_bus: EventBus,
+        event_bus: EventBus | None = None,
         provenance_store: ProvenanceStore | None = None,
         token_threshold_pct: float | None = None,
         tool_providers: list | None = None,
@@ -53,7 +53,7 @@ class Layer:
         self.tool_providers = list(tool_providers) if tool_providers is not None else []
         self.components: list = list(components) if components is not None else []
         self._token_counter = token_counter
-        self._event_bus = event_bus
+        self._event_bus: EventBus | None = event_bus
         self._provenance_store: ProvenanceStore = (
             provenance_store if provenance_store is not None else InMemoryProvenanceStore()
         )
@@ -70,6 +70,40 @@ class Layer:
         self._pending_events: list[Event] = []
         # Entries buffered for store write — flushed in process_pending
         self._pending_writes: list[Entry] = []
+
+    # -- wiring ---------------------------------------------------------------
+
+    def wire(
+        self,
+        bus: EventBus,
+        provenance_store: ProvenanceStore,
+        tracer: "Tracer | None",
+    ) -> None:
+        """Wire this layer to the engine's shared bus, provenance store, and tracer.
+
+        If the layer was previously wired to a different bus, this method
+        removes the layer's handle_event callback from that bus before
+        switching to the new one. This prevents the old bus from delivering
+        events to this layer after rewiring.
+        """
+        # Unsubscribe handle_event from the old bus if it differs from the new one.
+        # Bound methods can't be compared with `is` — compare __func__ and __self__
+        # to detect that a stored callback is this layer's handle_event method.
+        if self._event_bus is not None and self._event_bus is not bus:
+            handle_event_func = self.handle_event.__func__  # type: ignore[attr-defined]
+            self._event_bus._subs = [
+                (name, cb, is_async)
+                for name, cb, is_async in self._event_bus._subs
+                if not (
+                    hasattr(cb, "__func__")
+                    and cb.__func__ is handle_event_func
+                    and cb.__self__ is self
+                )
+            ]
+
+        self._event_bus = bus
+        self._provenance_store = provenance_store
+        self._tracer = tracer
 
     # -- session seeding ------------------------------------------------------
 
@@ -342,6 +376,10 @@ class Layer:
         elif resolved.content:
             # Old path: raw content blocks (backward compat) — no store write
             self._content = self._position.place(self._content, resolved.content)
+        # Queue any events emitted by the resolver onto the bus
+        if resolved.events and self._event_bus is not None:
+            for ev in resolved.events:
+                self._event_bus.queue(ev)
 
     def set_content(self, content: list[ContentBlock | Message]) -> None:
         self._content = list(content)

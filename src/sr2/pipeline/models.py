@@ -38,6 +38,7 @@ class ResolvedContent:
   content: list[ContentBlock | Message] = field(default_factory=list)
   token_count: int = 0
   entries: list[Entry] = field(default_factory=list)
+  events: list[Event] = field(default_factory=list)
 
 
 @dataclass

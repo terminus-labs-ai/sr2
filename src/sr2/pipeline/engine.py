@@ -51,6 +51,7 @@ class PipelineEngine:
         max_cycles: int = 50,
         token_budget: int | None = None,
         tracer: "Tracer | None" = None,
+        bus: EventBus | None = None,
     ) -> None:
         self.token_counter = token_counter
         self._max_cycles = max_cycles
@@ -58,29 +59,24 @@ class PipelineEngine:
         self._tracer = tracer
         self._turn_seq: int = -1
         self._firing_seq: int = -1
-        self._bus = EventBus()
+        self._bus = bus if bus is not None else EventBus()
         self._layers = layers
         self._provenance_store: ProvenanceStore = (
             provenance_store if provenance_store is not None else InMemoryProvenanceStore()
         )
 
-        for layer in self._layers:
-            layer._event_bus = self._bus
-            layer._provenance_store = self._provenance_store
-
-        self._setup_event_handlers()
-
-        for layer in self._layers:
-            layer._tracer = self._tracer
+        self._wire_layers()
 
     def _next_firing_seq(self) -> int:
         """Increment and return the firing sequence counter."""
         self._firing_seq += 1
         return self._firing_seq
 
-    def _setup_event_handlers(self) -> None:
-        """Wire all layer component subscriptions to the shared bus."""
+    def _wire_layers(self) -> None:
+        """Wire all layers to the engine's shared bus, provenance store, and tracer,
+        then register event subscriptions."""
         for layer in self._layers:
+            layer.wire(self._bus, self._provenance_store, self._tracer)
             for subscription in layer.subscriptions:
                 self._bus.subscribe(subscription, layer.handle_event)
 

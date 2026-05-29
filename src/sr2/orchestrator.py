@@ -14,7 +14,7 @@ from ulid import ULID
 
 from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig, ToolLoopLimitError, ToolProviderConfig, TransformerConfig
 from sr2.degradation.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
-from sr2.pipeline.provenance import ProvenanceStore
+from sr2.pipeline.provenance import InMemoryProvenanceStore, ProvenanceStore
 
 if TYPE_CHECKING:
     from sr2.pipeline.tracing import Tracer
@@ -60,7 +60,13 @@ def _build_tool_provider(config: ToolProviderConfig, deps: Dependencies) -> Any:
     return _TOOL_PROVIDERS.get(config.type).build(config, deps)
 
 
-def _build_layer(layer_config: LayerConfig, token_counter: TokenCounter, deps: Dependencies) -> Layer:
+def _build_layer(
+    layer_config: LayerConfig,
+    token_counter: TokenCounter,
+    deps: Dependencies,
+    bus: EventBus | None = None,
+    provenance_store: "ProvenanceStore | None" = None,
+) -> Layer:
     target = CompilationTarget(layer_config.target)
 
     position_str = layer_config.position or "append"
@@ -70,8 +76,7 @@ def _build_layer(layer_config: LayerConfig, token_counter: TokenCounter, deps: D
     transformers = [_build_transformer(t, deps) for t in (layer_config.transformers or [])]
     tool_providers = [_build_tool_provider(tp, deps) for tp in (layer_config.tool_providers or [])]
 
-    # EventBus is a placeholder here — PipelineEngine replaces it after init.
-    event_bus = EventBus()
+    event_bus = bus if bus is not None else EventBus()
 
     return Layer(
         name=layer_config.name,
@@ -84,6 +89,7 @@ def _build_layer(layer_config: LayerConfig, token_counter: TokenCounter, deps: D
         tool_providers=tool_providers,
         token_counter=token_counter,
         event_bus=event_bus,
+        provenance_store=provenance_store,
     )
 
 
@@ -134,13 +140,25 @@ class SR2:
             session_id=self.session_id,
             extras=extras or {},
         )
-        layers = [_build_layer(lc, token_counter, deps) for lc in pipeline_config.layers]
+
+        # Resolve shared infrastructure before building layers so layers receive
+        # the real bus and provenance store — not throwaway placeholders.
+        shared_bus = EventBus()
+        resolved_provenance_store: ProvenanceStore = (
+            provenance_store if provenance_store is not None else InMemoryProvenanceStore()
+        )
+
+        layers = [
+            _build_layer(lc, token_counter, deps, bus=shared_bus, provenance_store=resolved_provenance_store)
+            for lc in pipeline_config.layers
+        ]
         self._engine = PipelineEngine(
             layers=layers,
             token_counter=token_counter,
-            provenance_store=provenance_store,
+            provenance_store=resolved_provenance_store,
             token_budget=pipeline_config.token_budget,
             tracer=tracer,
+            bus=shared_bus,
         )
 
     # ------------------------------------------------------------------

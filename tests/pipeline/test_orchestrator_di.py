@@ -705,3 +705,160 @@ class TestNoIdentityCheck:
         assert "is SummarizationTransformer" not in module_source, (
             "orchestrator.py still contains 'is SummarizationTransformer' after Step 4 refactor."
         )
+
+
+# ---------------------------------------------------------------------------
+# 11. No post-mutation of layer privates after construction (sr2-59)
+# ---------------------------------------------------------------------------
+
+
+class TestNoPlatformPostMutation:
+    """Regression tests that define the REQUIRED BEHAVIOR for sr2-59.
+
+    These pass under the current post-mutation implementation and must
+    continue to pass after the refactor removes the post-mutation loops.
+    They pin the observable invariants the refactor must preserve.
+    """
+
+    def test_layer_uses_engine_bus_not_placeholder(self):
+        """After PipelineEngine construction, each layer's _event_bus IS the engine's bus.
+
+        The layer must not hold the placeholder EventBus created in _build_layer —
+        it must hold the same object as engine._bus.
+        """
+        from sr2.pipeline.engine import PipelineEngine
+        from sr2.pipeline.event_bus import EventBus
+        from sr2.pipeline.layer import Layer
+        from sr2.pipeline.compilation import AppendStrategy
+        from sr2.pipeline.models import CompilationTarget
+        from sr2.pipeline.resolvers.static import StaticResolver
+        from sr2.config.models import ResolverConfig
+
+        placeholder_bus = EventBus()
+        resolver = StaticResolver.build(
+            ResolverConfig(type="static", config={"text": "hi"}),
+            _make_deps(),
+        )
+        layer = Layer(
+            name="conversation",
+            target=CompilationTarget.MESSAGES,
+            position=AppendStrategy(),
+            token_budget=None,
+            resolvers=[resolver],
+            transformers=[],
+            tool_providers=[],
+            token_counter=TOKEN_COUNTER,
+            event_bus=placeholder_bus,
+        )
+
+        engine = PipelineEngine(layers=[layer], token_counter=TOKEN_COUNTER)
+
+        # The layer's bus must be the engine's bus — not the placeholder
+        assert layer._event_bus is engine._bus
+        assert layer._event_bus is not placeholder_bus
+
+    def test_layer_uses_engine_provenance_store(self):
+        """After PipelineEngine construction, each layer's _provenance_store IS the engine's store.
+
+        The engine always creates or adopts a ProvenanceStore; the layer must
+        share the same object (identity, not equality).
+        """
+        from sr2.pipeline.engine import PipelineEngine
+        from sr2.pipeline.event_bus import EventBus
+        from sr2.pipeline.layer import Layer
+        from sr2.pipeline.compilation import AppendStrategy
+        from sr2.pipeline.models import CompilationTarget
+        from sr2.pipeline.resolvers.static import StaticResolver
+        from sr2.config.models import ResolverConfig
+
+        resolver = StaticResolver.build(
+            ResolverConfig(type="static", config={"text": "hi"}),
+            _make_deps(),
+        )
+        layer = Layer(
+            name="conversation",
+            target=CompilationTarget.MESSAGES,
+            position=AppendStrategy(),
+            token_budget=None,
+            resolvers=[resolver],
+            transformers=[],
+            tool_providers=[],
+            token_counter=TOKEN_COUNTER,
+            event_bus=EventBus(),
+        )
+
+        engine = PipelineEngine(layers=[layer], token_counter=TOKEN_COUNTER)
+
+        assert layer._provenance_store is engine._provenance_store
+
+    def test_engine_built_from_sr2_layers_share_bus(self):
+        """All layers in an SR2 instance share the same EventBus object (identity check).
+
+        This is the end-to-end invariant: no matter how many layers exist,
+        layer._event_bus is engine._bus for every one of them.
+        """
+        pipeline_config = PipelineConfig(
+            layers=[
+                LayerConfig(
+                    name="system",
+                    target="system",
+                    resolvers=[ResolverConfig(type="static", config={"text": "sys"})],
+                ),
+                LayerConfig(
+                    name="conversation",
+                    target="messages",
+                    resolvers=[ResolverConfig(type="session")],
+                ),
+            ]
+        )
+        llm_dict = {"default": MockLLM()}
+
+        instance = SR2(
+            pipeline_config=pipeline_config,
+            llm=llm_dict,
+            token_counter=TOKEN_COUNTER,
+        )
+
+        engine = instance._engine
+        for layer in engine.layers:
+            assert layer._event_bus is engine._bus, (
+                f"Layer '{layer.name}' has a different EventBus than engine._bus"
+            )
+
+    def test_tracer_injected_into_layers(self):
+        """If a tracer is passed to SR2, all layers have it set after construction.
+
+        Pins the tracer-injection invariant so the refactor cannot silently
+        drop tracer propagation.
+        """
+        from unittest.mock import MagicMock
+
+        pipeline_config = PipelineConfig(
+            layers=[
+                LayerConfig(
+                    name="system",
+                    target="system",
+                    resolvers=[ResolverConfig(type="static", config={"text": "sys"})],
+                ),
+                LayerConfig(
+                    name="conversation",
+                    target="messages",
+                    resolvers=[ResolverConfig(type="session")],
+                ),
+            ]
+        )
+        llm_dict = {"default": MockLLM()}
+        fake_tracer = MagicMock(name="tracer")
+
+        instance = SR2(
+            pipeline_config=pipeline_config,
+            llm=llm_dict,
+            token_counter=TOKEN_COUNTER,
+            tracer=fake_tracer,
+        )
+
+        engine = instance._engine
+        for layer in engine.layers:
+            assert layer._tracer is fake_tracer, (
+                f"Layer '{layer.name}' does not have the expected tracer"
+            )
