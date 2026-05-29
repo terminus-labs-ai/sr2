@@ -56,15 +56,7 @@ class CompactionTransformer:
         self, content: list[ContentBlock], events: list[Event]
     ) -> TransformationResult:
         """Apply compaction rules to *content* and return a TransformationResult."""
-        from sr2.models import Message, TextBlock
-
-        # Wrap content blocks into messages for the engine
-        messages = [
-            Message(role="user", content=content)
-        ]
-        compacted_messages = self._engine.apply(messages)
-        compacted_content = compacted_messages[0].content if compacted_messages else content
-
+        compacted_content = self._engine.apply_to_blocks(content)
         any_change = compacted_content is not content
 
         return TransformationResult(

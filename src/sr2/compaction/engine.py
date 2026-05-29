@@ -27,6 +27,21 @@ class CompactionEngine:
     def __init__(self, rules: list[Callable[[ContentBlock], ContentBlock | None]]) -> None:
         self._rules = rules
 
+    def apply_to_blocks(self, blocks: list[ContentBlock]) -> list[ContentBlock]:
+        """Apply all rules to each block in *blocks*.
+
+        Returns the original list unchanged if no rule produced any
+        transformation.  Otherwise returns a new list with compacted blocks.
+        """
+        if not blocks:
+            return blocks
+        messages = [Message(role="user", content=blocks)]
+        result = self.apply(messages)
+        # apply() returns the original messages list when nothing changed
+        if result is messages:
+            return blocks
+        return result[0].content
+
     def apply(self, messages: list[Message]) -> list[Message]:
         """Apply all rules to each block in every message.
 
