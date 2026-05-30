@@ -132,6 +132,7 @@ class SR2:
             recovery_timeout=pipeline_config.circuit_breaker_recovery_timeout,
         )
         self._llm_timeout_seconds = pipeline_config.llm_timeout_seconds
+        self._pp_task: asyncio.Task[None] | None = None
 
         deps = Dependencies(
             llm=llm_dict,
@@ -198,12 +199,30 @@ class SR2:
         FR14: exactly one StreamEvent(type="end") is emitted to the caller.
         FR7:  raises ToolLoopLimitError if iterations exceed max_tool_iterations.
         """
+        # FR4+FR5+FR6: Await any pending deferred post_process task from the
+        # previous turn before starting a new one. This ensures turn N's
+        # post_process completes before turn N+1 begins.
+        # FR8: Surface deferred-task errors as StreamEvent(type="error") early
+        # in the stream. CancelledError propagates unchanged.
+        if self._pp_task is not None:
+            try:
+                await self._pp_task
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                yield StreamEvent(type="error", errors=[f"deferred post_process error: {exc}"])
+            self._pp_task = None
+
         # Reset all pipeline components so turn 2+ re-fires them.
         self._engine.reset_execution_counts()
+
+        # FR7: Accumulate bus errors across in-band drains.
+        in_band_errors: list[str] = []
 
         # Start the turn via the new engine API.
         next_seq = self._engine._turn_seq + 1
         await self._engine.start_turn(turn_seq=next_seq)
+        in_band_errors.extend(self._engine.bus.get_errors())
 
         # Inject user_input as an event.
         if user_input:
@@ -216,6 +235,7 @@ class SR2:
                 )
             )
             await self._engine._run_loop()
+            in_band_errors.extend(self._engine.bus.get_errors())
 
         # Compile the initial request after user_input is settled.
         compiled = self._engine._compile_request()
@@ -439,6 +459,7 @@ class SR2:
                 for rb in tool_result_blocks
             ]
             await self._engine.continue_turn(tool_result_events, iteration_seq)
+            in_band_errors.extend(self._engine.bus.get_errors())
 
             # FR13: emit iteration_complete to signal the end of this tool iteration.
             yield StreamEvent(type="iteration_complete", iteration=iteration_seq)
@@ -467,14 +488,50 @@ class SR2:
             )
         )
 
+        # Finalize the turn: fire turn_end, drain the bus (processes
+        # assistant_response subscribers: SessionResolver, MemoryExtractionTransformer),
+        # compile, and return PipelineResult.
+        await self._engine.end_turn()
+
+        # FR7: Surface accumulated in-band bus errors before the final end event.
+        if in_band_errors:
+            yield StreamEvent(type="error", errors=in_band_errors)
+
         yield StreamEvent(type="end")
 
-        # FR11: await post_process (NOT fire-and-forget) before the generator exits.
-        await self.post_process(final_response)
+        # FR4+FR5+FR6: Schedule post_process as a deferred task. The client
+        # is freed immediately; the next turn() will await this task before
+        # proceeding. Capture final_response by argument.
+        self._pp_task = asyncio.create_task(
+            self._finalize_and_post_process(final_response)
+        )
 
     # ------------------------------------------------------------------
     # Post-processing (MVP no-op)
     # ------------------------------------------------------------------
+
+    async def _finalize_and_post_process(self, final_response: CompletionResponse) -> None:
+        """Deferred post-processing: called by the scheduled task after end_turn.
+
+        Captures final_response by argument to avoid closure issues.
+        """
+        await self.post_process(final_response)
+
+    async def aclose(self) -> None:
+        """Explicit shutdown: await any pending deferred post_process task.
+
+        Safe when no task is pending (no-op). Idempotent — clears _pp_task
+        so subsequent calls are also no-ops.
+
+        FR9: Surfaces errors from the deferred task rather than swallowing them.
+        """
+        if self._pp_task is None:
+            return
+
+        try:
+            await self._pp_task
+        finally:
+            self._pp_task = None
 
     async def post_process(self, response: CompletionResponse) -> None:
         """Post-turn processing hook. No-op in MVP."""

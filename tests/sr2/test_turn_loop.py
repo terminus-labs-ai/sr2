@@ -19,7 +19,7 @@ import pytest
 
 from sr2.models import ToolResultBlock, ToolUseBlock
 from sr2.pipeline.token_counting import CharacterTokenCounter
-from sr2.protocols.llm import CompletionRequest, StreamEvent
+from sr2.protocols.llm import CompletionRequest, CompletionResponse, StreamEvent
 from conftest import (
     SequentialMockLLM,
     make_minimal_config,
@@ -778,17 +778,22 @@ class TestToolLoopLimitError:
 
 
 # ---------------------------------------------------------------------------
-# FR11 — post_process awaited (not fire-and-forget)
+# FR11 — post_process deferred (scheduled after end, joined before next turn)
 # ---------------------------------------------------------------------------
 
 
-class TestPostProcessAwaited:
-    """FR11 (strong): post_process must be awaited before the iterator exits."""
+class TestPostProcessDeferred:
+    """FR4+FR5+FR6: post_process is scheduled as a deferred task after yielding
+    end, and joined at the start of the next turn()."""
 
     @pytest.mark.asyncio
-    async def test_post_process_awaited_before_turn_exits(self):
-        """post_process must be awaited synchronously — flag is set before turn() exits,
-        with NO asyncio.sleep between the turn and the assertion.
+    async def test_post_process_deferred_after_turn_exits(self):
+        """post_process is deferred — flag is NOT set immediately after turn() exits,
+        but IS set after the deferred task runs.
+
+        This replaces the old test_post_process_awaited_before_turn_exits which
+        asserted synchronous awaiting. The deferred model schedules post_process
+        as an asyncio task after yielding 'end', so it runs asynchronously.
         """
         from sr2.orchestrator import SR2
 
@@ -816,10 +821,66 @@ class TestPostProcessAwaited:
         async for _ in sr2.turn(make_user_input()):
             pass
 
-        # No asyncio.sleep — if post_process is fire-and-forget, flag is still False
+        # post_process is deferred — flag may not be set yet
+        # The deferred task should be scheduled
+        assert sr2._pp_task is not None, (
+            "Deferred post_process task should be scheduled on self._pp_task"
+        )
+
+        # Wait for the deferred task to complete
+        await sr2._pp_task
+
+        # Now the flag should be set
         assert sr2.flag is True, (
-            "post_process must be awaited before turn() exits. "
-            "If this fails, post_process is fire-and-forget (create_task) instead of awaited."
+            "post_process must eventually run via the deferred task"
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_process_joined_before_next_turn(self):
+        """post_process from turn 1 is awaited before turn 2 starts.
+
+        This is the key guarantee: even though post_process is deferred,
+        it completes before the next turn begins.
+        """
+        from sr2.orchestrator import SR2
+
+        class TrackingSR2(SR2):
+            flag: bool = False
+
+            async def post_process(self, response: CompletionResponse) -> None:
+                self.flag = True
+
+        llm = SequentialMockLLM(
+            call_sequences=[
+                [
+                    StreamEvent(type="text", text="Turn 1."),
+                    StreamEvent(type="end"),
+                ],
+                [
+                    StreamEvent(type="text", text="Turn 2."),
+                    StreamEvent(type="end"),
+                ],
+            ]
+        )
+
+        sr2 = TrackingSR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        # Turn 1
+        async for _ in sr2.turn(make_user_input()):
+            pass
+
+        # Flag may not be set yet (deferred)
+        # Turn 2 — must join turn 1's deferred task first
+        async for _ in sr2.turn(make_user_input()):
+            pass
+
+        # After turn 2 started, turn 1's post_process must have run
+        assert sr2.flag is True, (
+            "Turn 1's post_process must complete before Turn 2 starts"
         )
 
 

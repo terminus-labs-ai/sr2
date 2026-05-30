@@ -90,7 +90,7 @@ turn it:
 
 Callers see a clean stream: `text` and `usage` events, loop-progress events
 (`tool_use_emitted`, `tool_result_received`, `iteration_complete`), and exactly
-one `end`.
+one `end`. At most one `error` event may appear per phase, always before `end`.
 
 ## Quick start
 
