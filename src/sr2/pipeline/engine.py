@@ -77,7 +77,16 @@ class PipelineEngine:
         then register event subscriptions."""
         for layer in self._layers:
             layer.wire(self._bus, self._provenance_store, self._tracer)
+            # handle_event only buffers events; resolvers are filtered
+            # individually in process_pending. Register it at most once per
+            # event name — otherwise an event subscribed by multiple resolvers
+            # in the same layer is buffered once per subscription and duplicated
+            # (obsidian-75d).
+            subscribed_names: set[str] = set()
             for subscription in layer.subscriptions:
+                if subscription.event_name in subscribed_names:
+                    continue
+                subscribed_names.add(subscription.event_name)
                 self._bus.subscribe(subscription, layer.handle_event)
 
     async def start_turn(self, turn_seq: int) -> None:
