@@ -76,7 +76,7 @@ class TestExtractRawFrontmatter:
         assert raw is not None
         assert "uv run pytest" in raw
 
-    def text_block_with_horizontal_rules(self):
+    def test_block_with_horizontal_rules(self):
         """Body contains --- (horizontal rules) after frontmatter closes."""
         text = "---\nkind: task\n---\n# Body\n\n---\n\nMore text\n"
         raw = extract_raw_frontmatter(text)

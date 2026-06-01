@@ -42,12 +42,6 @@ def extract_raw_frontmatter(text: str) -> Optional[str]:
 
     # Find the closing delimiter. Search after the opening `---`.
     rest = stripped[3:]  # skip opening ---
-    if not rest.lstrip().startswith("\n") and not rest.startswith("\n"):
-        # Edge case: `---` at start but no newline (not valid frontmatter)
-        # Some markdown tools treat `---` without a newline as a thematic break
-        # rather than frontmatter. We still try to parse it if there's a second
-        # `---` somewhere, but require at least the second delimiter.
-        pass
 
     try:
         idx = rest.index("\n---")
