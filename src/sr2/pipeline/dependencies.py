@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, TYPE_CHECKING
 
 from sr2.protocols.llm import LLMCallable
@@ -21,3 +21,10 @@ class Dependencies:
     memory_extractor: "MemoryExtractor | None" = None
     session_id: str = ""
     extras: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    active_frame_provider: Callable[[], str | None] | None = None
+    """Optional callable returning the current active frame id.
+
+    When present, the orchestrator stamps ``block.meta["frame"]`` on every
+    content block it emits.  When ``None`` (default), no stamping occurs and
+    core behaviour is unchanged.
+    """

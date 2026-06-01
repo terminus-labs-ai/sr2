@@ -141,6 +141,7 @@ class SR2:
             session_id=self.session_id,
             extras=extras or {},
         )
+        self._active_frame_provider = deps.active_frame_provider
 
         # Resolve shared infrastructure before building layers so layers receive
         # the real bus and provenance store — not throwaway placeholders.
@@ -161,6 +162,18 @@ class SR2:
             tracer=tracer,
             bus=shared_bus,
         )
+
+    # ------------------------------------------------------------------
+    # Block stamping
+    # ------------------------------------------------------------------
+
+    def _stamp_block(self, block: Any) -> None:
+        """Stamp ``meta["frame"]`` on *block* when an active-frame provider is set."""
+        if self._active_frame_provider is None:
+            return
+        frame = self._active_frame_provider()
+        if frame is not None:
+            block.meta["frame"] = frame
 
     # ------------------------------------------------------------------
     # Public inspection helpers
@@ -304,7 +317,9 @@ class SR2:
                 # CompletionResponse and exit the loop.
                 content: list = []
                 if full_iter_text:
-                    content.append(TextBlock(text=full_iter_text))
+                    block = TextBlock(text=full_iter_text)
+                    self._stamp_block(block)
+                    content.append(block)
                 stop_reason = "end_turn"
                 final_response = CompletionResponse(
                     id="turn-response",
@@ -326,7 +341,9 @@ class SR2:
             # CancelledError is never wrapped — it propagates immediately.
             assistant_content: list = []
             if full_iter_text:
-                assistant_content.append(TextBlock(text=full_iter_text))
+                text_block = TextBlock(text=full_iter_text)
+                self._stamp_block(text_block)
+                assistant_content.append(text_block)
 
             if self._tool_executor is None:
                 raise ConfigError(
@@ -341,6 +358,7 @@ class SR2:
                     name=tu_event.tool_name,
                     input=tu_event.tool_input,
                 )
+                self._stamp_block(tool_block)
                 assistant_content.append(tool_block)
                 tool_use_blocks.append(tool_block)
 
@@ -383,6 +401,8 @@ class SR2:
             tool_result_blocks: list[ToolResultBlock] = list(
                 await asyncio.gather(*(_run_one(b) for b in tool_use_blocks))
             )
+            for result_block in tool_result_blocks:
+                self._stamp_block(result_block)
 
             # FR9: Queue tool_use_emitted on the engine bus (internal subscribers).
             self._engine.bus.queue(

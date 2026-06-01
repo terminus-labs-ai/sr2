@@ -6,6 +6,13 @@ from pydantic import BaseModel, Field
 
 class ContentBlockBase(BaseModel):
   token_count: int | None = None
+  meta: dict[str, Any] = Field(default_factory=dict)
+  """Generic metadata attached to every content block.
+
+  Used by infrastructure layers (e.g. the planning layer's *frame* tag) for
+  internal bookkeeping.  Never serialised into the LLM wire payload — wire
+  serializers access block fields explicitly and never call ``model_dump()``.
+  """
 
 
 class TextBlock(ContentBlockBase):
