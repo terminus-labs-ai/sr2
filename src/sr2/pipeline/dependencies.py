@@ -21,10 +21,15 @@ class Dependencies:
     memory_extractor: "MemoryExtractor | None" = None
     session_id: str = ""
     extras: Mapping[str, Any] = dataclasses.field(default_factory=dict)
-    active_frame_provider: Callable[[], str | None] | None = None
-    """Optional callable returning the current active frame id.
+    active_frame_provider: Callable[[str], str | None] | None = None
+    """Origin-aware active-frame provider.
 
-    When present, the orchestrator stamps ``block.meta["frame"]`` on every
-    content block it emits.  When ``None`` (default), no stamping occurs and
-    core behaviour is unchanged.
+    When present, the orchestrator calls ``provider(origin)`` to resolve the
+    active frame for the current turn's *origin*.  The provider returns the
+    work-frame id if one is open on that origin, or the ambient frame id
+    bound to the origin.  When ``None`` (default), no stamping occurs and
+    core behaviour is unchanged (regression-safe).
+
+    The *origin* parameter is typically a transport-identifier string
+    (e.g. ``"tui"``, ``"discord:channel_id"``).
     """

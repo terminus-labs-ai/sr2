@@ -167,11 +167,16 @@ class SR2:
     # Block stamping
     # ------------------------------------------------------------------
 
-    def _stamp_block(self, block: Any) -> None:
-        """Stamp ``meta["frame"]`` on *block* when an active-frame provider is set."""
+    def _stamp_block(self, block: Any, origin: str | None = None) -> None:
+        """Stamp ``meta["frame"]`` on *block* when an active-frame provider is set.
+
+        The *origin* parameter identifies the transport/source of the current
+        turn.  The provider uses it to resolve the correct frame
+        (work-frame if open on that origin, else ambient frame).
+        """
         if self._active_frame_provider is None:
             return
-        frame = self._active_frame_provider()
+        frame = self._active_frame_provider(origin or "")
         if frame is not None:
             block.meta["frame"] = frame
 
@@ -183,6 +188,11 @@ class SR2:
     def provenance_store(self) -> "ProvenanceStore":
         """Expose the active provenance store for testing and inspection."""
         return self._engine.provenance_store
+
+    @property
+    def bus(self) -> "EventBus":
+        """Expose the shared event bus for tool-level event emission."""
+        return self._engine.bus
 
     # ------------------------------------------------------------------
     # Session seeding
@@ -201,7 +211,7 @@ class SR2:
     # Core turn loop
     # ------------------------------------------------------------------
 
-    async def turn(self, user_input: list) -> AsyncIterator[StreamEvent]:
+    async def turn(self, user_input: list, *, origin: str = "") -> AsyncIterator[StreamEvent]:
         """Async generator: runs the pipeline and streams LLM events.
 
         Implements the multi-iteration tool loop (FR3):
@@ -318,7 +328,7 @@ class SR2:
                 content: list = []
                 if full_iter_text:
                     block = TextBlock(text=full_iter_text)
-                    self._stamp_block(block)
+                    self._stamp_block(block, origin)
                     content.append(block)
                 stop_reason = "end_turn"
                 final_response = CompletionResponse(
@@ -342,7 +352,7 @@ class SR2:
             assistant_content: list = []
             if full_iter_text:
                 text_block = TextBlock(text=full_iter_text)
-                self._stamp_block(text_block)
+                self._stamp_block(text_block, origin)
                 assistant_content.append(text_block)
 
             if self._tool_executor is None:
@@ -358,7 +368,7 @@ class SR2:
                     name=tu_event.tool_name,
                     input=tu_event.tool_input,
                 )
-                self._stamp_block(tool_block)
+                self._stamp_block(tool_block, origin)
                 assistant_content.append(tool_block)
                 tool_use_blocks.append(tool_block)
 
@@ -402,7 +412,7 @@ class SR2:
                 await asyncio.gather(*(_run_one(b) for b in tool_use_blocks))
             )
             for result_block in tool_result_blocks:
-                self._stamp_block(result_block)
+                self._stamp_block(result_block, origin)
 
             # FR9: Queue tool_use_emitted on the engine bus (internal subscribers).
             self._engine.bus.queue(
