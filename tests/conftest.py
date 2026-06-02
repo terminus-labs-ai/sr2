@@ -19,6 +19,8 @@ from sr2.config.models import (
     ResolverConfig,
 )
 from sr2.models import TextBlock, TokenUsage, ToolResultBlock, ToolUseBlock
+from sr2.pipeline.engine import PipelineEngine
+from sr2.pipeline.events import Event, EventPhase
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.protocols.llm import (
     CompletionRequest,
@@ -169,3 +171,35 @@ async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
         tool_use_id=block.id,
         content=f"result_for_{block.name}",
     )
+
+
+# ---------------------------------------------------------------------------
+# PipelineEngine.run() replacement (sr2-8: engine.run() removed)
+# ---------------------------------------------------------------------------
+
+
+async def run_engine(
+    engine: PipelineEngine,
+    user_input: list | None = None,
+) -> "PipelineResult":
+    """Replacement for ``PipelineEngine.run()``.
+
+    Uses the three-phase API (start_turn / continue_turn / end_turn) to
+    replicate the old ``engine.run(user_input)`` behaviour:
+    1. ``start_turn`` with the next auto-incremented turn sequence.
+    2. If *user_input* is non-empty, queue a ``user_input`` event and drain.
+    3. ``end_turn`` — return the compiled ``PipelineResult``.
+    """
+    next_seq = engine._turn_seq + 1
+    await engine.start_turn(turn_seq=next_seq)
+
+    if user_input:
+        user_event = Event(
+            name="user_input",
+            phase=EventPhase.COMPLETED,
+            source_layer="engine",
+            data=user_input,
+        )
+        await engine.continue_turn(events=[user_event], iteration_seq=0)
+
+    return await engine.end_turn()

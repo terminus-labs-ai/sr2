@@ -4,14 +4,13 @@ Covers the three new explicit lifecycle entry points:
   - start_turn(turn_seq): increments turn_seq, resets bus + content, fires turn_start, drains bus
   - continue_turn(events, iteration_seq): no reset, queues given events, drains bus
   - end_turn(): fires turn_end exactly once
-
-Also covers backward compatibility:
-  - run() still works and produces the same observable result as start_turn -> end_turn
 """
 
 from __future__ import annotations
 
 import pytest
+
+from conftest import run_engine
 
 from sr2.pipeline.compilation import AppendStrategy
 from sr2.pipeline.event_bus import EventBus
@@ -258,7 +257,7 @@ class TestStartTurn:
         engine, _ = make_engine(layers=[layer], token_counter=counter)
 
         # First full turn to establish content
-        await engine.run([])
+        await run_engine(engine)
         first_content = layer.get_content()
         assert len(first_content) > 0, "precondition: first turn produced content"
 
@@ -516,61 +515,20 @@ class TestEndTurn:
 
 
 # ---------------------------------------------------------------------------
-# 4. TestRunIsWrapper
+# 4. TestRunEngine (replaces TestRunIsWrapper after engine.run() removal — sr2-8)
 # ---------------------------------------------------------------------------
 
 
-class TestRunIsWrapper:
-    @pytest.mark.asyncio
-    async def test_run_produces_same_observable_result_as_split_calls(self):
-        """run() must yield identical layer content as start_turn + end_turn.
+class TestRunEngine:
+    """Verify the conftest.run_engine() helper matches the three-phase API behavior.
 
-        We run the same resolver twice (once via run(), once via the split API)
-        and compare the compiled system blocks.
-        """
-        from sr2.pipeline.engine import PipelineEngine
-
-        counter = CharacterTokenCounter()
-
-        def _make_resolver():
-            return StubResolver(
-                name="sys",
-                content=[TextBlock(text="You are helpful.")],
-                subscriptions=[EventSubscription(event_name="turn_start")],
-                max_executions=10,
-            )
-
-        def _make_engine_with_resolver(resolver):
-            layer = make_system_layer(
-                name="system_prompt",
-                resolvers=[resolver],
-                token_counter=counter,
-            )
-            return PipelineEngine(layers=[layer], token_counter=counter)
-
-        # --- Via run() ---
-        resolver_a = _make_resolver()
-        engine_a = _make_engine_with_resolver(resolver_a)
-        result_via_run = await engine_a.run([])
-
-        # --- Via split API ---
-        resolver_b = _make_resolver()
-        engine_b = _make_engine_with_resolver(resolver_b)
-        await engine_b.start_turn(turn_seq=0)
-        result_via_split = await engine_b.end_turn()
-
-        # Both should produce the same system content
-        texts_run = [b.text for b in (result_via_run.request.system or [])]
-        texts_split = [b.text for b in (result_via_split.request.system or [])]
-        assert texts_run == texts_split, (
-            f"run() output {texts_run!r} must equal start_turn+end_turn output {texts_split!r}"
-        )
+    These replace the old TestRunIsWrapper backward-compat tests. Since run()
+    is removed, run_engine() IS the three-phase API — these confirm it works.
+    """
 
     @pytest.mark.asyncio
-    async def test_run_still_works_after_new_methods_added(self):
-        """run() must not regress — it must still complete and return PipelineResult."""
-        from sr2.pipeline.engine import PipelineEngine, PipelineResult
-
+    async def test_run_engine_produces_valid_result(self):
+        """run_engine() completes and returns a PipelineResult with content."""
         counter = CharacterTokenCounter()
         resolver = StubResolver(
             name="sys",
@@ -582,35 +540,33 @@ class TestRunIsWrapper:
             resolvers=[resolver],
             token_counter=counter,
         )
-        engine = PipelineEngine(layers=[layer], token_counter=counter)
+        engine, _ = make_engine(layers=[layer], token_counter=counter)
 
-        result = await engine.run([])
+        from sr2.pipeline.models import PipelineResult
 
-        assert isinstance(result, PipelineResult), "run() must still return a PipelineResult"
+        result = await run_engine(engine)
+
+        assert isinstance(result, PipelineResult)
         assert result.request is not None
         assert result.request.system is not None
         assert any(b.text == "System prompt text." for b in result.request.system)
 
     @pytest.mark.asyncio
-    async def test_run_turn_seq_increments_same_as_start_turn(self):
-        """turn_seq increments identically whether run() or start_turn() is used.
-
-        After one run(), turn_seq == 0. After a second run(), turn_seq == 1.
-        This matches what start_turn(turn_seq=N) would do.
-        """
+    async def test_run_engine_turn_seq_increments(self):
+        """run_engine() increments turn_seq identically to start_turn()."""
         engine, _ = make_engine()
 
         assert engine._turn_seq == -1
 
-        await engine.run([])
-        assert engine._turn_seq == 0, "After first run(), turn_seq must be 0"
+        await run_engine(engine)
+        assert engine._turn_seq == 0, "After first run_engine(), turn_seq must be 0"
 
-        await engine.run([])
-        assert engine._turn_seq == 1, "After second run(), turn_seq must be 1"
+        await run_engine(engine)
+        assert engine._turn_seq == 1, "After second run_engine(), turn_seq must be 1"
 
     @pytest.mark.asyncio
-    async def test_run_emits_both_lifecycle_events(self):
-        """run() must emit both turn_start and turn_end — resolvers/transformers see them."""
+    async def test_run_engine_emits_lifecycle_events(self):
+        """run_engine() must emit both turn_start and turn_end."""
         counter = CharacterTokenCounter()
 
         start_resolver = StubResolver(
@@ -630,7 +586,7 @@ class TestRunIsWrapper:
         )
         engine, _ = make_engine(layers=[layer], token_counter=counter)
 
-        await engine.run([])
+        await run_engine(engine)
 
-        assert start_resolver.execution_count == 1, "turn_start must fire during run()"
-        assert end_transformer.execution_count == 1, "turn_end must fire during run()"
+        assert start_resolver.execution_count == 1, "turn_start must fire"
+        assert end_transformer.execution_count == 1, "turn_end must fire"

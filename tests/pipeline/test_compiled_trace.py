@@ -3,7 +3,7 @@
 Covers:
   FR1: Tracer protocol gains on_compile(request: CompletionRequest) -> None
   FR2: CollectingTracer.compiled_request attribute — init, update, clear
-  FR3: PipelineEngine.run() calls tracer.on_compile() exactly once, guarded by tracer is not None
+  FR3: PipelineEngine calls tracer.on_compile() exactly once per run_engine() call, guarded by tracer is not None
   FR4: render_compiled_request(request) renders human-readable output
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import run_engine
 from sr2.models import Message, TextBlock, ToolDefinition
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.pipeline.tracing import CollectingTracer, Tracer
@@ -130,25 +131,25 @@ class TestCollectingTracerCompiledRequest:
 
 
 # ---------------------------------------------------------------------------
-# FR3 — PipelineEngine.run() calls on_compile
+# FR3 — PipelineEngine calls on_compile during run_engine()
 # ---------------------------------------------------------------------------
 
 
 class TestEngineCallsOnCompile:
     @pytest.mark.asyncio
     async def test_compiled_request_populated_after_run(self) -> None:
-        """With a CollectingTracer, tracer.compiled_request is a CompletionRequest after engine.run()."""
+        """With a CollectingTracer, tracer.compiled_request is a CompletionRequest after run_engine()."""
         tracer = CollectingTracer()
         engine = _make_engine(tracer=tracer)
 
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
 
         assert tracer.compiled_request is not None
         assert isinstance(tracer.compiled_request, CompletionRequest)
 
     @pytest.mark.asyncio
     async def test_on_compile_called_exactly_once_per_run(self) -> None:
-        """on_compile is called exactly once per engine.run() call."""
+        """on_compile is called exactly once per run_engine() call."""
         call_log: list[CompletionRequest] = []
 
         class CountingTracer(CollectingTracer):
@@ -159,7 +160,7 @@ class TestEngineCallsOnCompile:
         tracer = CountingTracer()
         engine = _make_engine(tracer=tracer)
 
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
 
         assert len(call_log) == 1
 
@@ -176,17 +177,17 @@ class TestEngineCallsOnCompile:
         tracer = CountingTracer()
         engine = _make_engine(tracer=tracer)
 
-        await engine.run(user_input=[])
-        await engine.run(user_input=[])
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
+        await run_engine(engine, [])
+        await run_engine(engine, [])
 
         assert len(call_log) == 3
 
     @pytest.mark.asyncio
     async def test_engine_with_no_tracer_runs_without_error(self) -> None:
-        """With tracer=None, engine.run() completes without error (no on_compile attempted)."""
+        """With tracer=None, run_engine() completes without error (no on_compile attempted)."""
         engine = _make_engine(tracer=None)
-        result = await engine.run(user_input=[])
+        result = await run_engine(engine, [])
         assert result is not None
 
     @pytest.mark.asyncio
@@ -196,7 +197,7 @@ class TestEngineCallsOnCompile:
         # A clean run with tracer=None proves the guard is in place.
         engine = _make_engine(tracer=None)
         # Must not raise
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
 
 
 # ---------------------------------------------------------------------------

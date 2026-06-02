@@ -154,32 +154,6 @@ class PipelineEngine:
 
         return PipelineResult(request=request, metrics=metrics)
 
-    async def run(
-        self,
-        user_input: List[ContentBlock],
-    ) -> PipelineResult:
-        """Run the pipeline for a single turn.
-
-        Wrapper around start_turn() / continue_turn() / end_turn(). Preserves
-        all existing behaviour: turn_seq auto-increments from -1, user_input is
-        injected as a user_input event if non-empty.
-        """
-        next_seq = self._turn_seq + 1
-        await self.start_turn(turn_seq=next_seq)
-
-        if user_input:
-            self._bus.queue(
-                Event(
-                    name="user_input",
-                    phase=EventPhase.COMPLETED,
-                    source_layer="engine",
-                    data=user_input,
-                )
-            )
-            await self._run_loop()
-
-        return await self.end_turn()
-
     async def _run_loop(self) -> None:
         """Drain the event bus and process layers until quiescent."""
         for _ in range(self._max_cycles):

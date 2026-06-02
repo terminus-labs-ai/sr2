@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from conftest import run_engine
+
 from sr2.models import TextBlock
 from sr2.pipeline.compilation import AppendStrategy
 from sr2.pipeline.event_bus import EventBus
@@ -554,19 +556,19 @@ class TestTransformerMetrics:
         )
 
         # Run twice: each run emits turn_start once, so transformer fires once per run
-        await engine.run(user_input=[])
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
+        await run_engine(engine, [])
 
         # After two runs, execution_count should be 2
         assert transformer.execution_count == 2
 
         # Third run: max_executions reached — transformer skipped
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
         assert transformer.execution_count == 2
 
     @pytest.mark.asyncio
     async def test_ac7_engine_metrics_transformer_executions_dict(self):
-        """AC7: engine.run() result.metrics.layers includes correct transformer_executions dict."""
+        """AC7: run_engine() result.metrics.layers includes correct transformer_executions dict."""
         from sr2.pipeline.engine import PipelineEngine
         from sr2.pipeline.layer import Layer
 
@@ -594,12 +596,12 @@ class TestTransformerMetrics:
         )
 
         # First run
-        result = await engine.run(user_input=[])
+        result = await run_engine(engine, [])
         layer_metrics = result.metrics.layers["system_layer"]
         assert layer_metrics.transformer_executions == {"my_transformer": 1}
 
         # Second run
-        result = await engine.run(user_input=[])
+        result = await run_engine(engine, [])
         layer_metrics = result.metrics.layers["system_layer"]
         assert layer_metrics.transformer_executions == {"my_transformer": 2}
 
@@ -637,7 +639,7 @@ class TestTransformerMetrics:
             token_counter=CharacterTokenCounter(),
         )
 
-        result = await engine.run(user_input=[])
+        result = await run_engine(engine, [])
         layer_metrics = result.metrics.layers["system_layer"]
 
         # execution_count is 0 — should not appear in transformer_executions

@@ -532,7 +532,7 @@ class TestEndToEnd:
           - Two-layer config: 'system' (SYSTEM target, static resolver) and
             'tools' (TOOLS target, e2e_spy tool provider).
           - entry_points patched: static → StaticResolver, e2e_spy → _E2EToolProvider.
-          - SR2 is constructed and engine.run() is driven through a full turn.
+          - SR2 is constructed and run_engine() is driven through a full turn.
           - The resulting CompletionRequest.tools must contain the ToolDefinition
             returned by _E2EToolProvider.provide().
         """

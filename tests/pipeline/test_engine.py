@@ -17,6 +17,7 @@ Covers:
 
 import pytest
 
+from conftest import run_engine
 from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
 from sr2.pipeline.compilation import AppendStrategy, PrefixStrategy
 from sr2.pipeline.event_bus import EventBus
@@ -319,7 +320,7 @@ class TestPipelineRunBasicExecution:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request is not None
         assert isinstance(result.request, CompletionRequest)
@@ -352,7 +353,7 @@ class TestPipelineRunBasicExecution:
 
         user_input = [TextBlock(text="Hello, world!")]
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        await engine.run(user_input)
+        await run_engine(engine, user_input)
 
         # The resolver should have been called with an event carrying the user input
         assert len(capturing.captured_events) >= 1
@@ -398,7 +399,7 @@ class TestPipelineRunBasicExecution:
         )
 
         engine = PipelineEngine(layers=[layer_a, layer_b], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request.system is not None
         texts = [b.text for b in result.request.system]
@@ -435,7 +436,7 @@ class TestPipelineRunEventFlow:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        await engine.run([])
+        await run_engine(engine, [])
 
         # If resolver fired, turn_start was emitted
         assert resolver.execution_count == 1
@@ -462,7 +463,7 @@ class TestPipelineRunEventFlow:
 
         user_blocks = [TextBlock(text="What time is it?")]
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        await engine.run(user_blocks)
+        await run_engine(engine, user_blocks)
 
         assert len(capturing.captured_events) >= 1
         user_input_events = [
@@ -496,7 +497,7 @@ class TestPipelineRunEventFlow:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        await engine.run([])
+        await run_engine(engine, [])
 
         # If transformer fired, turn_end was emitted
         assert turn_end_transformer.execution_count == 1
@@ -538,7 +539,7 @@ class TestPipelineRunTransformers:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request.system is not None
         texts = [b.text for b in result.request.system]
@@ -586,7 +587,7 @@ class TestPipelineRunTransformers:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        await engine.run([])
+        await run_engine(engine, [])
 
         # The downstream resolver should have been triggered by the custom event
         assert downstream_resolver.execution_count >= 1
@@ -629,7 +630,7 @@ class TestPipelineRunBudgetEnforcement:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         # Metrics should show force truncation
         layer_metrics = result.metrics.layers["system_prompt"]
@@ -663,7 +664,7 @@ class TestPipelineRunBudgetEnforcement:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         layer_metrics = result.metrics.layers["system_prompt"]
         assert layer_metrics.force_truncated is False
@@ -701,7 +702,7 @@ class TestPipelineRunCompilation:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request.system is not None
         assert len(result.request.system) >= 1
@@ -729,7 +730,7 @@ class TestPipelineRunCompilation:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request.messages is not None
         assert len(result.request.messages) >= 1
@@ -768,7 +769,7 @@ class TestPipelineRunCompilation:
         )
 
         engine = PipelineEngine(layers=[layer_a, layer_b], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request.system is not None
         texts = [b.text for b in result.request.system]
@@ -832,7 +833,7 @@ class TestPipelineRunCompilation:
             layers=[system_layer, messages_layer, tools_layer],
             token_counter=counter,
         )
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request.system is not None
         assert len(result.request.system) >= 1
@@ -863,7 +864,7 @@ class TestPipelineRunMetrics:
         layer_b = make_messages_layer(name="conversation", token_counter=counter, event_bus=bus)
 
         engine = PipelineEngine(layers=[layer_a, layer_b], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert "system_prompt" in result.metrics.layers
         assert "conversation" in result.metrics.layers
@@ -891,7 +892,7 @@ class TestPipelineRunMetrics:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         lm = result.metrics.layers["system_prompt"]
         assert lm.tokens_used == 2
@@ -918,7 +919,7 @@ class TestPipelineRunMetrics:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         lm = result.metrics.layers["system_prompt"]
         assert "sys_prompt" in lm.resolver_executions
@@ -945,7 +946,7 @@ class TestPipelineRunMetrics:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         lm = result.metrics.layers["system_prompt"]
         assert "compactor" in lm.transformer_executions
@@ -974,7 +975,7 @@ class TestPipelineRunMetrics:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.metrics.layers["system_prompt"].force_truncated is True
 
@@ -1013,7 +1014,7 @@ class TestPipelineRunMetrics:
         )
 
         engine = PipelineEngine(layers=[layer_a, layer_b], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.metrics.total_tokens == 4  # 2 + 2
 
@@ -1040,7 +1041,7 @@ class TestPipelineRunMetrics:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert len(result.metrics.warnings) >= 1
         assert any("oversized_layer" in w for w in result.metrics.warnings)
@@ -1074,7 +1075,7 @@ class TestPipelineRunEdgeCases:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])  # empty input
+        result = await run_engine(engine, [])  # empty input
 
         assert result.request is not None
         assert result.request.system is not None
@@ -1105,7 +1106,7 @@ class TestPipelineRunEdgeCases:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         # Pipeline should complete successfully
         assert result.request is not None
@@ -1137,7 +1138,7 @@ class TestPipelineRunEdgeCases:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        await engine.run([])
+        await run_engine(engine, [])
 
         # Resolver should have fired exactly once even though max_executions enforcement
         # is the engine's responsibility
@@ -1150,7 +1151,7 @@ class TestPipelineRunEdgeCases:
 
         counter = CharacterTokenCounter()
         engine = PipelineEngine(layers=[], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request is not None
         assert result.metrics is not None
@@ -1182,7 +1183,7 @@ class TestPipelineRunEdgeCases:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         lm = result.metrics.layers["system_prompt"]
         assert lm.token_budget == 10
@@ -1212,7 +1213,7 @@ class TestPipelineRunEdgeCases:
         )
 
         engine = PipelineEngine(layers=[layer], token_counter=counter)
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         lm = result.metrics.layers["system_prompt"]
         assert lm.token_budget is None

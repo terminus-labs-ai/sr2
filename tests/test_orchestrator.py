@@ -3,7 +3,7 @@
 Covers:
   - Construction (valid config, missing "default" key)
   - turn() as async iterator yielding StreamEvents
-  - turn() calls PipelineEngine.run() with user_input
+  - turn() uses start_turn / end_turn with user_input injection
   - turn() calls llm["default"].stream() with the compiled request
   - turn() emits assistant_response on the engine bus after stream ends
   - turn() kicks off post_process() fire-and-forget

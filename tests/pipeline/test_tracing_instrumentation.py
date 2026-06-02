@@ -10,6 +10,7 @@ Covers:
 
 import pytest
 
+from conftest import run_engine
 from sr2.models import ContentBlock, TextBlock, ToolDefinition
 from sr2.pipeline.compilation import AppendStrategy
 from sr2.pipeline.event_bus import EventBus
@@ -198,7 +199,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         records = tracer.get_trace()
         resolver_records = [r for r in records if r.kind == "resolver"]
@@ -217,7 +218,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="my_layer", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = tracer.get_trace()[0]
         assert record.component_name == "my_resolver"
@@ -236,7 +237,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "resolver")
         assert record.content_before == []
@@ -254,7 +255,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "resolver")
         assert len(record.content_after) > 0
@@ -272,7 +273,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "resolver")
         assert record.tokens_delta > 0
@@ -290,7 +291,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "resolver")
         assert record.tokens_before == 0  # fresh layer, nothing before
@@ -310,7 +311,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "resolver")
         assert isinstance(record.duration_ms, float)
@@ -329,7 +330,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "resolver")
         assert record.status == "ok"
@@ -348,8 +349,8 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
-        await engine.run([])
+        await run_engine(engine, [])
+        await run_engine(engine, [])
 
         records = [r for r in tracer.get_trace() if r.kind == "resolver"]
         assert len(records) == 2
@@ -369,7 +370,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "resolver")
         assert record.firing_seq == 0
@@ -397,7 +398,7 @@ class TestResolverInstrumentation:
         )
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         resolver_records = sorted(
             [r for r in tracer.get_trace() if r.kind == "resolver"],
@@ -420,7 +421,7 @@ class TestResolverInstrumentation:
         layer = make_system_layer(name="system_prompt", resolvers=[resolver], tracer=tracer, event_bus=bus)
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "resolver")
         assert len(record.trigger_events) > 0
@@ -456,7 +457,7 @@ class TestTransformerInstrumentation:
         )
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         transformer_records = [r for r in tracer.get_trace() if r.kind == "transformer"]
         assert len(transformer_records) == 1
@@ -485,7 +486,7 @@ class TestTransformerInstrumentation:
         )
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         transformer_record = next(r for r in tracer.get_trace() if r.kind == "transformer")
         # content_before should be non-empty (resolver already ran)
@@ -515,7 +516,7 @@ class TestTransformerInstrumentation:
         )
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         transformer_record = next(r for r in tracer.get_trace() if r.kind == "transformer")
         assert transformer_record.content_before != transformer_record.content_after
@@ -545,7 +546,7 @@ class TestToolProviderInstrumentation:
         )
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         tool_records = [r for r in tracer.get_trace() if r.kind == "tool_provider"]
         assert len(tool_records) == 1
@@ -568,7 +569,7 @@ class TestToolProviderInstrumentation:
         )
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "tool_provider")
         # content_before: names present before provide() ran
@@ -599,7 +600,7 @@ class TestToolProviderInstrumentation:
         )
         engine = build_engine([layer], tracer=tracer)
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         record = next(r for r in tracer.get_trace() if r.kind == "tool_provider")
         assert record.tokens_before == 0
@@ -627,7 +628,7 @@ class TestFailedFiringCapture:
         engine = build_engine([layer], tracer=tracer)
 
         with pytest.raises(Exception):
-            await engine.run([])
+            await run_engine(engine, [])
 
         failed_records = [r for r in tracer.get_trace() if r.status == "failed"]
         assert len(failed_records) >= 1
@@ -648,7 +649,7 @@ class TestFailedFiringCapture:
         engine = build_engine([layer], tracer=tracer)
 
         with pytest.raises(Exception):
-            await engine.run([])
+            await run_engine(engine, [])
 
         failed_record = next(r for r in tracer.get_trace() if r.status == "failed")
         assert failed_record.error is not None
@@ -656,7 +657,7 @@ class TestFailedFiringCapture:
 
     @pytest.mark.asyncio
     async def test_failing_resolver_exception_propagates(self):
-        """FR7: The exception still propagates — engine.run() raises."""
+        """FR7: The exception still propagates — run_engine() raises."""
         tracer = CollectingTracer()
         bus = EventBus()
         resolver = FailingResolver(
@@ -669,12 +670,12 @@ class TestFailedFiringCapture:
 
         raised = False
         try:
-            await engine.run([])
+            await run_engine(engine, [])
         except Exception as exc:
             raised = True
             assert "propagation check" in str(exc)
 
-        assert raised, "Exception should have propagated out of engine.run()"
+        assert raised, "Exception should have propagated out of run_engine()"
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +706,7 @@ class TestZeroCostSeam:
         engine = build_engine([layer], tracer=None)
         # layer._tracer is now None — the guard should block spy from being called
 
-        await engine.run([])
+        await run_engine(engine, [])
 
         assert spy.calls == 0, f"on_firing was called {spy.calls} time(s) but tracer=None should block it"
 
@@ -726,7 +727,7 @@ class TestZeroCostSeam:
         )
         engine = build_engine([layer], tracer=None)
 
-        result = await engine.run([])
+        result = await run_engine(engine, [])
 
         assert result.request is not None
         assert result.request.system is not None

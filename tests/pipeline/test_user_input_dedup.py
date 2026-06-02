@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import run_engine
+
 from sr2.config.models import ResolverConfig
 from sr2.models import TextBlock
 from sr2.pipeline.compilation import AppendStrategy
@@ -63,7 +65,7 @@ async def test_single_user_input_appears_once_in_compiled_request():
     layer = _conversation_layer()
     engine = PipelineEngine(layers=[layer], token_counter=CharacterTokenCounter())
 
-    result = await engine.run(user_input=[TextBlock(text="ping")])
+    result = await run_engine(engine, user_input=[TextBlock(text="ping")])
 
     assert _count_user_text(result.request, "ping") == 1, (
         "A single user message must appear exactly once in the compiled request. "
@@ -81,8 +83,8 @@ async def test_prior_user_input_appears_once_on_next_turn():
     layer = _conversation_layer()
     engine = PipelineEngine(layers=[layer], token_counter=CharacterTokenCounter())
 
-    await engine.run(user_input=[TextBlock(text="first")])
-    result2 = await engine.run(user_input=[TextBlock(text="second")])
+    await run_engine(engine, user_input=[TextBlock(text="first")])
+    result2 = await run_engine(engine, user_input=[TextBlock(text="second")])
 
     assert _count_user_text(result2.request, "first") == 1, (
         "The first turn's user message must appear exactly once as prior history "

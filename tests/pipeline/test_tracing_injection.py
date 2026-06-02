@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import run_engine
+
 from sr2.pipeline.compilation import AppendStrategy
 from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.layer import Layer
@@ -253,7 +255,7 @@ async def test_engine_turn_seq_starts_before_zero():
 async def test_engine_turn_seq_increments_to_zero_on_first_run():
     """Engine _turn_seq is 0 after the first run() call."""
     engine = _make_engine()
-    await engine.run(user_input=[])
+    await run_engine(engine, [])
     assert engine._turn_seq == 0
 
 
@@ -261,8 +263,8 @@ async def test_engine_turn_seq_increments_to_zero_on_first_run():
 async def test_engine_turn_seq_increments_to_one_on_second_run():
     """Engine _turn_seq is 1 after the second run() call."""
     engine = _make_engine()
-    await engine.run(user_input=[])
-    await engine.run(user_input=[])
+    await run_engine(engine, [])
+    await run_engine(engine, [])
     assert engine._turn_seq == 1
 
 
@@ -271,7 +273,7 @@ async def test_engine_turn_seq_increments_monotonically():
     """Engine _turn_seq increments by exactly 1 on each run() call."""
     engine = _make_engine()
     for expected in range(3):
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
         assert engine._turn_seq == expected
 
 

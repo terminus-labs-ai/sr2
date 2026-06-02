@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from conftest import run_engine
+
 from sr2.models import Message, TextBlock
 from sr2.pipeline.compilation import AppendStrategy
 from sr2.pipeline.event_bus import EventBus
@@ -557,7 +559,7 @@ class TestLayerProcessPendingFlushesStore:
             token_counter=CharacterTokenCounter(),
             provenance_store=store,
         )
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
 
         retrieved = await store.get(entry.id)
         assert retrieved is entry

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import run_engine
+
 from sr2.pipeline.compilation import AppendStrategy
 from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
@@ -463,7 +465,7 @@ class TestEngineWiredLayersShareProvenanceStore:
         )
 
         engine = _make_engine(layers=[layer], provenance_store=store)
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
 
         retrieved = await store.get(entry.id)
         assert retrieved is entry, (
@@ -501,7 +503,7 @@ class TestEngineWiredLayersShareProvenanceStore:
         )
 
         engine = _make_engine(layers=[layer_a, layer_b], provenance_store=store)
-        await engine.run(user_input=[])
+        await run_engine(engine, [])
 
         retrieved_a = await store.get(entry_a.id)
         retrieved_b = await store.get(entry_b.id)
