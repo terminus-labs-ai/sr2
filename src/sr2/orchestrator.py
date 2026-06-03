@@ -108,6 +108,7 @@ class SR2:
         memory_store: "MemoryStore | None" = None,
         memory_extractor: "MemoryExtractor | None" = None,
         tool_executor: "ToolExecutor | None" = None,
+        active_frame_provider: Callable[[str], str | None] | None = None,
     ) -> None:
         # Normalise: bare LLMCallable → single-entry dict under "default".
         # Dict form: no "default" key requirement — callers may use any key names.
@@ -140,6 +141,7 @@ class SR2:
             memory_extractor=memory_extractor,
             session_id=self.session_id,
             extras=extras or {},
+            active_frame_provider=active_frame_provider,
         )
         self._active_frame_provider = deps.active_frame_provider
 
