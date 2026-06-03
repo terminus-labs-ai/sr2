@@ -223,6 +223,11 @@ class SR2:
         FR11: post_process is awaited once after the full loop (not per iteration).
         FR14: exactly one StreamEvent(type="end") is emitted to the caller.
         FR7:  raises ToolLoopLimitError if iterations exceed max_tool_iterations.
+
+        sr2-80: Finalization (assistant_response + end_turn + post_process) runs
+        BEFORE yielding any events in the final iteration, so an early break
+        by the consumer does not silently skip session-history capture or
+        memory extraction.
         """
         # FR4+FR5+FR6: Await any pending deferred post_process task from the
         # previous turn before starting a new one. This ensures turn N's
@@ -306,27 +311,21 @@ class SR2:
                 self._circuit_breaker.record_failure()
                 raise
 
-            # Process collected events.
+            # Classify events from this LLM call.
             for event in raw_events:
                 if event.type == "text" and event.text:
                     iter_text.append(event.text)
-                    yield event
                 elif event.type == "tool_use":
                     iter_tool_use.append(event)
-                    # Do NOT yield tool_use events to the caller — they are
-                    # internal to the loop; callers see only text and end.
                 elif event.type == "usage" and event.usage is not None:
                     iter_usage = event.usage
-                    yield event
-                # Suppress intermediate "end" events (FR14 — single end at finish).
-                # They will be replaced by the single end event we yield below.
 
             full_iter_text = "".join(iter_text)
             usage = iter_usage if iter_usage is not None else TokenUsage()
 
             if not iter_tool_use:
                 # No tool calls — this is the final LLM response. Build the
-                # CompletionResponse and exit the loop.
+                # CompletionResponse.
                 content: list = []
                 if full_iter_text:
                     block = TextBlock(text=full_iter_text)
@@ -339,7 +338,29 @@ class SR2:
                     stop_reason=stop_reason,
                     usage=usage,
                 )
-                break
+
+                # sr2-80: Finalize BEFORE yielding any events so an early
+                # consumer break does not skip session-history capture.
+                await self._finalize_turn(final_response)
+
+                # Stream text/usage events to the caller (they were already
+                # collected; yielding now preserves streaming semantics).
+                for event in raw_events:
+                    if event.type == "text" and event.text:
+                        yield event
+                    elif event.type == "usage" and event.usage is not None:
+                        yield event
+
+                # FR7: Surface accumulated in-band bus errors before the final end event.
+                if in_band_errors:
+                    yield StreamEvent(type="error", errors=in_band_errors)
+
+                yield StreamEvent(type="end")
+                return
+
+            # ----------------------------------------------------------------
+            # Tool-use iteration — execute tools and loop back
+            # ----------------------------------------------------------------
 
             # There are tool_use blocks — check the iteration limit before executing.
             if iteration_seq >= self._max_tool_iterations:
@@ -456,6 +477,13 @@ class SR2:
                 )
             )
 
+            # Stream text events from this iteration to the caller.
+            for event in raw_events:
+                if event.type == "text" and event.text:
+                    yield event
+                elif event.type == "usage" and event.usage is not None:
+                    yield event
+
             # Emit tool_use_emitted after all tool blocks are collected.
             yield StreamEvent(type="tool_use_emitted", tool_uses=tool_use_blocks)
 
@@ -498,18 +526,13 @@ class SR2:
 
             iteration_seq += 1
 
-        # ----------------------------------------------------------------
-        # Turn complete — emit a single end event (FR14).
-        # ----------------------------------------------------------------
-        if final_response is None:
-            # Defensive: build an empty response if the loop exited unexpectedly.
-            final_response = CompletionResponse(
-                id="turn-response",
-                content=[],
-                stop_reason="end_turn",
-                usage=TokenUsage(),
-            )
+    async def _finalize_turn(self, final_response: CompletionResponse) -> None:
+        """Queue assistant_response, drain via end_turn, schedule post_process.
 
+        Called BEFORE yielding the final end event (sr2-80) so that an early
+        consumer break does not silently skip session-history capture or
+        memory extraction.
+        """
         # Queue assistant_response on the engine bus so session resolver captures it.
         self._engine.bus.queue(
             Event(
@@ -524,12 +547,6 @@ class SR2:
         # assistant_response subscribers: SessionResolver, MemoryExtractionTransformer),
         # compile, and return PipelineResult.
         await self._engine.end_turn()
-
-        # FR7: Surface accumulated in-band bus errors before the final end event.
-        if in_band_errors:
-            yield StreamEvent(type="error", errors=in_band_errors)
-
-        yield StreamEvent(type="end")
 
         # FR4+FR5+FR6: Schedule post_process as a deferred task. The client
         # is freed immediately; the next turn() will await this task before
