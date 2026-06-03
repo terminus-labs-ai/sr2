@@ -41,6 +41,8 @@ class Layer:
         token_threshold_pct: float | None = None,
         tool_providers: list | None = None,
         tracer: "Tracer | None" = None,
+        degradation_category: str | None = None,
+        priority: int = 0,
     ) -> None:
         self.name = name
         self.target = target
@@ -68,6 +70,10 @@ class Layer:
         self._pending_events: list[Event] = []
         # Entries buffered for store write — flushed in process_pending
         self._pending_writes: list[Entry] = []
+
+        # Degradation metadata (FR2 — sr2-82)
+        self.degradation_category: str | None = degradation_category
+        self.priority: int = priority
 
     # -- wiring ---------------------------------------------------------------
 

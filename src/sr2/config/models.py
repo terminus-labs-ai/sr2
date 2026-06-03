@@ -105,6 +105,8 @@ class LayerConfig(BaseModel):
   tool_providers: list[ToolProviderConfig] | None = None
   target: str
   position: str = "append"
+  degradation_category: str | None = None
+  priority: int = 0
 
 
 class PipelineConfig(BaseModel):
