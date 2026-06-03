@@ -101,6 +101,20 @@ class ToolProvider(Protocol):
 
 
 @runtime_checkable
+class ToolSource(Protocol):
+    """Harness-provided source of tool definitions.
+
+    A typed optional dependency (mirrors ``memory_store`` and
+    ``active_frame_provider``): the harness injects a concrete tool runtime
+    via ``SR2(tool_source=...)``, and a ToolProvider reads it from
+    ``deps.tool_source`` to surface definitions into the pipeline. Core owns
+    this contract; it never imports the harness's concrete registry.
+    """
+
+    def to_sr2_definitions(self) -> list[ToolDefinition]: ...
+
+
+@runtime_checkable
 class TokenCounter(Protocol):
     """Counts tokens in a list of content blocks. Injected into the engine."""
 

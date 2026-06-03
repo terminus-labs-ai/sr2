@@ -10,6 +10,7 @@ from sr2.protocols.llm import LLMCallable
 
 if TYPE_CHECKING:
     from sr2.memory.protocol import MemoryExtractor, MemoryStore
+    from sr2.pipeline.protocols import ToolSource
 
 
 @dataclasses.dataclass(frozen=True)
@@ -19,6 +20,14 @@ class Dependencies:
     llm: dict[str, LLMCallable] | None = None
     memory_store: "MemoryStore | None" = None
     memory_extractor: "MemoryExtractor | None" = None
+    tool_source: "ToolSource | None" = None
+    """Harness-provided tool definition source.
+
+    A ToolProvider reads this to surface the harness's tools into the
+    pipeline (see ``sr2.pipeline.protocols.ToolSource``).  When ``None``
+    (default), no harness tools are injected.  Replaces the removed untyped
+    ``extras`` service-locator bag with a typed optional dependency.
+    """
     session_id: str = ""
     active_frame_provider: Callable[[str], str | None] | None = None
     """Origin-aware active-frame provider.

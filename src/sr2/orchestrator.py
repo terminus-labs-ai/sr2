@@ -27,7 +27,7 @@ from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase
 from sr2.pipeline.layer import Layer
 from sr2.pipeline.models import CompilationTarget
-from sr2.pipeline.protocols import Resolver, TokenCounter, Transformer
+from sr2.pipeline.protocols import Resolver, TokenCounter, ToolSource, Transformer
 from sr2.plugins.registry import PluginRegistry
 from sr2.protocols.llm import (
     CompletionRequest,
@@ -108,6 +108,7 @@ class SR2:
         memory_extractor: "MemoryExtractor | None" = None,
         tool_executor: "ToolExecutor | None" = None,
         active_frame_provider: Callable[[str], str | None] | None = None,
+        tool_source: "ToolSource | None" = None,
     ) -> None:
         # Normalise: bare LLMCallable → single-entry dict under "default".
         # Dict form: no "default" key requirement — callers may use any key names.
@@ -140,6 +141,7 @@ class SR2:
             memory_extractor=memory_extractor,
             session_id=self.session_id,
             active_frame_provider=active_frame_provider,
+            tool_source=tool_source,
         )
         self._active_frame_provider = deps.active_frame_provider
 
