@@ -26,6 +26,7 @@ class _MinimalResolver:
 
     subscriptions: list = []
     max_executions: int = 1
+    execution_count: int = 0
 
     async def resolve(self, events):
         ...
@@ -36,6 +37,7 @@ class _FullResolver:
 
     subscriptions: list = []
     max_executions: int = 1
+    execution_count: int = 0
 
     async def resolve(self, events):
         ...
@@ -50,6 +52,7 @@ class _MinimalTransformer:
 
     subscriptions: list = []
     max_executions: int = 1
+    execution_count: int = 0
 
     async def transform(self, content, events):
         ...
@@ -60,6 +63,7 @@ class _FullTransformer:
 
     subscriptions: list = []
     max_executions: int = 1
+    execution_count: int = 0
 
     async def transform(self, content, events):
         ...

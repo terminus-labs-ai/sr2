@@ -221,6 +221,7 @@ class TestResolverProtocol:
                 EventSubscription(event_name="turn_start", phase=EventPhase.STARTING)
             ]
             max_executions = 1
+            execution_count = 0
 
             async def resolve(self, events: list[Event]) -> ResolvedContent:
                 return ResolvedContent(
@@ -270,6 +271,41 @@ class TestResolverProtocol:
 
         assert not isinstance(MissingMaxExec(), Resolver)
 
+    def test_non_conforming_class_missing_execution_count(self):
+        """A class without execution_count must not satisfy the Resolver protocol."""
+        from sr2.pipeline.protocols import Resolver
+
+        class MissingExecCount:
+            subscriptions = []
+            max_executions = 1
+
+            async def resolve(self, events):
+                pass
+
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
+
+        assert not isinstance(MissingExecCount(), Resolver)
+
+    def test_conforming_resolver_has_execution_count(self):
+        """Resolvers must declare execution_count for Layer.process_pending."""
+        from sr2.pipeline.protocols import Resolver
+
+        class FullResolver:
+            subscriptions = []
+            max_executions = 1
+            execution_count = 0
+
+            async def resolve(self, events):
+                pass
+
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
+
+        assert isinstance(FullResolver(), Resolver)
+
     def test_max_executions_default_is_one(self):
         """FR5: max_executions defaults to 1."""
         from sr2.pipeline.models import ResolvedContent
@@ -296,6 +332,7 @@ class TestResolverProtocol:
                 EventSubscription(event_name="turn_start", phase=EventPhase.STARTING)
             ]
             max_executions = 3
+            execution_count = 0
 
             async def resolve(self, events):
                 pass
@@ -360,6 +397,7 @@ class TestTransformerProtocol:
                 )
             ]
             max_executions = 1
+            execution_count = 0
 
             async def transform(
                 self, content: list, events: list[Event]
@@ -408,6 +446,41 @@ class TestTransformerProtocol:
                 pass
 
         assert not isinstance(MissingMaxExec(), Transformer)
+
+    def test_non_conforming_class_missing_execution_count(self):
+        """A class without execution_count must not satisfy the Transformer protocol."""
+        from sr2.pipeline.protocols import Transformer
+
+        class MissingExecCount:
+            subscriptions = []
+            max_executions = 1
+
+            async def transform(self, content, events):
+                pass
+
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
+
+        assert not isinstance(MissingExecCount(), Transformer)
+
+    def test_conforming_transformer_has_execution_count(self):
+        """Transformers must declare execution_count for Layer.process_pending."""
+        from sr2.pipeline.protocols import Transformer
+
+        class FullTransformer:
+            subscriptions = []
+            max_executions = 1
+            execution_count = 0
+
+            async def transform(self, content, events):
+                pass
+
+            @classmethod
+            def build(cls, config, deps):
+                return cls()
+
+        assert isinstance(FullTransformer(), Transformer)
 
     @pytest.mark.asyncio
     async def test_transform_receives_content_and_events(self):
@@ -485,6 +558,7 @@ class TestTransformerProtocol:
         class MultiExecTransformer:
             subscriptions = []
             max_executions = 5
+            execution_count = 0
 
             async def transform(self, content, events):
                 pass
@@ -664,6 +738,7 @@ class TestProtocolIndependence:
         class OnlyResolver:
             subscriptions = []
             max_executions = 1
+            execution_count = 0
 
             async def resolve(self, events):
                 pass
@@ -682,6 +757,7 @@ class TestProtocolIndependence:
         class OnlyTransformer:
             subscriptions = []
             max_executions = 1
+            execution_count = 0
 
             async def transform(self, content, events):
                 pass
@@ -713,6 +789,7 @@ class TestProtocolIndependence:
         class Dual:
             subscriptions = []
             max_executions = 1
+            execution_count = 0
 
             async def resolve(self, events):
                 pass

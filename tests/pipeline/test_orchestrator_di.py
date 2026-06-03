@@ -81,6 +81,7 @@ class FakeDepsAwareTransformer:
     def __init__(self, llm: Any) -> None:
         self.llm = llm
         self.transform_calls: int = 0
+        self.execution_count: int = 0
 
     @classmethod
     def build(cls, config: TransformerConfig, deps: Dependencies) -> "FakeDepsAwareTransformer":

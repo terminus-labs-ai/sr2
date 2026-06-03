@@ -64,6 +64,7 @@ class Resolver(Protocol):
 
     subscriptions: list[EventSubscription]
     max_executions: int
+    execution_count: int
 
     async def resolve(self, events: list[Event]) -> ResolvedContent: ...
 
@@ -77,6 +78,7 @@ class Transformer(Protocol):
 
     subscriptions: list[EventSubscription]
     max_executions: int
+    execution_count: int
 
     async def transform(
         self, content: list[ContentBlock], events: list[Event]
