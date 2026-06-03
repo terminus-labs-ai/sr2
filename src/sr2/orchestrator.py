@@ -103,7 +103,6 @@ class SR2:
         token_counter: TokenCounter,
         session_id: str | None = None,
         provenance_store: ProvenanceStore | None = None,
-        extras: Mapping[str, Any] | None = None,
         tracer: "Tracer | None" = None,
         memory_store: "MemoryStore | None" = None,
         memory_extractor: "MemoryExtractor | None" = None,
@@ -140,7 +139,6 @@ class SR2:
             memory_store=memory_store,
             memory_extractor=memory_extractor,
             session_id=self.session_id,
-            extras=extras or {},
             active_frame_provider=active_frame_provider,
         )
         self._active_frame_provider = deps.active_frame_provider

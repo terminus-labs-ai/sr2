@@ -46,7 +46,6 @@ def make_deps(
     *,
     memory_store=None,
     memory_extractor=None,
-    extras: dict | None = None,
 ) -> Dependencies:
     """Build Dependencies using typed fields."""
     return Dependencies(  # type: ignore[call-arg]
@@ -166,7 +165,7 @@ class TestBuildSuccess:
     """build() succeeds when memory_store is present in deps typed field."""
 
     def test_build_succeeds_with_memory_store(self):
-        """build() does not raise when memory_store is in deps.extras."""
+        """build() does not raise when memory_store is in deps."""
         store = InMemoryMemoryStore()
         deps = make_deps(memory_store=store)
         config = make_config()
@@ -214,7 +213,7 @@ class TestExtractorInjection:
     """build() uses memory_extractor from typed field if present, else defaults to RuleBasedExtractor."""
 
     def test_uses_provided_extractor(self):
-        """When memory_extractor is in extras, it is used (not RuleBasedExtractor)."""
+        """When memory_extractor is in deps, it is used (not RuleBasedExtractor)."""
         store = InMemoryMemoryStore()
         stub = StubExtractor()
         deps = make_deps(memory_store=store, memory_extractor=stub)
@@ -225,7 +224,7 @@ class TestExtractorInjection:
         assert transformer._extractor is stub
 
     def test_defaults_to_rule_based_extractor_when_absent(self):
-        """When memory_extractor absent from extras, defaults to RuleBasedExtractor."""
+        """When memory_extractor absent from deps, defaults to RuleBasedExtractor."""
         store = InMemoryMemoryStore()
         deps = make_deps(memory_store=store)  # no extractor
 

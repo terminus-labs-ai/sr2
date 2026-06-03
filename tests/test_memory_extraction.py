@@ -16,7 +16,7 @@ Covers:
   13. MemoryResolver: scope filtering
   14. MemoryResolver: limit enforcement
   15. MemoryResolver: build from deps (custom store)
-  16. MemoryResolver: build with default store (no extras)
+  16. MemoryResolver: build with default store (no memory_store)
 """
 
 from __future__ import annotations
@@ -236,7 +236,7 @@ class TestMemoryResolver:
         )
         assert resolver._store is custom_store
 
-    async def test_resolver_build_requires_store_in_extras(self):
+    async def test_resolver_build_requires_store_in_deps(self):
         """Build raises ConfigError when no memory_store is provided."""
         import pytest
         from sr2.config.models import ConfigError

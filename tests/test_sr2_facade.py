@@ -3,12 +3,10 @@
 The facade is a thin wrapper over sr2.orchestrator.SR2. Its job:
   1. Accept the same constructor signature as the orchestrator.
   2. Delegate seed_session() and turn() to the internal orchestrator.
-  3. Pass extras through to component build() calls.
 
 Behaviors under test (bead obsidian-t9t.1, spec section 1A):
   - seed_session + turn produces correct messages
   - tool providers re-fire every turn (execution_count reset)
-  - extras flow to tool provider build()
 
 All tests import from sr2.sr2 (the facade), NOT sr2.orchestrator.
 Tests must FAIL against the current stub (class SR2: def sr2(): pass).
@@ -78,7 +76,7 @@ class TestFacadeConstruction:
         assert sr2 is not None
 
     def test_constructs_with_all_args(self):
-        """SR2 accepts session_id, provenance_store=None, extras=None."""
+        """SR2 accepts session_id and provenance_store=None."""
         from sr2.sr2 import SR2
 
         config = make_minimal_config()
@@ -88,7 +86,6 @@ class TestFacadeConstruction:
             token_counter=CharacterTokenCounter(),
             session_id="test-session-id",
             provenance_store=None,
-            extras={"key": "value"},
         )
         assert sr2 is not None
 
@@ -447,184 +444,3 @@ class TestToolProvidersRefireEachTurn:
         assert len(mock_llm.stream_calls) == 2
 
 
-# ---------------------------------------------------------------------------
-# 4. extras flow to tool provider build()
-# ---------------------------------------------------------------------------
-
-
-class TestExtrasFlowToToolProviderBuild:
-    """extras kwarg on SR2.__init__ must reach tool provider build() via deps.extras."""
-
-    @pytest.mark.asyncio
-    async def test_extras_reach_tool_provider_build(self, reset_plugin_registries):
-        """A tool provider's build() receives the extras dict passed to SR2().
-
-        This validates the injection chain:
-          SR2(extras=...) → Dependencies(extras=...) → _build_tool_provider(..., deps) → build(config, deps)
-        """
-        from sr2.sr2 import SR2
-
-        received_extras: dict[str, Any] = {}
-        sentinel = object()
-
-        class ExtrasCapturingToolProvider:
-            name: str = "extras_tp"
-
-            def __init__(self) -> None:
-                from sr2.pipeline.events import EventSubscription
-
-                self.subscriptions = [EventSubscription(event_name="turn_start")]
-                self.max_executions = 1
-                self.execution_count = 0
-
-            async def provide(self, events: list) -> list:
-                self.execution_count += 1
-                return []
-
-            @classmethod
-            def build(cls, config: Any, deps: Any) -> "ExtrasCapturingToolProvider":
-                received_extras["extras"] = deps.extras
-                return cls()
-
-        def _side_effect(group: str) -> list:
-            if group == "sr2.resolvers":
-                from sr2.pipeline.resolvers.static import StaticResolver
-
-                ep = MagicMock(spec=importlib.metadata.EntryPoint)
-                ep.name = "static"
-                ep.load.return_value = StaticResolver
-                dist = MagicMock()
-                dist.name = "sr2"
-                ep.dist = dist
-                return [ep]
-
-            if group == "sr2.tool_providers":
-                ep = MagicMock(spec=importlib.metadata.EntryPoint)
-                ep.name = "extras_tp"
-                ep.load.return_value = ExtrasCapturingToolProvider
-                dist = MagicMock()
-                dist.name = "sr2-test"
-                ep.dist = dist
-                return [ep]
-
-            return []
-
-        config = PipelineConfig(
-            layers=[
-                LayerConfig(
-                    name="system",
-                    target="system",
-                    resolvers=[
-                        ResolverConfig(
-                            type="static",
-                            config={"text": "You are a helpful assistant."},
-                        )
-                    ],
-                ),
-                LayerConfig(
-                    name="tools",
-                    target="tools",
-                    resolvers=[],
-                    tool_providers=[ToolProviderConfig(type="extras_tp")],
-                ),
-            ]
-        )
-
-        with patch("sr2.plugins.registry.entry_points", side_effect=_side_effect):
-            SR2(
-                pipeline_config=config,
-                llm={"default": MockLLM()},
-                token_counter=CharacterTokenCounter(),
-                extras={"sentinel_key": sentinel},
-            )
-
-        assert "extras" in received_extras, (
-            "Tool provider build() was never called — extras injection chain broken"
-        )
-        assert received_extras["extras"].get("sentinel_key") is sentinel, (
-            "extras['sentinel_key'] was not passed through to tool provider build()"
-        )
-
-    def test_extras_none_normalised_to_empty_dict_for_tool_provider(
-        self, reset_plugin_registries
-    ):
-        """Passing extras=None to SR2 normalises to {} before passing to build()."""
-        from sr2.sr2 import SR2
-
-        received_extras: dict[str, Any] = {}
-
-        class NoneExtrasCapturingTP:
-            name: str = "none_tp"
-
-            def __init__(self) -> None:
-                from sr2.pipeline.events import EventSubscription
-
-                self.subscriptions = [EventSubscription(event_name="turn_start")]
-                self.max_executions = 1
-                self.execution_count = 0
-
-            async def provide(self, events: list) -> list:
-                self.execution_count += 1
-                return []
-
-            @classmethod
-            def build(cls, config: Any, deps: Any) -> "NoneExtrasCapturingTP":
-                received_extras["extras"] = deps.extras
-                return cls()
-
-        def _side_effect(group: str) -> list:
-            if group == "sr2.resolvers":
-                from sr2.pipeline.resolvers.static import StaticResolver
-
-                ep = MagicMock(spec=importlib.metadata.EntryPoint)
-                ep.name = "static"
-                ep.load.return_value = StaticResolver
-                dist = MagicMock()
-                dist.name = "sr2"
-                ep.dist = dist
-                return [ep]
-
-            if group == "sr2.tool_providers":
-                ep = MagicMock(spec=importlib.metadata.EntryPoint)
-                ep.name = "none_tp"
-                ep.load.return_value = NoneExtrasCapturingTP
-                dist = MagicMock()
-                dist.name = "sr2-test"
-                ep.dist = dist
-                return [ep]
-
-            return []
-
-        config = PipelineConfig(
-            layers=[
-                LayerConfig(
-                    name="system",
-                    target="system",
-                    resolvers=[
-                        ResolverConfig(
-                            type="static",
-                            config={"text": "You are a helpful assistant."},
-                        )
-                    ],
-                ),
-                LayerConfig(
-                    name="tools",
-                    target="tools",
-                    resolvers=[],
-                    tool_providers=[ToolProviderConfig(type="none_tp")],
-                ),
-            ]
-        )
-
-        with patch("sr2.plugins.registry.entry_points", side_effect=_side_effect):
-            SR2(
-                pipeline_config=config,
-                llm={"default": MockLLM()},
-                token_counter=CharacterTokenCounter(),
-                extras=None,
-            )
-
-        assert received_extras.get("extras") is not None, (
-            "deps.extras must not be None when SR2 receives extras=None"
-        )
-        assert received_extras["extras"] == {}

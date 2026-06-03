@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Mapping
-from typing import Any, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from sr2.protocols.llm import LLMCallable
 
@@ -20,7 +20,6 @@ class Dependencies:
     memory_store: "MemoryStore | None" = None
     memory_extractor: "MemoryExtractor | None" = None
     session_id: str = ""
-    extras: Mapping[str, Any] = dataclasses.field(default_factory=dict)
     active_frame_provider: Callable[[str], str | None] | None = None
     """Origin-aware active-frame provider.
 

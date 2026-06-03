@@ -112,7 +112,7 @@ class TestMemoryResolverBuildConfigError:
     def test_build_raises_config_error_when_store_absent(self):
         """build() raises ConfigError when memory_store is not in deps."""
         config = make_config()
-        deps = Dependencies()  # no extras at all
+        deps = Dependencies()  # no memory_store
         with pytest.raises(ConfigError):
             MemoryResolver.build(config, deps)
 
@@ -130,7 +130,7 @@ class TestMemoryResolverBuildConfigError:
             f"Expected ConfigError, got {type(exc).__name__}: {exc}"
         )
 
-    def test_build_raises_config_error_when_extras_empty(self):
+    def test_build_raises_config_error_when_no_memory_store(self):
         """build() raises ConfigError when deps has no memory_store."""
         config = make_config()
         deps = Dependencies()
