@@ -151,6 +151,17 @@ class LiteLLMCallable:
         if delta.content:
           yield StreamEvent(type="text", text=delta.content)
 
+        # Thinking / reasoning content (OpenAI reasoning_content, Anthropic thinking_blocks)
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning is not None:
+          yield StreamEvent(type="thinking", text=reasoning)
+
+        thinking_blocks = getattr(delta, "thinking_blocks", None)
+        if thinking_blocks is not None:
+          for tb in thinking_blocks:
+            if isinstance(tb, dict) and tb.get("type") == "thinking" and tb.get("thinking"):
+              yield StreamEvent(type="thinking", text=tb["thinking"])
+
         # Tool call deltas
         if delta.tool_calls is not None:
           for tc_delta in delta.tool_calls:
