@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, Self, runtime_checkable
 
 from sr2.config.models import ResolverConfig, TransformerConfig
@@ -16,45 +15,7 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# Component protocol — unified dispatch contract
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ComponentResult:
-    """Return type for Component.run()."""
-
-    component_name: str
-    source_layer: str
-    content: list | None = None
-
-
-@runtime_checkable
-class Component(Protocol):
-    """Unified protocol for all pipeline components.
-
-    ``isinstance(obj, Component)`` checks for the four shared attributes:
-    ``name``, ``subscriptions``, ``max_executions``, ``execution_count``.
-
-    Layer dispatches custom components (those in ``Layer.components``) by
-    calling ``comp.run(layer_view, events)`` directly.  Built-in resolvers,
-    transformers, and tool providers also satisfy this protocol via those four
-    shared attributes and are dispatched through the existing
-    ``_fire_component`` path for backward compatibility.
-
-    Custom components placed in ``Layer.components`` MUST implement ``run()``.
-    Layer calls it directly (not via isinstance dispatch) so it is not part of
-    the protocol's runtime-checkable surface.
-    """
-
-    name: str
-    subscriptions: list[EventSubscription]
-    max_executions: int
-    execution_count: int
-
-
-# ---------------------------------------------------------------------------
-# Built-in component protocols (unchanged from original)
+# Pipeline component protocols
 # ---------------------------------------------------------------------------
 
 
