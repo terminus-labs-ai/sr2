@@ -1,4 +1,4 @@
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import BaseModel
 from pydantic.functional_validators import PlainValidator
@@ -48,7 +48,6 @@ class ToolProviderConfig(BaseModel):
 
 class LayerConfig(BaseModel):
   name: str
-  cache: Literal["static", "ephemeral", "append_only"] | None = None
   token_budget: int | None = None
   token_threshold_pct: float | None = None
   resolvers: list[ResolverConfig]
@@ -61,7 +60,6 @@ class LayerConfig(BaseModel):
 class PipelineConfig(BaseModel):
   layers: list[LayerConfig]
   token_budget: int = 200_000
-  enable_overflow_detection: bool = True
   max_tool_iterations: int = 25
   max_parallel_tools: int | None = None
   llm_timeout_seconds: float | None = None

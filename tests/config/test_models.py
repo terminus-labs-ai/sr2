@@ -155,14 +155,23 @@ class TestLayerConfig:
         layer = LayerConfig(
             name="system",
             target="system",
-            cache="static",
             token_budget=4000,
             resolvers=[ResolverConfig(type="static_template")],
         )
         assert layer.name == "system"
-        assert layer.cache == "static"
         assert layer.token_budget == 4000
         assert len(layer.resolvers) == 1
+
+    def test_cache_field_removed(self):
+        """cache was a dead field — no production code read it. Removed in sr2-70."""
+        from sr2.config.models import LayerConfig, ResolverConfig
+
+        layer = LayerConfig(
+            name="system",
+            target="system",
+            resolvers=[ResolverConfig(type="static_template")],
+        )
+        assert not hasattr(layer, "cache")
 
     def test_transformers_still_optional(self):
         from sr2.config.models import LayerConfig, ResolverConfig
@@ -204,18 +213,14 @@ class TestLayerConfig:
         )
         assert layer.position == "prepend"
 
-    def test_cache_values(self):
-        """Cache still accepts the three literal values and None."""
-        from sr2.config.models import LayerConfig, ResolverConfig
+    def test_enable_overflow_detection_removed(self):
+        """enable_overflow_detection was never read by production code. Removed in sr2-70."""
+        from sr2.config.models import PipelineConfig, LayerConfig, ResolverConfig
 
-        for cache_val in ("static", "ephemeral", "append_only", None):
-            layer = LayerConfig(
-                name="test",
-                target="messages",
-                cache=cache_val,
-                resolvers=[ResolverConfig(type="input")],
-            )
-            assert layer.cache == cache_val
+        cfg = PipelineConfig(
+            layers=[LayerConfig(name="test", target="messages", resolvers=[ResolverConfig(type="input")])]
+        )
+        assert not hasattr(cfg, "enable_overflow_detection")
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +313,6 @@ class TestYAMLRoundTrip:
             "layers": [
                 {
                     "name": "system",
-                    "cache": "static",
                     "token_budget": 4000,
                     "target": "system_prompt",
                     "position": "prepend",
@@ -335,7 +339,6 @@ class TestYAMLRoundTrip:
                 {
                     "name": "conversation",
                     "target": "messages",
-                    "cache": "append_only",
                     "resolvers": [
                         {"type": "session"},
                         {"type": "input"},
@@ -348,7 +351,6 @@ class TestYAMLRoundTrip:
         # Layer 0 — system
         sys_layer = cfg.layers[0]
         assert sys_layer.name == "system"
-        assert sys_layer.cache == "static"
         assert sys_layer.token_budget == 4000
         assert sys_layer.target == "system_prompt"
         assert sys_layer.position == "prepend"

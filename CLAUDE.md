@@ -190,7 +190,6 @@ Each component also exposes `subscriptions: list[EventSubscription]`, `max_execu
 class PipelineConfig(BaseModel):
     layers: list[LayerConfig]
     token_budget: int = 200_000
-    enable_overflow_detection: bool = True
     max_tool_iterations: int = 25          # tool-loop cap per turn
     max_parallel_tools: int | None = None  # semaphore on concurrent tool exec
     llm_timeout_seconds: float | None = None
@@ -199,7 +198,6 @@ class PipelineConfig(BaseModel):
 
 class LayerConfig(BaseModel):
     name: str
-    cache: Literal["static", "ephemeral", "append_only"] | None = None
     token_budget: int | None = None
     token_threshold_pct: float | None = None
     resolvers: list[ResolverConfig]
