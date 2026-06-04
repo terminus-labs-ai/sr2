@@ -166,6 +166,10 @@ All pipeline components implement runtime-checkable protocols from `pipeline/pro
 
 Each component also exposes `subscriptions: list[EventSubscription]`, `max_executions: int`, `execution_count: int`, and a `build(config, deps) -> Self` classmethod.
 
+> **Invariant — resolver-only injection.** Nothing enters the compiled context except through a **resolver**. Resolvers are the *only* way new source content enters a layer. Transformers may only *mutate* already-assembled content, and may leave derived **markers** referencing what they changed (e.g. a compaction breadcrumb) — they never inject new source content. Anything shaped like "inject X into context" is therefore a resolver, never an interface-string injection, persona-baked text, or a transformer side-channel. Worked example: mode-aware run guidance — the *interface* decides the run's mode, but a *resolver* reads it and injects the guidance.
+
+> **Invariant — typed dependencies, no extras bag.** Cross-component data reaches pipeline components as **typed optional fields** on `Dependencies` (precedent: `tool_source`, `active_frame_provider`). The untyped `extras` service-locator bag was deliberately removed; do not reintroduce it. Core must not import harness-specific types — pass generics (primitives, callables, or core-defined protocols).
+
 ### Built-in Resolvers
 
 | Name | Entry point key | Trigger | Output |
