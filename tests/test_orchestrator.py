@@ -27,7 +27,7 @@ from sr2.config.models import (
     PipelineConfig,
     ResolverConfig,
 )
-from sr2.models import TextBlock, ToolUseBlock, TokenUsage
+from sr2.models import TextBlock, ToolResultBlock, ToolUseBlock, TokenUsage
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.protocols.llm import (
     CompletionRequest,
@@ -1273,3 +1273,328 @@ class TestSR2RoundTrip:
         assert isinstance(sr2.provenance_store, ProvenanceStore)
 
         await store.close()
+
+
+# ===========================================================================
+# Tests for extracted helpers: _execute_tools, _run_tool_iteration
+# ===========================================================================
+
+
+class TestExecuteTools:
+    """Tests for SR2._execute_tools() — concurrent tool execution helper."""
+
+    @pytest.mark.asyncio
+    async def test_executes_single_tool(self):
+        """_execute_tools calls the executor for each block and returns results."""
+        from sr2.orchestrator import SR2
+
+        async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
+            return ToolResultBlock(tool_use_id=block.id, content="executed")
+
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=stub_executor,
+        )
+
+        block = ToolUseBlock(id="call_1", name="test_tool", input={})
+        results = await sr2._execute_tools([block], origin="")
+
+        assert len(results) == 1
+        assert results[0].tool_use_id == "call_1"
+        assert results[0].content == "executed"
+
+    @pytest.mark.asyncio
+    async def test_executes_multiple_tools_concurrently(self):
+        """_execute_tools runs all tool blocks via asyncio.gather."""
+        from sr2.orchestrator import SR2
+
+        async def tracking_executor(block: ToolUseBlock) -> ToolResultBlock:
+            await asyncio.sleep(0.001)
+            return ToolResultBlock(tool_use_id=block.id, content=f"result_{block.name}")
+
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=tracking_executor,
+        )
+
+        blocks = [
+            ToolUseBlock(id="call_1", name="weather", input={}),
+            ToolUseBlock(id="call_2", name="time", input={}),
+        ]
+        results = await sr2._execute_tools(blocks, origin="")
+
+        assert len(results) == 2
+        assert results[0].tool_use_id == "call_1"
+        assert results[1].tool_use_id == "call_2"
+
+    @pytest.mark.asyncio
+    async def test_wraps_tool_errors_as_error_result(self):
+        """Individual tool errors are wrapped as ToolResultBlock(is_error=True)."""
+        from sr2.orchestrator import SR2
+
+        async def failing_executor(block: ToolUseBlock) -> ToolResultBlock:
+            raise RuntimeError("tool failed")
+
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=failing_executor,
+        )
+
+        block = ToolUseBlock(id="call_1", name="broken_tool", input={})
+        results = await sr2._execute_tools([block], origin="")
+
+        assert len(results) == 1
+        assert results[0].is_error is True
+        assert "tool failed" in results[0].content
+
+    @pytest.mark.asyncio
+    async def test_preserves_input_order(self):
+        """Results are returned in the same order as input blocks."""
+        from sr2.orchestrator import SR2
+
+        async def slow_executor(block: ToolUseBlock) -> ToolResultBlock:
+            delay = 0.01 if block.id == "call_1" else 0.001
+            await asyncio.sleep(delay)
+            return ToolResultBlock(tool_use_id=block.id, content=f"done_{block.id}")
+
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=slow_executor,
+        )
+
+        blocks = [
+            ToolUseBlock(id="call_1", name="slow", input={}),
+            ToolUseBlock(id="call_2", name="fast", input={}),
+        ]
+        results = await sr2._execute_tools(blocks, origin="")
+
+        assert results[0].tool_use_id == "call_1"
+        assert results[1].tool_use_id == "call_2"
+
+    @pytest.mark.asyncio
+    async def test_propagates_type_error_for_sync_executor(self):
+        """If tool_executor returns a non-awaitable, TypeError propagates."""
+        from sr2.orchestrator import SR2
+
+        def sync_executor(block: ToolUseBlock) -> ToolResultBlock:
+            return ToolResultBlock(tool_use_id=block.id, content="sync")
+
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": MockLLM()},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=sync_executor,  # type: ignore[arg-type]
+        )
+
+        block = ToolUseBlock(id="call_1", name="test", input={})
+        with pytest.raises(TypeError, match="must be an async callable"):
+            await sr2._execute_tools([block], origin="")
+
+
+class TestRunToolIteration:
+    """Tests for SR2._run_tool_iteration() — one LLM stream + tool-execution cycle."""
+
+    @pytest.mark.asyncio
+    async def test_returns_text_and_empty_tools_when_no_tool_use(self):
+        """When LLM returns only text, result has empty tool_use_blocks."""
+        from sr2.orchestrator import SR2, ToolIterationResult
+
+        llm = MockLLM(events=[
+            StreamEvent(type="text", text="Final answer."),
+            StreamEvent(type="end"),
+        ])
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        request = CompletionRequest(
+            system=None,
+            messages=[],
+            tools=None,
+        )
+        result = await sr2._run_tool_iteration(request, iteration_seq=0, origin="")
+
+        assert isinstance(result, ToolIterationResult)
+        assert result.text == "Final answer."
+        assert result.tool_use_blocks == []
+        assert result.raw_events
+
+    @pytest.mark.asyncio
+    async def test_returns_tool_blocks_when_llm_emits_tool_use(self):
+        """When LLM returns tool_use, result contains ToolUseBlocks + results."""
+        from sr2.orchestrator import SR2, ToolIterationResult
+
+        async def stub_executor(block: ToolUseBlock) -> ToolResultBlock:
+            return ToolResultBlock(tool_use_id=block.id, content="tool_result")
+
+        llm = MockLLM(events=[
+            StreamEvent(type="text", text="Let me check"),
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ])
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=stub_executor,
+        )
+
+        request = CompletionRequest(
+            system=None,
+            messages=[],
+            tools=None,
+        )
+        result = await sr2._run_tool_iteration(request, iteration_seq=0, origin="")
+
+        assert isinstance(result, ToolIterationResult)
+        assert result.text == "Let me check"
+        assert len(result.tool_use_blocks) == 1
+        assert result.tool_use_blocks[0].id == "tc_1"
+        assert result.tool_use_blocks[0].name == "get_weather"
+        assert len(result.tool_result_blocks) == 1
+        assert result.tool_result_blocks[0].content == "tool_result"
+
+    @pytest.mark.asyncio
+    async def test_raises_tool_loop_limit(self):
+        """Raises ToolLoopLimitError when iteration_seq >= max_tool_iterations."""
+        from sr2.orchestrator import SR2
+        from sr2.config.models import ToolLoopLimitError
+
+        llm = MockLLM(events=[
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ])
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=lambda b: ToolResultBlock(tool_use_id=b.id, content="r"),
+        )
+
+        # max_tool_iterations defaults to 25
+        request = CompletionRequest(
+            system=None,
+            messages=[],
+            tools=None,
+        )
+        with pytest.raises(ToolLoopLimitError, match="Tool loop limit exceeded"):
+            await sr2._run_tool_iteration(request, iteration_seq=25, origin="")
+
+    @pytest.mark.asyncio
+    async def test_raises_circuit_breaker_open(self):
+        """Raises CircuitBreakerOpenError when circuit breaker is open."""
+        from sr2.orchestrator import SR2
+        from sr2.degradation.circuit_breaker import CircuitBreakerOpenError
+
+        llm = MockLLM()
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        # Force circuit breaker open
+        sr2._circuit_breaker = MagicMock()
+        sr2._circuit_breaker.allow_request.return_value = False
+
+        request = CompletionRequest(
+            system=None,
+            messages=[],
+            tools=None,
+        )
+        with pytest.raises(CircuitBreakerOpenError):
+            await sr2._run_tool_iteration(request, iteration_seq=0, origin="")
+
+    @pytest.mark.asyncio
+    async def test_records_circuit_breaker_success(self):
+        """Successful iteration records a success on the circuit breaker."""
+        from sr2.orchestrator import SR2
+
+        llm = MockLLM(events=[
+            StreamEvent(type="text", text="ok"),
+            StreamEvent(type="end"),
+        ])
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        original_record_success = sr2._circuit_breaker.record_success
+        success_calls = []
+
+        def spy_success():
+            success_calls.append(True)
+            return original_record_success()
+
+        sr2._circuit_breaker.record_success = spy_success
+
+        request = CompletionRequest(
+            system=None,
+            messages=[],
+            tools=None,
+        )
+        await sr2._run_tool_iteration(request, iteration_seq=0, origin="")
+
+        assert len(success_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_raises_config_error_without_executor(self):
+        """Raises ConfigError when tool_executor is None but LLM emits tool_use."""
+        from sr2.orchestrator import SR2
+        from sr2.config.models import ConfigError
+
+        llm = MockLLM(events=[
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ])
+        config = make_minimal_config()
+        sr2 = SR2(
+            pipeline_config=config,
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=None,
+        )
+
+        request = CompletionRequest(
+            system=None,
+            messages=[],
+            tools=None,
+        )
+        with pytest.raises(ConfigError, match="tool_executor not configured"):
+            await sr2._run_tool_iteration(request, iteration_seq=0, origin="")

@@ -7,7 +7,9 @@ responses, and emits the assistant_response event on the shared bus.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator, Awaitable, Mapping
+from dataclasses import dataclass, field
 from typing import Any, Callable, TYPE_CHECKING
 
 from ulid import ULID
@@ -38,6 +40,38 @@ from sr2.protocols.llm import (
 
 # FR1: Type alias for the tool executor callable.
 ToolExecutor = Callable[[ToolUseBlock], Awaitable[ToolResultBlock]]
+
+
+@dataclass(frozen=True)
+class ToolIterationResult:
+    """Return value of SR2._run_tool_iteration().
+
+    Captures all outputs from one LLM stream + tool-execution cycle so that
+    the ``turn()`` async generator can decide what to yield without being
+    coupled to the iteration internals.
+
+    When ``tool_use_blocks`` is empty, the iteration is final (no more tools
+    to execute) and ``tool_result_blocks`` will also be empty.
+    """
+
+    text: str
+    """Concatenated text from LLM stream events in this iteration."""
+
+    tool_use_blocks: list[ToolUseBlock] = field(default_factory=list)
+    """Tool-use blocks extracted from the LLM response (empty → final iteration)."""
+
+    tool_result_blocks: list[ToolResultBlock] = field(default_factory=list)
+    """Results from executing the tool-use blocks (empty if final or no executor)."""
+
+    assistant_content: list = field(default_factory=list)
+    """Full assistant content (text + tool_use blocks) for this iteration."""
+
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    """TokenUsage from this iteration's LLM call."""
+
+    raw_events: list[StreamEvent] = field(default_factory=list)
+    """Raw StreamEvents from the LLM for re-yielding to the caller."""
+
 
 # Plugin registries (entry-point based, lazy discovery).
 # object is used as the protocol to skip isinstance class-level validation —
@@ -235,6 +269,186 @@ class SR2:
         self._engine.seed(messages)
 
     # ------------------------------------------------------------------
+    # Tool iteration helpers
+    # ------------------------------------------------------------------
+
+    async def _execute_tools(
+        self,
+        tool_use_blocks: list[ToolUseBlock],
+        origin: str,
+    ) -> list[ToolResultBlock]:
+        """Execute all tool-use blocks concurrently and return results.
+
+        Each block is passed to ``self._tool_executor`` and executed via
+        ``asyncio.gather`` (preserves input order).  Optional semaphore caps
+        concurrency when ``max_parallel_tools`` is set.
+
+        Errors from individual tool calls are wrapped as
+        ``ToolResultBlock(is_error=True)``.  ``CancelledError`` propagates
+        immediately without wrapping.
+
+        Raises:
+            TypeError: If ``tool_executor`` returned a non-awaitable (sync
+                       callable passed by mistake).
+        """
+        # FR4+FR15: execute all tool blocks concurrently via asyncio.gather.
+        # Optional semaphore caps concurrency when max_parallel_tools is set.
+        sem = (
+            asyncio.Semaphore(self._max_parallel_tools)
+            if self._max_parallel_tools is not None
+            else None
+        )
+
+        async def _run_one(block: ToolUseBlock) -> ToolResultBlock:
+            coro = self._tool_executor(block)  # type: ignore[misc]
+            # If the caller passed a sync callable by mistake, the returned
+            # value is not awaitable — that is a configuration error, not a
+            # tool error, so we propagate TypeError immediately (not wrapped).
+            if not inspect.isawaitable(coro):
+                raise TypeError(
+                    f"tool_executor must be an async callable (coroutine function); "
+                    f"got non-awaitable result {type(coro)!r}"
+                )
+            try:
+                if sem is not None:
+                    async with sem:
+                        return await coro
+                else:
+                    return await coro
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return ToolResultBlock(
+                    tool_use_id=block.id,
+                    content=str(exc),
+                    is_error=True,
+                )
+
+        # asyncio.gather preserves input order: results[i] maps to tool_use_blocks[i].
+        tool_result_blocks: list[ToolResultBlock] = list(
+            await asyncio.gather(*(_run_one(b) for b in tool_use_blocks))
+        )
+        for result_block in tool_result_blocks:
+            self._stamp_block(result_block, origin)
+        return tool_result_blocks
+
+    async def _run_tool_iteration(
+        self,
+        request: CompletionRequest,
+        iteration_seq: int,
+        origin: str,
+    ) -> ToolIterationResult:
+        """Run one LLM stream + tool-execution cycle.
+
+        Calls the LLM via ``stream()``, classifies events into text /
+        tool_use / usage, and if tool-use events are present, builds
+        ``ToolUseBlock`` instances, executes them via ``_execute_tools()``,
+        and returns the full result.
+
+        Returns a ``ToolIterationResult`` with empty ``tool_use_blocks``
+        when the LLM produced no tool calls (i.e. this is the final
+        iteration).
+
+        Raises:
+            CircuitBreakerOpenError: If the circuit breaker is open.
+            ToolLoopLimitError: If iteration limit exceeded before execution.
+            ConfigError: If tool calls present but ``tool_executor`` is None.
+        """
+        # Accumulate stream events for this iteration.
+        iter_text: list[str] = []
+        iter_tool_use: list[StreamEvent] = []
+        iter_usage: TokenUsage | None = None
+
+        # Circuit breaker check — reject immediately if open.
+        if not self._circuit_breaker.allow_request():
+            raise CircuitBreakerOpenError("LLM circuit breaker is open")
+
+        # Collect all stream events, applying optional per-call timeout.
+        async def _collect_stream() -> list[StreamEvent]:
+            collected: list[StreamEvent] = []
+            async for event in self._llm.stream(request):
+                collected.append(event)
+            return collected
+
+        try:
+            if self._llm_timeout_seconds is not None:
+                raw_events = await asyncio.wait_for(
+                    _collect_stream(), timeout=self._llm_timeout_seconds
+                )
+            else:
+                raw_events = await _collect_stream()
+            self._circuit_breaker.record_success()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._circuit_breaker.record_failure()
+            raise
+
+        # Classify events from this LLM call.
+        for event in raw_events:
+            if event.type == "text" and event.text:
+                iter_text.append(event.text)
+            elif event.type == "tool_use":
+                iter_tool_use.append(event)
+            elif event.type == "usage" and event.usage is not None:
+                iter_usage = event.usage
+
+        full_iter_text = "".join(iter_text)
+        usage = iter_usage if iter_usage is not None else TokenUsage()
+
+        # No tool calls — return early with empty tool lists.
+        if not iter_tool_use:
+            return ToolIterationResult(
+                text=full_iter_text,
+                usage=usage,
+                raw_events=raw_events,
+            )
+
+        # There are tool_use blocks — check the iteration limit before executing.
+        if iteration_seq >= self._max_tool_iterations:
+            raise ToolLoopLimitError(
+                f"Tool loop limit exceeded: {iteration_seq} iterations reached "
+                f"(max_tool_iterations={self._max_tool_iterations}). "
+                f"The LLM kept requesting tools without converging."
+            )
+
+        # Build assistant content: text + tool-use blocks.
+        assistant_content: list = []
+        if full_iter_text:
+            text_block = TextBlock(text=full_iter_text)
+            self._stamp_block(text_block, origin)
+            assistant_content.append(text_block)
+
+        if self._tool_executor is None:
+            raise ConfigError(
+                "tool_executor not configured — set tool_executor= on SR2 to handle tool calls"
+            )
+
+        # Build all ToolUseBlocks in order (preserves mapping for result ordering).
+        tool_use_blocks: list[ToolUseBlock] = []
+        for tu_event in iter_tool_use:
+            tool_block = ToolUseBlock(
+                id=tu_event.tool_use_id,
+                name=tu_event.tool_name,
+                input=tu_event.tool_input,
+            )
+            self._stamp_block(tool_block, origin)
+            assistant_content.append(tool_block)
+            tool_use_blocks.append(tool_block)
+
+        # Execute tools concurrently.
+        tool_result_blocks = await self._execute_tools(tool_use_blocks, origin)
+
+        return ToolIterationResult(
+            text=full_iter_text,
+            tool_use_blocks=tool_use_blocks,
+            tool_result_blocks=tool_result_blocks,
+            assistant_content=assistant_content,
+            usage=usage,
+            raw_events=raw_events,
+        )
+
+    # ------------------------------------------------------------------
     # Core turn loop
     # ------------------------------------------------------------------
 
@@ -299,69 +513,30 @@ class SR2:
         # Multi-iteration tool loop
         # ----------------------------------------------------------------
         iteration_seq = 0
-        final_response: CompletionResponse | None = None
 
         # Build the mutable request we'll feed to the LLM each iteration.
         # Between iterations we'll add assistant + tool_result messages directly.
         current_request = compiled
 
         while True:
-            # Accumulate stream events for this iteration.
-            iter_text: list[str] = []
-            iter_tool_use: list[StreamEvent] = []
-            iter_usage: TokenUsage | None = None
+            iteration = await self._run_tool_iteration(
+                current_request, iteration_seq, origin
+            )
 
-            # Circuit breaker check — reject immediately if open.
-            if not self._circuit_breaker.allow_request():
-                raise CircuitBreakerOpenError("LLM circuit breaker is open")
-
-            # Collect all stream events, applying optional per-call timeout.
-            async def _collect_stream() -> list[StreamEvent]:
-                collected: list[StreamEvent] = []
-                async for event in self._llm.stream(current_request):
-                    collected.append(event)
-                return collected
-
-            try:
-                if self._llm_timeout_seconds is not None:
-                    raw_events = await asyncio.wait_for(
-                        _collect_stream(), timeout=self._llm_timeout_seconds
-                    )
-                else:
-                    raw_events = await _collect_stream()
-                self._circuit_breaker.record_success()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                self._circuit_breaker.record_failure()
-                raise
-
-            # Classify events from this LLM call.
-            for event in raw_events:
-                if event.type == "text" and event.text:
-                    iter_text.append(event.text)
-                elif event.type == "tool_use":
-                    iter_tool_use.append(event)
-                elif event.type == "usage" and event.usage is not None:
-                    iter_usage = event.usage
-
-            full_iter_text = "".join(iter_text)
-            usage = iter_usage if iter_usage is not None else TokenUsage()
-
-            if not iter_tool_use:
-                # No tool calls — this is the final LLM response. Build the
-                # CompletionResponse.
+            if not iteration.tool_use_blocks:
+                # ---------------------------------------------------------------
+                # Final iteration — no more tool calls
+                # ---------------------------------------------------------------
                 content: list = []
-                if full_iter_text:
-                    block = TextBlock(text=full_iter_text)
+                if iteration.text:
+                    block = TextBlock(text=iteration.text)
                     self._stamp_block(block, origin)
                     content.append(block)
-                stop_reason = "end_turn"
                 final_response = CompletionResponse(
                     id="turn-response",
                     content=content,
-                    stop_reason=stop_reason,
-                    usage=usage,
+                    stop_reason="end_turn",
+                    usage=iteration.usage,
                 )
 
                 # sr2-80: Finalize BEFORE yielding any events so an early
@@ -370,7 +545,7 @@ class SR2:
 
                 # Stream text/usage events to the caller (they were already
                 # collected; yielding now preserves streaming semantics).
-                for event in raw_events:
+                for event in iteration.raw_events:
                     if event.type == "text" and event.text:
                         yield event
                     elif event.type == "usage" and event.usage is not None:
@@ -383,84 +558,12 @@ class SR2:
                 yield StreamEvent(type="end")
                 return
 
-            # ----------------------------------------------------------------
-            # Tool-use iteration — execute tools and loop back
-            # ----------------------------------------------------------------
-
-            # There are tool_use blocks — check the iteration limit before executing.
-            if iteration_seq >= self._max_tool_iterations:
-                raise ToolLoopLimitError(
-                    f"Tool loop limit exceeded: {iteration_seq} iterations reached "
-                    f"(max_tool_iterations={self._max_tool_iterations}). "
-                    f"The LLM kept requesting tools without converging."
-                )
-
-            # Execute tools: wrap errors as ToolResultBlock(is_error=True).
-            # CancelledError is never wrapped — it propagates immediately.
-            assistant_content: list = []
-            if full_iter_text:
-                text_block = TextBlock(text=full_iter_text)
-                self._stamp_block(text_block, origin)
-                assistant_content.append(text_block)
-
-            if self._tool_executor is None:
-                raise ConfigError(
-                    "tool_executor not configured — set tool_executor= on SR2 to handle tool calls"
-                )
-
-            # Build all ToolUseBlocks in order (preserves mapping for result ordering).
-            tool_use_blocks: list[ToolUseBlock] = []
-            for tu_event in iter_tool_use:
-                tool_block = ToolUseBlock(
-                    id=tu_event.tool_use_id,
-                    name=tu_event.tool_name,
-                    input=tu_event.tool_input,
-                )
-                self._stamp_block(tool_block, origin)
-                assistant_content.append(tool_block)
-                tool_use_blocks.append(tool_block)
-
-            # FR4+FR15: execute all tool blocks concurrently via asyncio.gather.
-            # Optional semaphore caps concurrency when max_parallel_tools is set.
-            sem = (
-                asyncio.Semaphore(self._max_parallel_tools)
-                if self._max_parallel_tools is not None
-                else None
-            )
-
-            import inspect as _inspect
-
-            async def _run_one(block: ToolUseBlock) -> ToolResultBlock:
-                coro = self._tool_executor(block)  # type: ignore[misc]
-                # If the caller passed a sync callable by mistake, the returned
-                # value is not awaitable — that is a configuration error, not a
-                # tool error, so we propagate TypeError immediately (not wrapped).
-                if not _inspect.isawaitable(coro):
-                    raise TypeError(
-                        f"tool_executor must be an async callable (coroutine function); "
-                        f"got non-awaitable result {type(coro)!r}"
-                    )
-                try:
-                    if sem is not None:
-                        async with sem:
-                            return await coro
-                    else:
-                        return await coro
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    return ToolResultBlock(
-                        tool_use_id=block.id,
-                        content=str(exc),
-                        is_error=True,
-                    )
-
-            # asyncio.gather preserves input order: results[i] maps to tool_use_blocks[i].
-            tool_result_blocks: list[ToolResultBlock] = list(
-                await asyncio.gather(*(_run_one(b) for b in tool_use_blocks))
-            )
-            for result_block in tool_result_blocks:
-                self._stamp_block(result_block, origin)
+            # ---------------------------------------------------------------
+            # Tool-use iteration — queue bus events, yield, build next request
+            # ---------------------------------------------------------------
+            tool_use_blocks = iteration.tool_use_blocks
+            tool_result_blocks = iteration.tool_result_blocks
+            assistant_content = iteration.assistant_content
 
             # FR9: Queue tool_use_emitted on the engine bus (internal subscribers).
             self._engine.bus.queue(
@@ -490,7 +593,7 @@ class SR2:
                 id="iter-response",
                 content=list(assistant_content),
                 stop_reason="tool_use",
-                usage=usage,
+                usage=iteration.usage,
             )
             self._engine.bus.queue(
                 Event(
@@ -503,7 +606,7 @@ class SR2:
             )
 
             # Stream text events from this iteration to the caller.
-            for event in raw_events:
+            for event in iteration.raw_events:
                 if event.type == "text" and event.text:
                     yield event
                 elif event.type == "usage" and event.usage is not None:
@@ -517,9 +620,8 @@ class SR2:
 
             # Append assistant message (with tool_use blocks) and tool_result
             # user message to the conversation for the next LLM call.
-            from sr2.models import Message as _Message
-            assistant_msg = _Message(role="assistant", content=assistant_content)
-            tool_result_msg = _Message(
+            assistant_msg = Message(role="assistant", content=assistant_content)
+            tool_result_msg = Message(
                 role="user",
                 content=list(tool_result_blocks),  # type: ignore[arg-type]
             )
