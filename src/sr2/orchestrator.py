@@ -104,6 +104,8 @@ def _build_layer(
         token_counter=token_counter,
         event_bus=event_bus,
         provenance_store=provenance_store,
+        degradation_category=layer_config.degradation_category,
+        priority=layer_config.priority,
     )
 
 
@@ -170,6 +172,14 @@ class SR2:
             _build_layer(lc, token_counter, deps, bus=shared_bus, provenance_store=resolved_provenance_store)
             for lc in pipeline_config.layers
         ]
+
+        # FR5: Build the degradation ladder from config (or None if absent)
+        ladder = None
+        if pipeline_config.degradation is not None:
+            from sr2.degradation.ladder import DegradationLadder
+
+            ladder = DegradationLadder.from_config(pipeline_config.degradation)
+
         self._engine = PipelineEngine(
             layers=layers,
             token_counter=token_counter,
@@ -177,6 +187,7 @@ class SR2:
             token_budget=pipeline_config.token_budget,
             tracer=tracer,
             bus=shared_bus,
+            ladder=ladder,
         )
 
     # ------------------------------------------------------------------

@@ -29,6 +29,7 @@ from sr2.pipeline.provenance import InMemoryProvenanceStore, ProvenanceStore
 from sr2.protocols.llm import CompletionRequest
 
 if TYPE_CHECKING:
+    from sr2.degradation.ladder import DegradationLadder
     from sr2.pipeline.tracing import Tracer
 
 
@@ -52,6 +53,7 @@ class PipelineEngine:
         token_budget: int | None = None,
         tracer: "Tracer | None" = None,
         bus: EventBus | None = None,
+        ladder: "DegradationLadder | None" = None,
     ) -> None:
         self.token_counter = token_counter
         self._max_cycles = max_cycles
@@ -64,6 +66,8 @@ class PipelineEngine:
         self._provenance_store: ProvenanceStore = (
             provenance_store if provenance_store is not None else InMemoryProvenanceStore()
         )
+        # FR5: Degradation ladder — None means degradation is fully disabled
+        self._ladder: "DegradationLadder | None" = ladder
 
         self._wire_layers()
 
@@ -95,6 +99,10 @@ class PipelineEngine:
         Args:
             turn_seq: The sequence number for this turn (assigned directly).
         """
+        # FR7: Reset the ladder to FULL at the start of every turn
+        if self._ladder is not None:
+            self._ladder.reset()
+
         self._turn_seq = turn_seq
         self._firing_seq = -1
         self._bus.reset()
@@ -135,6 +143,8 @@ class PipelineEngine:
     async def end_turn(self) -> "PipelineResult":
         """Finalise the turn: emit turn_end, drain, compile, and return result.
 
+        Uses the degradation-aware compile loop (D5) when a ladder is set.
+
         Returns:
             PipelineResult with compiled CompletionRequest and metrics.
         """
@@ -147,12 +157,7 @@ class PipelineEngine:
         )
         await self._run_loop()
 
-        request = self._compile_request()
-        if self._tracer is not None:
-            self._tracer.on_compile(request)
-        metrics = self._build_metrics()
-
-        return PipelineResult(request=request, metrics=metrics)
+        return await self._compile_with_degradation()
 
     async def _run_loop(self) -> None:
         """Drain the event bus and process layers until quiescent."""
@@ -172,13 +177,27 @@ class PipelineEngine:
         return any_changed
 
     def _compile_request(self) -> CompletionRequest:
-        """Compile all layers into a CompletionRequest."""
+        """Compile all layers into a CompletionRequest.
+
+        FR5: When a ladder is set, layers whose degradation_category is not in
+        the ladder's active_categories() are excluded from compilation.
+        Layers with no category (None) are always kept (structural).
+        """
         system_blocks: List[TextBlock] = []
         messages: List[Message] = []
         tools: List[ToolDefinition] = []
         compilation_targets = get_compilation_targets()
 
+        active_cats: set[str] | None = (
+            self._ladder.active_categories() if self._ladder else None
+        )
+
         for layer in self._layers:
+            # FR5: Skip layers whose category is not active
+            if active_cats is not None and layer.degradation_category is not None:
+                if layer.degradation_category not in active_cats:
+                    continue
+
             compiled = layer.compile()
             compilation_targets[layer.target].collect(
                 compiled, system_blocks, messages, tools
@@ -189,6 +208,67 @@ class PipelineEngine:
             messages=messages,
             tools=tools or None,
         )
+
+    def _count_request_tokens(self, request: CompletionRequest) -> int:
+        """Count total tokens in a compiled CompletionRequest."""
+        total = 0
+        if request.system:
+            total += self.token_counter.count(request.system)
+        if request.messages:
+            for msg in request.messages:
+                total += self.token_counter.count(msg.content)
+        return total
+
+    async def _compile_with_degradation(self) -> "PipelineResult":
+        """Compile with the D5 step-down/recompile loop.
+
+        D5: compile → if over budget → step_down → recompile → until fits or
+        the bottom level is reached.  Then build metrics and return result.
+
+        When no ladder is set, delegates to the simple path
+        (_compile_request + _build_metrics).
+        """
+        if self._ladder is None:
+            request = self._compile_request()
+            if self._tracer is not None:
+                self._tracer.on_compile(request)
+            metrics = self._build_metrics()
+            return PipelineResult(request=request, metrics=metrics)
+
+        # Ladder is set — run the step-down/recompile loop
+        steps_taken = 0
+        request = self._compile_request()
+        total_tokens = self._count_request_tokens(request)
+
+        while (
+            self._token_budget is not None
+            and total_tokens > self._token_budget
+            and self._ladder.current_level < len(self._ladder._levels) - 1
+        ):
+            self._ladder.step_down()
+            steps_taken += 1
+            request = self._compile_request()
+            total_tokens = self._count_request_tokens(request)
+
+        if self._tracer is not None:
+            self._tracer.on_compile(request)
+
+        metrics = self._build_metrics()
+
+        # Add degradation warning if step-down occurred
+        if steps_taken > 0:
+            level_idx = self._ladder.current_level
+            level_name = (
+                self._ladder._levels[level_idx][0]
+                if self._ladder._legacy
+                else f"level-{level_idx}"
+            )
+            metrics.warnings.append(
+                f"Degradation: stepped down {steps_taken} level(s) "
+                f"due to budget overflow (total={total_tokens}, budget={self._token_budget})"
+            )
+
+        return PipelineResult(request=request, metrics=metrics)
 
     def _build_metrics(self) -> PipelineMetrics:
         """Build per-layer and aggregate metrics."""
