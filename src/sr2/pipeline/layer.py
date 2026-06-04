@@ -485,3 +485,13 @@ class Layer:
     def blocks(self) -> list[ContentBlock | Message]:
         """Expose accumulated content blocks for engine to read."""
         return list(self._content)
+
+    @property
+    def token_count(self) -> int:
+        """Current token count of this layer's content.
+
+        Used by the priority shedding subsystem (FR6, sr2-86) to determine
+        which layers to retain under budget pressure. Combined with
+        ``priority`` to satisfy the ``HasPriorityAndTokens`` protocol.
+        """
+        return self._token_counter.count(self._content)
