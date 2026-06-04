@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from sr2.models import Message, TextBlock, ToolDefinition
+    from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
     from sr2.pipeline.models import CompilationTarget
 
 
@@ -43,19 +43,22 @@ class PrefixStrategy:
 
 @runtime_checkable
 class TargetCompiler(Protocol):
-    """Appends a compiled layer's output into the appropriate accumulator lists.
+    """Compiles raw layer content into the appropriate accumulator lists.
 
     Each CompilationTarget maps to one TargetCompiler. The compiler receives
-    the pre-compiled content and the three accumulator lists; it mutates the
-    appropriate list in place.
+    the raw content blocks and tool definitions; it performs type narrowing
+    (e.g. filtering to TextBlock for SYSTEM, grouping into Message for
+    MESSAGES) and mutates the appropriate accumulator list in place.
 
-    Implementing a new target: create a class with this shape and add it to
-    ``_COMPILATION_TARGETS`` — no other code needs to change.
+    Layer.compile() dispatches through this registry — there is no separate
+    _COMPILE_DISPATCH table. Implementing a new target: create a class with
+    this shape and add it to ``_COMPILATION_TARGETS``.
     """
 
     def collect(
         self,
-        compiled: list,
+        content: list[ContentBlock | Message],
+        tool_definitions: list[ToolDefinition],
         system_blocks: list[TextBlock],
         messages: list[Message],
         tools: list[ToolDefinition],
@@ -63,36 +66,73 @@ class TargetCompiler(Protocol):
 
 
 class _SystemCollector:
+    """Compile SYSTEM target: filter content to TextBlocks."""
+
     def collect(
         self,
-        compiled: list,
+        content: list[ContentBlock | Message],
+        tool_definitions: list[ToolDefinition],
         system_blocks: list[TextBlock],
         messages: list[Message],
         tools: list[ToolDefinition],
     ) -> None:
-        system_blocks.extend(compiled)
+        from sr2.models import TextBlock
+
+        out: list[TextBlock] = []
+        for block in content:
+            if isinstance(block, TextBlock):
+                out.append(block)
+        system_blocks.extend(out)
 
 
 class _MessagesCollector:
+    """Compile MESSAGES target: group raw ContentBlocks into Messages."""
+
     def collect(
         self,
-        compiled: list,
+        content: list[ContentBlock | Message],
+        tool_definitions: list[ToolDefinition],
         system_blocks: list[TextBlock],
         messages: list[Message],
         tools: list[ToolDefinition],
     ) -> None:
-        messages.extend(compiled)
+        from sr2.models import ContentBlock, Message
+
+        if not content:
+            return
+
+        msgs: list[Message] = []
+        raw_blocks: list[ContentBlock] = []
+
+        for item in content:
+            if isinstance(item, Message):
+                # Flush any accumulated raw blocks first
+                if raw_blocks:
+                    msgs.append(Message(role="user", content=raw_blocks))
+                    raw_blocks = []
+                msgs.append(item)
+            else:
+                raw_blocks.append(item)
+
+        # Flush trailing raw blocks
+        if raw_blocks:
+            msgs.append(Message(role="user", content=raw_blocks))
+
+        messages.extend(msgs)
 
 
 class _ToolsCollector:
+    """Compile TOOLS target: return tool definitions as-is."""
+
     def collect(
         self,
-        compiled: list,
+        content: list[ContentBlock | Message],
+        tool_definitions: list[ToolDefinition],
         system_blocks: list[TextBlock],
         messages: list[Message],
         tools: list[ToolDefinition],
     ) -> None:
-        tools.extend(compiled)
+        tools.extend(tool_definitions)
 
 
 def _build_compilation_targets() -> dict[CompilationTarget, TargetCompiler]:

@@ -7,10 +7,10 @@ budgets, and compiles content for its compilation target.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
-from sr2.pipeline.compilation import PositionStrategy
+from sr2.pipeline.compilation import PositionStrategy, get_compilation_targets
 from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import CompilationTarget
@@ -378,6 +378,10 @@ class Layer:
         if not content:
             self._force_truncated = False
 
+    def get_tool_definitions(self) -> list[ToolDefinition]:
+        """Return the current tool definitions accumulated in this layer."""
+        return list(self._tool_definitions)
+
     def reset_tools(self) -> None:
         self._tool_definitions = []
 
@@ -430,45 +434,35 @@ class Layer:
     # -- compile --------------------------------------------------------------
 
     def compile(self) -> list[TextBlock] | list[Message] | list[ToolDefinition]:
-        _COMPILE_DISPATCH: dict[CompilationTarget, Callable[[], list]] = {
-            CompilationTarget.SYSTEM: self._compile_system,
-            CompilationTarget.MESSAGES: self._compile_messages,
-            CompilationTarget.TOOLS: self._compile_tools,
-        }
-        return _COMPILE_DISPATCH[self.target]()
+        """Compile this layer's content using the TargetCompiler registry.
 
-    def _compile_system(self) -> list[TextBlock]:
-        out: list[TextBlock] = []
-        for block in self._content:
-            if isinstance(block, TextBlock):
-                out.append(block)
-        return out
+        Delegates to the registry so Layer.compile() and Engine._compile_request()
+        share the same dispatch logic. The registry returns typed output for the
+        layer's compilation target.
+        """
+        compilation_targets = get_compilation_targets()
+        compiler = compilation_targets[self.target]
 
-    def _compile_messages(self) -> list[Message]:
-        if not self._content:
-            return []
+        # Use a dedicated accumulator for the target type; pass throwaway lists
+        # for the other two accumulators (compiler only mutates the one matching
+        # its CompilationTarget).
+        system_out: list[TextBlock] = []
+        messages_out: list[Message] = []
+        tools_out: list[ToolDefinition] = []
 
-        messages: list[Message] = []
-        raw_blocks: list[ContentBlock] = []
+        compiler.collect(
+            self._content,
+            self._tool_definitions,
+            system_out,
+            messages_out,
+            tools_out,
+        )
 
-        for item in self._content:
-            if isinstance(item, Message):
-                # Flush any accumulated raw blocks first
-                if raw_blocks:
-                    messages.append(Message(role="user", content=raw_blocks))
-                    raw_blocks = []
-                messages.append(item)
-            else:
-                raw_blocks.append(item)
-
-        # Flush trailing raw blocks
-        if raw_blocks:
-            messages.append(Message(role="user", content=raw_blocks))
-
-        return messages
-
-    def _compile_tools(self) -> list[ToolDefinition]:
-        return list(self._tool_definitions)
+        if self.target == CompilationTarget.SYSTEM:
+            return system_out
+        if self.target == CompilationTarget.MESSAGES:
+            return messages_out
+        return tools_out
 
     @property
     def blocks(self) -> list[ContentBlock | Message]:

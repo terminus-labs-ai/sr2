@@ -198,9 +198,12 @@ class PipelineEngine:
                 if layer.degradation_category not in active_cats:
                     continue
 
-            compiled = layer.compile()
             compilation_targets[layer.target].collect(
-                compiled, system_blocks, messages, tools
+                layer.get_content(),
+                layer.get_tool_definitions(),
+                system_blocks,
+                messages,
+                tools,
             )
 
         return CompletionRequest(
