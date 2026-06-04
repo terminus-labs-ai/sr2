@@ -2,6 +2,7 @@
 
 Public API:
   ladder          — DegradationLadder, DegradationLevel
+  controller      — DegradationController (FR4: trigger evaluation)
   shedding        — shed()
   circuit_breaker — CircuitBreaker, CircuitState
   fallback        — FallbackProvider
@@ -9,6 +10,7 @@ Public API:
 """
 
 from sr2.degradation.circuit_breaker import CircuitBreaker, CircuitState
+from sr2.degradation.controller import DegradationController
 from sr2.degradation.fallback import FallbackProvider
 from sr2.degradation.ladder import DegradationLadder, DegradationLevel
 from sr2.degradation.registry import DegradationPolicy, DegradationPolicyRegistry, DegradationPolicyStore
@@ -17,6 +19,7 @@ from sr2.degradation.shedding import shed
 __all__ = [
     "CircuitBreaker",
     "CircuitState",
+    "DegradationController",
     "FallbackProvider",
     "DegradationLadder",
     "DegradationLevel",
