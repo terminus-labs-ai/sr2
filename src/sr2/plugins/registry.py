@@ -68,6 +68,17 @@ class PluginRegistry(Generic[T]):
         self._ensure_discovered()
         return list(self._classes.keys())
 
+    def reset_discovery(self) -> None:
+        """Reset the discovery state so the next call to ``get()`` or ``names()``
+        re-scans entry points.
+
+        Primarily intended as a test hook to isolate tests that rely on
+        entry-point discovery from one another or from the live environment.
+        """
+        self._discovered = False
+        self._classes = {}
+        self._collisions = {}
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

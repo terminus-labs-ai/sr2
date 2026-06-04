@@ -349,6 +349,52 @@ class TestEntryPointsCallContract:
 # Optional protocol
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Reset discovery (test hook)
+# ---------------------------------------------------------------------------
+
+class TestResetDiscovery:
+    def test_reset_clears_cached_classes(self):
+        """reset_discovery() clears _classes and _collisions, resets _discovered."""
+        ep = _make_entry_point("my_plugin", ConformingClass)
+        with patch("sr2.plugins.registry.entry_points") as mock_ep:
+            mock_ep.return_value = [ep]
+            registry = PluginRegistry("sr2.resolvers", FakeProtocol)
+            registry.get("my_plugin")
+            assert registry._discovered is True
+            assert "my_plugin" in registry._classes
+
+            registry.reset_discovery()
+            assert registry._discovered is False
+            assert registry._classes == {}
+            assert registry._collisions == {}
+
+    def test_reset_triggers_rediscussion_on_next_get(self):
+        """After reset, the next get() re-discovers entry points."""
+        ep = _make_entry_point("my_plugin", ConformingClass)
+        with patch("sr2.plugins.registry.entry_points") as mock_ep:
+            mock_ep.return_value = [ep]
+            registry = PluginRegistry("sr2.resolvers", FakeProtocol)
+            registry.get("my_plugin")
+            call_count_before = mock_ep.call_count
+            assert call_count_before == 1
+
+            registry.reset_discovery()
+            registry.get("my_plugin")
+            # Should have called entry_points again
+            assert mock_ep.call_count == call_count_before + 1
+
+    def test_reset_is_idempotent(self):
+        """Calling reset_discovery multiple times does not error."""
+        registry = PluginRegistry("sr2.resolvers", FakeProtocol)
+        registry.reset_discovery()
+        registry.reset_discovery()  # No error
+
+
+# ---------------------------------------------------------------------------
+# Optional protocol
+# ---------------------------------------------------------------------------
+
 class TestOptionalProtocol:
     def test_no_protocol_arg_constructs_successfully(self):
         """PluginRegistry("g") — omitting protocol entirely — must not raise."""

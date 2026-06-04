@@ -60,6 +60,20 @@ def _build_tool_provider(config: ToolProviderConfig, deps: Dependencies) -> Any:
     return _TOOL_PROVIDERS.get(config.type).build(config, deps)
 
 
+def reset_discovery() -> None:
+    """Reset all plugin registry discovery state.
+
+    Clears the cached entry-point results so the next call to ``get()`` or
+    ``names()`` on any registry re-scans entry points.
+
+    Primarily intended as a test hook to isolate tests that rely on
+    entry-point discovery from one another or from the live environment.
+    """
+    _RESOLVERS.reset_discovery()
+    _TRANSFORMERS.reset_discovery()
+    _TOOL_PROVIDERS.reset_discovery()
+
+
 def _build_layer(
     layer_config: LayerConfig,
     token_counter: TokenCounter,
