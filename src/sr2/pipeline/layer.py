@@ -15,7 +15,7 @@ from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import CompilationTarget
 from sr2.pipeline.models import ResolvedContent, TransformationResult
-from sr2.pipeline.protocols import Resolver, TokenCounter, ToolProvider, Transformer
+from sr2.pipeline.protocols import Resolver, Seedable, TokenCounter, ToolProvider, Transformer
 from sr2.pipeline.provenance import Entry, InMemoryProvenanceStore, ProvenanceStore
 
 from sr2.pipeline.tracing import FiringRecord
@@ -131,15 +131,13 @@ class Layer:
     # -- session seeding ------------------------------------------------------
 
     def seed(self, messages: list[Message]) -> None:
-        """Seed conversation history on any SessionResolver in this layer.
+        """Seed conversation history on any Seedable component in this layer.
 
         Calls seed() on each resolver that exposes the method. Resolvers that
         don't implement seed() (i.e. non-session resolvers) are silently skipped.
         """
-        from sr2.pipeline.resolvers.session import SessionResolver
-
         for resolver in self.resolvers:
-            if isinstance(resolver, SessionResolver):
+            if isinstance(resolver, Seedable):
                 resolver.seed(messages)
 
     # -- subscriptions --------------------------------------------------------

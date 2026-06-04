@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, Self, runtime_checkable
 
 from sr2.config.models import ResolverConfig, TransformerConfig
-from sr2.models import ContentBlock, ToolDefinition
+from sr2.models import ContentBlock, Message, ToolDefinition
 from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventSubscription
 from sr2.pipeline.models import ResolvedContent, TransformationResult
@@ -75,6 +75,17 @@ class ToolSource(Protocol):
     """
 
     def to_sr2_definitions(self) -> list[ToolDefinition]: ...
+
+
+@runtime_checkable
+class Seedable(Protocol):
+    """Resolvers (or other components) that can be seeded with conversation history.
+
+    Used by Layer.seed() to call seed() on any component that exposes it,
+    without hardcoding a dependency on SessionResolver.
+    """
+
+    def seed(self, messages: list[Message]) -> None: ...
 
 
 @runtime_checkable
