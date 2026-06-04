@@ -7,7 +7,8 @@ budgets, and compiles content for its compilation target.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable
 
 from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
 from sr2.pipeline.compilation import PositionStrategy, get_compilation_targets
@@ -24,8 +25,75 @@ if TYPE_CHECKING:
     from sr2.pipeline.tracing import Tracer
 
 
+# ---------------------------------------------------------------------------
+# Component dispatch strategy (sr2-75: DRY + strategy pattern)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _ComponentStrategy:
+    """Strategy for a single component kind (resolver / transformer / tool_provider).
+
+    Replaces the kind-string if/elif branching in _fire_component and
+    _snapshot_after with a data-driven dispatch table. Each strategy defines:
+
+    - invoke: async callable(comp, events, layer) -> result
+    - snapshot: callable(layer) -> (content_snapshot, tokens)
+    - apply: callable(result, layer) — side effects (add_content, set_content, etc.)
+    """
+    invoke: Callable[..., Any]
+    snapshot: Callable[..., tuple[list, int]]
+    apply: Callable[..., None]
+
+
+def _snapshot_content(layer: "Layer") -> tuple[list, int]:
+    content = list(layer._content)
+    tokens = layer._token_counter.count(content)
+    return content, tokens
+
+
+def _snapshot_tools(layer: "Layer") -> tuple[list, int]:
+    return [td.name for td in layer._tool_definitions], 0
+
+
+def _apply_resolver(result: Any, layer: "Layer") -> None:
+    layer.add_content(result)
+
+
+def _apply_transformer(result: Any, layer: "Layer") -> None:
+    if result.content is not None:
+        layer.set_content(result.content)
+
+
+def _apply_tool_provider(result: Any, layer: "Layer") -> None:
+    layer.add_tool_definitions(result)
+
+
+# Strategy lookup keyed by kind string.
+# Keeping the string key preserves backward compatibility with existing
+# callers that pass kind="resolver" etc. to _fire_component().
+_COMPONENT_DISPATCH: dict[str, _ComponentStrategy] = {
+    "resolver": _ComponentStrategy(
+        invoke=lambda comp, events, layer: comp.resolve(events),
+        snapshot=_snapshot_content,
+        apply=_apply_resolver,
+    ),
+    "transformer": _ComponentStrategy(
+        invoke=lambda comp, events, layer: comp.transform(layer.get_content(), events),
+        snapshot=_snapshot_content,
+        apply=_apply_transformer,
+    ),
+    "tool_provider": _ComponentStrategy(
+        invoke=lambda comp, events, layer: comp.provide(events),
+        snapshot=_snapshot_tools,
+        apply=_apply_tool_provider,
+    ),
+}
+
+
 class Layer:
     """A single pipeline layer that accumulates, budgets, and compiles content."""
+
+    _COMPONENT_DISPATCH: dict[str, _ComponentStrategy] = _COMPONENT_DISPATCH
 
     def __init__(
         self,
@@ -159,6 +227,32 @@ class Layer:
                 return False
         return True
 
+    # -- eligibility filter ---------------------------------------------------
+
+    def _eligible(self, components: list, events: list[Event]) -> Any:
+        """Generator yielding components that are eligible to fire.
+
+        A component is eligible when:
+        - execution_count < max_executions (not exhausted)
+        - at least one subscription matches at least one event
+
+        This replaces the repeated guard logic that was duplicated in
+        each of the three process_pending loops (resolvers, transformers,
+        tool_providers).
+
+        Yields components in the same order they appear in the input list.
+        """
+        for comp in components:
+            if comp.execution_count >= comp.max_executions:
+                continue
+            if not any(
+                s.matches(e)
+                for s in comp.subscriptions
+                for e in events
+            ):
+                continue
+            yield comp
+
     # -- event handling (sync callback) ---------------------------------------
 
     def handle_event(self, event: Event) -> None:
@@ -172,10 +266,12 @@ class Layer:
     def _snapshot_after(
         self, kind: str, tokens_before: int
     ) -> tuple[list, int, int]:
-        if kind == "tool_provider":
-            return [td.name for td in self._tool_definitions], 0, 0
-        content_after = list(self._content)
-        tokens_after = self._token_counter.count(content_after)
+        """Take the post-firing snapshot using the strategy table.
+
+        Delegates to the strategy's snapshot callable, then computes the
+        token delta from the tokens_before value.
+        """
+        content_after, tokens_after = self._COMPONENT_DISPATCH[kind].snapshot(self)
         return content_after, tokens_after, tokens_after - tokens_before
 
     def _build_record(
@@ -220,44 +316,33 @@ class Layer:
     ) -> object:
         """Shared try/except/FiringRecord logic for resolvers, transformers, and tool providers.
 
-        Dispatches to the correct component method based on *kind*, snapshots
-        content before/after when a tracer is attached, emits a FiringRecord on
-        success or failure, and re-raises any exception after recording it.
+        Dispatches to the correct component method via the strategy table,
+        snapshots content before/after when a tracer is attached, emits a
+        FiringRecord on success or failure, and re-raises any exception after
+        recording it.
 
         Returns the raw result from the component call so the caller can apply
         kind-specific post-processing (e.g. transformer execution_count guard,
         result.entries buffering, result.events queuing).
 
         Signature: _fire_component(comp, kind, events)
-          - kind='resolver'      → calls comp.resolve(events), adds content via add_content()
-          - kind='transformer'   → calls comp.transform(get_content(), events),
+          - kind='resolver'      -> calls comp.resolve(events), adds content via add_content()
+          - kind='transformer'   -> calls comp.transform(get_content(), events),
                                    applies set_content(result.content) if non-None so the
                                    content_after snapshot reflects the post-transform state;
                                    result.entries / result.events remain the caller's responsibility
-          - kind='tool_provider' → calls comp.provide(events), adds defs via add_tool_definitions()
+          - kind='tool_provider' -> calls comp.provide(events), adds defs via add_tool_definitions()
         """
-        # Snapshot before
+        strategy = self._COMPONENT_DISPATCH[kind]
+
+        # Snapshot before (tracer guard)
         if self._tracer is not None:
-            if kind == "tool_provider":
-                content_before: list = [td.name for td in self._tool_definitions]
-                tokens_before = 0
-            else:
-                content_before = list(self._content)
-                tokens_before = self._token_counter.count(content_before)
+            content_before, tokens_before = strategy.snapshot(self)
             t_start = time.perf_counter()
 
         try:
-            if kind == "resolver":
-                result = await comp.resolve(events)  # type: ignore[union-attr]
-                self.add_content(result)
-            elif kind == "transformer":
-                result = await comp.transform(self.get_content(), events)  # type: ignore[union-attr]
-                # Apply content replacement before snapshotting content_after
-                if result.content is not None:
-                    self.set_content(result.content)
-            else:  # tool_provider
-                result = await comp.provide(events)  # type: ignore[union-attr]
-                self.add_tool_definitions(result)
+            result = await strategy.invoke(comp, events, self)
+            strategy.apply(result, self)
 
             if self._tracer is not None:
                 content_after, tokens_after, tokens_delta = self._snapshot_after(kind, tokens_before)
@@ -301,27 +386,11 @@ class Layer:
             self._pending_events = []
 
             # --- Resolvers ---
-            for resolver in self.resolvers:
-                if resolver.execution_count >= resolver.max_executions:
-                    continue
-                if not any(
-                    s.matches(e)
-                    for s in resolver.subscriptions
-                    for e in events
-                ):
-                    continue
+            for resolver in self._eligible(self.resolvers, events):
                 await self._fire_component(comp=resolver, kind="resolver", events=events)
 
             # --- Transformers ---
-            for transformer in self.transformers:
-                if transformer.execution_count >= transformer.max_executions:
-                    continue
-                if not any(
-                    s.matches(e)
-                    for s in transformer.subscriptions
-                    for e in events
-                ):
-                    continue
+            for transformer in self._eligible(self.transformers, events):
                 _count_before = transformer.execution_count
                 result = await self._fire_component(comp=transformer, kind="transformer", events=events)
                 if transformer.execution_count == _count_before:
@@ -335,15 +404,7 @@ class Layer:
                         self._event_bus.queue(ev)
 
             # --- Tool Providers ---
-            for tp in self.tool_providers:
-                if tp.execution_count >= tp.max_executions:
-                    continue
-                if not any(
-                    s.matches(e)
-                    for s in tp.subscriptions
-                    for e in events
-                ):
-                    continue
+            for tp in self._eligible(self.tool_providers, events):
                 await self._fire_component(comp=tp, kind="tool_provider", events=events)
 
             # --- Budget check ---
