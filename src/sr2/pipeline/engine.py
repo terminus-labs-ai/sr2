@@ -107,13 +107,7 @@ class PipelineEngine:
         self._firing_seq = -1
         self._bus.reset()
         for layer in self._layers:
-            layer._turn_seq = self._turn_seq
-            layer._next_firing_seq = self._next_firing_seq
-        for layer in self._layers:
-            layer.set_content([])
-            layer._pending_events = []
-            if layer.tool_providers:
-                layer.reset_tools()
+            layer.begin_turn(turn_seq=self._turn_seq, next_firing_seq_fn=self._next_firing_seq)
 
         self._bus.queue(
             Event(
@@ -159,13 +153,24 @@ class PipelineEngine:
 
         return await self._compile_with_degradation()
 
-    async def _run_loop(self) -> None:
-        """Drain the event bus and process layers until quiescent."""
+    async def run_loop(self) -> None:
+        """Drain the event bus and process layers until quiescent.
+
+        Public accessor so the orchestrator can drain mid-turn (e.g. after
+        injecting user_input) without reaching into ``_run_loop()``.
+        """
         for _ in range(self._max_cycles):
             await self._bus.drain()
             changed = await self._process_layers()
             if not changed and self._bus.is_empty():
                 break
+
+    async def _run_loop(self) -> None:
+        """Drain the event bus and process layers until quiescent.
+
+        Kept for backward compatibility (internal callers). Delegates to ``run_loop``.
+        """
+        await self.run_loop()
 
     async def _process_layers(self) -> bool:
         """Process pending events in all layers. Returns True if any work done."""
@@ -358,6 +363,22 @@ class PipelineEngine:
         for layer in self._layers:
             for comp in (*layer.resolvers, *layer.tool_providers, *layer.transformers):
                 comp.execution_count = 0
+
+    @property
+    def turn_seq(self) -> int:
+        """Current turn sequence number.
+
+        Read-only accessor so the orchestrator need not reach into ``_turn_seq``.
+        """
+        return self._turn_seq
+
+    def compile(self) -> CompletionRequest:
+        """Compile all layers into a CompletionRequest.
+
+        Public accessor wrapping ``_compile_request()`` so the orchestrator
+        does not reach across the underscore boundary.
+        """
+        return self._compile_request()
 
     @property
     def bus(self) -> EventBus:

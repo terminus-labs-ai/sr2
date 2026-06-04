@@ -61,7 +61,7 @@ class Layer:
         self._tracer: "Tracer | None" = tracer
 
         self._turn_seq: int = 0
-        self._next_firing_seq: Callable[[], int] = lambda: 0  # replaced by engine before each run
+        self._next_firing_seq: Callable[[], int] = lambda: 0  # replaced via begin_turn()
 
         self._content: list[ContentBlock | Message] = []
         self._tool_definitions: list[ToolDefinition] = []
@@ -108,6 +108,25 @@ class Layer:
         self._event_bus = bus
         self._provenance_store = provenance_store
         self._tracer = tracer
+
+    # -- turn lifecycle -------------------------------------------------------
+
+    def begin_turn(self, turn_seq: int, next_firing_seq_fn: Callable[[], int]) -> None:
+        """Reset this layer's turn state for a new turn.
+
+        Replaces the old pattern where the engine directly mutated
+        ``layer._turn_seq``, ``layer._next_firing_seq``, and ``layer._pending_events``.
+
+        Args:
+            turn_seq: The sequence number for this turn.
+            next_firing_seq_fn: Callable that returns the next firing sequence number.
+        """
+        self._turn_seq = turn_seq
+        self._next_firing_seq = next_firing_seq_fn
+        self.set_content([])
+        self._pending_events = []
+        if self.tool_providers:
+            self.reset_tools()
 
     # -- session seeding ------------------------------------------------------
 

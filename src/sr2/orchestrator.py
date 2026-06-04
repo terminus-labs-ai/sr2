@@ -275,7 +275,7 @@ class SR2:
         in_band_errors: list[str] = []
 
         # Start the turn via the new engine API.
-        next_seq = self._engine._turn_seq + 1
+        next_seq = self._engine.turn_seq + 1
         await self._engine.start_turn(turn_seq=next_seq)
         in_band_errors.extend(self._engine.bus.get_errors())
 
@@ -289,11 +289,11 @@ class SR2:
                     data=user_input,
                 )
             )
-            await self._engine._run_loop()
+            await self._engine.run_loop()
             in_band_errors.extend(self._engine.bus.get_errors())
 
         # Compile the initial request after user_input is settled.
-        compiled = self._engine._compile_request()
+        compiled = self._engine.compile()
 
         # ----------------------------------------------------------------
         # Multi-iteration tool loop

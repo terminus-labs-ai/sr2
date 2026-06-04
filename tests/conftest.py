@@ -190,7 +190,7 @@ async def run_engine(
     2. If *user_input* is non-empty, queue a ``user_input`` event and drain.
     3. ``end_turn`` — return the compiled ``PipelineResult``.
     """
-    next_seq = engine._turn_seq + 1
+    next_seq = engine.turn_seq + 1
     await engine.start_turn(turn_seq=next_seq)
 
     if user_input:
