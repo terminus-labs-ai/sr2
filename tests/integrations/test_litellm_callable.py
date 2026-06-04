@@ -111,6 +111,10 @@ def _make_stream_chunk(
   delta = MagicMock()
   delta.content = content
   delta.tool_calls = None
+  # Real litellm deltas expose these as None when absent; pin them so the
+  # MagicMock doesn't auto-vivify a truthy attribute and trip thinking emission.
+  delta.reasoning_content = None
+  delta.thinking_blocks = None
 
   choice = MagicMock()
   choice.delta = delta
@@ -977,6 +981,8 @@ def _make_tool_call_chunk(
   delta = MagicMock()
   delta.content = None
   delta.tool_calls = [tc_delta]
+  delta.reasoning_content = None
+  delta.thinking_blocks = None
 
   choice = MagicMock()
   choice.delta = delta
