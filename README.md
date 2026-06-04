@@ -193,7 +193,7 @@ Add a capability by registering an entry point — never by modifying the engine
   entry points without touching the engine.
 - **Single package** — v2 is one clean package (`src/sr2/`). The v1 multi-package
   monorepo, runtime, bridge, and premium split are gone.
-- **Async throughout** — all I/O (LLM, stores, provenance) is async.
+- **Async throughout** — LLM calls and provenance I/O are async. Memory stores use a sync protocol (dict-backed `InMemoryMemoryStore`); async persistence backends can be added via the `MemoryStore` protocol.
 
 ## Project structure
 

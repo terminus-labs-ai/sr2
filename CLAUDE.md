@@ -118,7 +118,7 @@ async for event in sr2.turn([TextBlock(text="hello")]):
         print(event.text, end="")
 ```
 
-`post_process()` is a hook for post-turn work (memory extraction, summarization). Currently a no-op; `await`ed once after the stream completes, before the `turn()` generator exits (not fire-and-forget).
+`post_process()` is a hook for post-turn work (memory extraction, summarization). Currently a no-op. Scheduled via `asyncio.create_task` after `_finalize_turn()` — it runs as a deferred background task and is awaited at the start of the next `turn()` call (or on `aclose()`), not before the current `turn()` generator exits.
 
 ### Event-Driven Pipeline
 
