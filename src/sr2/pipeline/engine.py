@@ -297,15 +297,6 @@ class PipelineEngine:
                 if tokens_used > layer.token_budget:
                     force_truncated = True
 
-            # Check if force truncation happened (content was truncated to fit)
-            # Even if currently under budget, truncation may have occurred
-            if layer.token_budget is not None and any(
-                r.execution_count > 0 for r in layer.resolvers
-            ):
-                # Detect if content was truncated by comparing token count to budget
-                # The layer already ran force_truncate in process_pending
-                pass
-
             resolver_execs = {
                 r.name: r.execution_count
                 for r in layer.resolvers
