@@ -13,6 +13,7 @@ from sr2.memory.registry import get_store
 from sr2.metrics.manager import MetricSources, MetricsManager
 from sr2.pipeline.prefix_tracker import PrefixSnapshot
 from sr2.pipeline.result import ActualTokenUsage, PipelineResult
+from sr2.pipeline.dependencies import RunContextProvider
 from sr2.resolvers.registry import (
     ResolverContext,
     ResolvedContent,
@@ -44,6 +45,7 @@ class SR2Config:
     embed: Callable | None = None  # async (text) -> list[float]
     mcp_resource_reader: Callable | None = None  # async (uri, server_name) -> str
     mcp_prompt_reader: Callable | None = None  # async (name, arguments, server_name) -> str
+    run_context_provider: RunContextProvider | None = None  # () -> RunContext | None
     trace_collector: TraceCollector | None = None  # Pipeline Inspector traces
     preloaded_config: Any = None  # PipelineConfig — skip file-based loading (used by bridge)
 
@@ -261,6 +263,14 @@ class SR2:
         if zones.compacted:
             await self._conversation.run_summarization(session_id, force=force_summarize)
 
+        # Resolve run context from provider (harness-injected, core-agnostic)
+        run_context = None
+        if self._config.run_context_provider:
+            try:
+                run_context = self._config.run_context_provider()
+            except Exception:
+                logger.error("run_context_provider failed", exc_info=True)
+
         # Compile context
         ctx = ResolverContext(
             agent_config=agent_context,
@@ -269,6 +279,7 @@ class SR2:
             interface_type=interface_name,
             scope_config=self._scope_config_resolved,
             current_context=current_context or None,
+            run_context=run_context,
         )
         compiled = await self._engine.compile(config, ctx)
         logger.info(f"SR2.process: context compiled for {interface_name}")

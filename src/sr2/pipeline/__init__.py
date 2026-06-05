@@ -1,3 +1,4 @@
+from sr2.pipeline.dependencies import RunContext, RunContextProvider, RunMode
 from sr2.pipeline.engine import CompiledContext, PipelineEngine
 from sr2.pipeline.result import PipelineResult, StageResult, StageTimer
 from sr2.pipeline.router import InterfaceRouter
@@ -7,6 +8,9 @@ __all__ = [
     "InterfaceRouter",
     "PipelineEngine",
     "PipelineResult",
+    "RunContext",
+    "RunContextProvider",
+    "RunMode",
     "StageResult",
     "StageTimer",
 ]

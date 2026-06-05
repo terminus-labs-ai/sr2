@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Protocol, Any
 
+from sr2.pipeline.dependencies import RunContext
+
 
 def estimate_tokens(text: str) -> int:
     """Estimate token count from text using character-based heuristic.
@@ -21,6 +23,7 @@ class ResolverContext:
     interface_type: str = ""
     scope_config: Any = None  # MemoryScopeConfig | None
     current_context: dict | None = None
+    run_context: RunContext | None = None
 
 
 @dataclass
