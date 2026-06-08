@@ -41,3 +41,16 @@ class Dependencies:
     The *origin* parameter is typically a transport-identifier string
     (e.g. ``"tui"``, ``"discord:channel_id"``).
     """
+    run_context_provider: Callable[[], dict[str, str] | None] | None = None
+    """Run-context provider for pipeline components.
+
+    When present, a resolver/transformer calls ``provider()`` to retrieve a
+    dict of run-context strings (e.g. ``{"mode": "headless", "source": "discord"}``).
+    The harness supplies the concrete provider; core owns only the generic
+    callable contract.  When ``None`` (default), no run-context is available
+    and component behaviour is unchanged (regression-safe).
+
+    Mirrors ``active_frame_provider``: generic callable, no harness-type
+    import in core.  Spectre's ``RunContext`` is a spectre type — core
+    MUST NOT import it.
+    """
