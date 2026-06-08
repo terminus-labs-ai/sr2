@@ -158,6 +158,7 @@ class SR2:
         memory_extractor: "MemoryExtractor | None" = None,
         tool_executor: "ToolExecutor | None" = None,
         active_frame_provider: Callable[[str], str | None] | None = None,
+        run_context_provider: Callable[[], dict[str, str] | None] | None = None,
         tool_source: "ToolSource | None" = None,
     ) -> None:
         # Normalise: bare LLMCallable → single-entry dict under "default".
@@ -191,6 +192,7 @@ class SR2:
             memory_extractor=memory_extractor,
             session_id=self.session_id,
             active_frame_provider=active_frame_provider,
+            run_context_provider=run_context_provider,
             tool_source=tool_source,
         )
         self._active_frame_provider = deps.active_frame_provider
