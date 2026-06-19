@@ -10,6 +10,7 @@ from .protocol import (
     TaggedMemoryStore,
 )
 from .store import InMemoryMemoryStore
+from .pg_store import PostgresMemoryStore
 from .extraction import RuleBasedExtractor
 from .extraction_transformer import MemoryExtractionTransformer
 from .memory_resolver import MemoryResolver
@@ -24,6 +25,7 @@ __all__ = [
     "MemorySearchResult",
     "MemoryExtractor",
     "MemoryStore",
+    "PostgresMemoryStore",
     "TaggedMemoryStore",
     "RuleBasedExtractor",
 ]
