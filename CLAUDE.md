@@ -6,7 +6,7 @@
 
 **Status**: v2 revamp (single-package, event-driven pipeline). Active development on the `revamp` branch.
 
-**Tech stack**: Python 3.12+, Pydantic, LiteLLM, aiosqlite, tiktoken (optional), ULID.
+**Tech stack**: Python 3.12+, Pydantic, LiteLLM, aiosqlite, psycopg3 (persistent memory store), tiktoken (optional), ULID.
 
 **Single package**: Everything lives in `src/sr2/`. No multi-package monorepo — that was v1.
 
@@ -53,6 +53,7 @@
     memory/
       schema.py                 # Memory, MemoryScope, MemorySearchResult, ExtractionResult
       store.py                  # InMemoryMemoryStore — dict-backed MemoryStore
+      pg_store.py               # PostgresMemoryStore — psycopg3 (sync), persistent + cross-process (obsidian-cor)
       protocol.py               # MemoryStore, MemoryExtractor protocols
       extraction.py             # RuleBasedExtractor — heuristic memory extraction
       extraction_transformer.py # MemoryExtractionTransformer — extracts from assistant_response events
@@ -264,6 +265,8 @@ Three registries in the orchestrator:
 `MemoryStore` protocol (`memory/protocol.py`): `save()`, `search()`, `get_by_tag()`, `delete()`, `get_all()`.
 
 `InMemoryMemoryStore` (`memory/store.py`): dict-backed, no persistence. Injected via `Dependencies.memory_store`.
+
+`PostgresMemoryStore` (`memory/pg_store.py`): synchronous psycopg3-backed, persistent + cross-process (obsidian-cor). Same sync `MemoryStore`/`TaggedMemoryStore` protocols and ranking as in-memory; concurrency-safe `save` via `INSERT ... ON CONFLICT DO UPDATE frequency+1`. Constructor `PostgresMemoryStore(dsn)` opens the connection and creates the `memories` table on construct; `close()` is sync. Requires the `psycopg[binary]` dependency.
 
 `MemoryExtractor` protocol: `extract(turn_text) -> ExtractionResult`. Default impl: `RuleBasedExtractor` (regex patterns, up to 5 memories per turn).
 
