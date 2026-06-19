@@ -20,11 +20,33 @@ synchronous (unlike the async SQLiteProvenanceStore).
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import psycopg
+if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
+    import psycopg
 
 from .schema import Memory, MemoryScope, MemorySearchResult
+
+
+def _require_psycopg() -> "psycopg":
+    """Import psycopg lazily, failing with an actionable error if it is missing.
+
+    The Postgres backend is optional: psycopg is only needed when a
+    ``PostgresMemoryStore`` is actually instantiated. Importing this module (or
+    the wider ``sr2.memory`` package) must never require psycopg — a missing
+    backend degrades to ``InMemoryMemoryStore`` instead of crashing every
+    importer. See bead spc-72.
+    """
+    try:
+        import psycopg
+    except ImportError as exc:  # ModuleNotFoundError is an ImportError
+        raise ImportError(
+            "PostgresMemoryStore requires the optional 'psycopg' dependency, "
+            "which is not installed in this environment. Install it with "
+            "`pip install 'psycopg[binary]>=3.1'` (or use InMemoryMemoryStore "
+            "instead)."
+        ) from exc
+    return psycopg
 
 # ---------------------------------------------------------------------------
 # Schema DDL
@@ -108,6 +130,7 @@ class PostgresMemoryStore:
     """Persistent MemoryStore backed by Postgres via psycopg3 (synchronous)."""
 
     def __init__(self, dsn: str) -> None:
+        psycopg = _require_psycopg()
         self._conn = psycopg.connect(dsn)
         with self._conn.cursor() as cur:
             cur.execute(_DDL)
