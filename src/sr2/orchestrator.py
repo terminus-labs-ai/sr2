@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, TYPE_CHECKING
@@ -38,8 +39,14 @@ from sr2.protocols.llm import (
     StreamEvent,
 )
 
+logger = logging.getLogger(__name__)
+
 # FR1: Type alias for the tool executor callable.
 ToolExecutor = Callable[[ToolUseBlock], Awaitable[ToolResultBlock]]
+
+# sr2-37: Placeholder text used when the LLM returns an empty response twice
+# in a row (original + one retry). Stored in history like normal final text.
+EMPTY_RESPONSE_PLACEHOLDER = "[empty model response]"
 
 
 @dataclass(frozen=True)
@@ -273,6 +280,15 @@ class SR2:
     # ------------------------------------------------------------------
     # Tool iteration helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_empty_iteration(iteration: ToolIterationResult) -> bool:
+        """sr2-37: True when an iteration has no tool calls and no real text.
+
+        "No real text" means empty or whitespace-only — thinking-only output
+        produces no text events, so it also counts as empty.
+        """
+        return not iteration.tool_use_blocks and not iteration.text.strip()
 
     async def _execute_tools(
         self,
@@ -520,10 +536,59 @@ class SR2:
         # Between iterations we'll add assistant + tool_result messages directly.
         current_request = compiled
 
+        # sr2-37: Empty-response retry budget — at most ONE retry per turn.
+        empty_retry_used = False
+
         while True:
             iteration = await self._run_tool_iteration(
                 current_request, iteration_seq, origin
             )
+
+            # ---------------------------------------------------------------
+            # sr2-37: Empty-response guard
+            # ---------------------------------------------------------------
+            # An "empty iteration" has no tool calls AND no non-whitespace
+            # text (thinking-only output counts as empty). Local models
+            # occasionally produce these mid-loop; without the guard the turn
+            # would end silently with no output.
+            if self._is_empty_iteration(iteration):
+                if not empty_retry_used:
+                    # Retry the SAME request exactly once. The retry does not
+                    # consume a tool-loop iteration: iteration_seq is reused,
+                    # so a tool call from the retry belongs to this iteration.
+                    empty_retry_used = True
+                    logger.warning("empty LLM response — retrying the request once")
+                    iteration = await self._run_tool_iteration(
+                        current_request, iteration_seq, origin
+                    )
+
+                if self._is_empty_iteration(iteration):
+                    # Retry budget spent and still empty — finalize with the
+                    # placeholder via the normal final-response path.
+                    logger.warning(
+                        "empty LLM response after retry — finalizing turn with placeholder"
+                    )
+                    placeholder_block = TextBlock(text=EMPTY_RESPONSE_PLACEHOLDER)
+                    self._stamp_block(placeholder_block, origin)
+                    final_response = CompletionResponse(
+                        id="turn-response",
+                        content=[placeholder_block],
+                        stop_reason="end_turn",
+                        usage=iteration.usage,
+                    )
+
+                    # sr2-80: Finalize BEFORE yielding any events so an early
+                    # consumer break does not skip session-history capture.
+                    await self._finalize_turn(final_response)
+
+                    yield StreamEvent(type="text", text=EMPTY_RESPONSE_PLACEHOLDER)
+
+                    # FR7: Surface accumulated in-band bus errors before the final end event.
+                    if in_band_errors:
+                        yield StreamEvent(type="error", errors=in_band_errors)
+
+                    yield StreamEvent(type="end")
+                    return
 
             if not iteration.tool_use_blocks:
                 # ---------------------------------------------------------------
