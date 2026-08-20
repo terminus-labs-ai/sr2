@@ -440,3 +440,520 @@ class TestMarkdownFileResolverBuild:
         config = make_config(str(f))
         result = MarkdownFileResolver.build(config, Dependencies())
         assert isinstance(result, Resolver)
+
+
+# ===========================================================================
+# SLICE 2: {area} templated-path mode (AC 13-22, FR 16-25)
+# ===========================================================================
+#
+# These tests extend the resolver with resolve-time {area} templating. They
+# are RED against the current init-time-only implementation and become GREEN
+# once the feature lands.
+
+import logging
+import os
+import pathlib
+import re
+
+
+# ---------------------------------------------------------------------------
+# Helpers for templated-mode tests
+# ---------------------------------------------------------------------------
+
+
+def make_area_config(
+    path: str,
+    on_missing: str | None = None,
+    max_tokens: int | None = None,
+    declaring_dir: str | None = None,
+    **kwargs,
+) -> ResolverConfig:
+    """Build a ResolverConfig, placing on_missing inside the config dict."""
+    cfg: dict = {"path": path}
+    if on_missing is not None:
+        cfg["on_missing"] = on_missing
+    if max_tokens is not None:
+        cfg["max_tokens"] = max_tokens
+    if declaring_dir is not None:
+        cfg["declaring_dir"] = declaring_dir
+    return ResolverConfig(type="markdown_file", config=cfg, **kwargs)
+
+
+def area_deps(area) -> Dependencies:
+    """Dependencies whose run_context_provider yields the given area.
+
+    - area is a str  -> provider returns {"area": area}
+    - area is None   -> provider returns None (no run context)
+    - area == "ABSENT" sentinel handled by caller via absent_deps()
+    """
+    if area is None:
+        return Dependencies(run_context_provider=lambda: None)
+    return Dependencies(run_context_provider=lambda: {"area": area})
+
+
+def absent_area_deps() -> Dependencies:
+    """Provider returns a dict without the 'area' key (interface resolves no area)."""
+    return Dependencies(run_context_provider=lambda: {"mode": "headless"})
+
+
+def combined_text(result: ResolvedContent) -> str:
+    """Concatenate the text of all TextBlocks in a ResolvedContent."""
+    parts = []
+    for block in result.content:
+        text = getattr(block, "text", None)
+        if text is not None:
+            parts.append(text)
+    return "".join(parts)
+
+
+def assert_empty_content(result: ResolvedContent) -> None:
+    """Assert the resolved content carries no markdown text.
+
+    'Empty' is satisfied either by an empty content list or by content whose
+    concatenated TextBlock text is the empty string.
+    """
+    assert combined_text(result) == "", (
+        f"expected empty content, got {combined_text(result)!r}"
+    )
+
+
+def warning_records(caplog) -> list:
+    return [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+# ---------------------------------------------------------------------------
+# AC 14 / AC 15 — config validation of the on_missing / {area} pairing
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownFileResolverTemplatedConfigValidation:
+    def test_area_path_without_on_missing_raises_at_init(self, tmp_path):
+        """AC 14: {area} in path but on_missing omitted -> config error at __init__."""
+        templated = str(tmp_path / "{area}" / "CLAUDE.md")
+        with pytest.raises(ValueError):
+            MarkdownFileResolver(make_area_config(templated))
+
+    def test_area_path_without_on_missing_message_names_resolver_and_path(
+        self, tmp_path
+    ):
+        """AC 14: the config error names the resolver and the offending path."""
+        templated = str(tmp_path / "{area}" / "CLAUDE.md")
+        with pytest.raises(ValueError) as exc_info:
+            MarkdownFileResolver(make_area_config(templated))
+        msg = str(exc_info.value)
+        assert "MarkdownFileResolver" in msg
+        assert templated in msg
+
+    def test_area_path_without_on_missing_via_build_raises(self, tmp_path):
+        """AC 14: validation also triggers through build()."""
+        templated = str(tmp_path / "{area}" / "CLAUDE.md")
+        with pytest.raises(ValueError):
+            MarkdownFileResolver.build(
+                make_area_config(templated), area_deps("alpha")
+            )
+
+    def test_on_missing_without_area_path_raises_at_init(self, tmp_path):
+        """AC 15: on_missing supplied on a non-templated path -> config error at __init__."""
+        f = tmp_path / "doc.md"
+        f.write_text("content")
+        with pytest.raises(ValueError):
+            MarkdownFileResolver(make_area_config(str(f), on_missing="skip"))
+
+    def test_on_missing_error_without_area_path_raises_at_init(self, tmp_path):
+        """AC 15: same for on_missing='error' on a non-templated path."""
+        f = tmp_path / "doc.md"
+        f.write_text("content")
+        with pytest.raises(ValueError):
+            MarkdownFileResolver(make_area_config(str(f), on_missing="error"))
+
+
+# ---------------------------------------------------------------------------
+# AC 13 — one instance, two turns, area changes -> different file loaded
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownFileResolverAreaSwitching:
+    @pytest.mark.asyncio
+    async def test_area_path_loads_different_file_across_turns(self, tmp_path):
+        """AC 13: a single resolver instance loads a different area's file each
+        turn as the run context's area changes, with no rebuild and no config edit."""
+        base = tmp_path / "projects"
+        (base / "alpha").mkdir(parents=True)
+        (base / "beta").mkdir(parents=True)
+        (base / "alpha" / "CLAUDE.md").write_text("ALPHA CONTENT")
+        (base / "beta" / "CLAUDE.md").write_text("BETA CONTENT")
+
+        holder = {"area": "alpha"}
+        deps = Dependencies(run_context_provider=lambda: {"area": holder["area"]})
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error"), deps
+        )
+
+        first = await resolver.resolve([make_turn_start_event()])
+        assert combined_text(first) == "ALPHA CONTENT"
+
+        holder["area"] = "beta"
+        second = await resolver.resolve([make_turn_start_event()])
+        assert combined_text(second) == "BETA CONTENT"
+
+        assert combined_text(first) != combined_text(second)
+
+    @pytest.mark.asyncio
+    async def test_area_path_resolves_current_area_content(self, tmp_path):
+        """AC 13: resolve-time mode reads the file for the provider's current area."""
+        base = tmp_path / "projects"
+        (base / "gamma").mkdir(parents=True)
+        (base / "gamma" / "CLAUDE.md").write_text("GAMMA")
+        deps = area_deps("gamma")
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error"), deps
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert combined_text(result) == "GAMMA"
+
+
+# ---------------------------------------------------------------------------
+# AC 16 — on_missing: skip
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownFileResolverOnMissingSkip:
+    @pytest.mark.asyncio
+    async def test_skip_no_match_returns_empty_content(self, tmp_path):
+        """AC 16: on_missing='skip' with no matching file returns empty content."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), area_deps("nope")
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert_empty_content(result)
+
+    @pytest.mark.asyncio
+    async def test_skip_no_match_does_not_raise(self, tmp_path):
+        """AC 16: on_missing='skip' completes the turn (no exception)."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), area_deps("nope")
+        )
+        # Must not raise.
+        await resolver.resolve([make_turn_start_event()])
+
+    @pytest.mark.asyncio
+    async def test_skip_no_match_logs_exactly_one_warning(self, tmp_path, caplog):
+        """AC 16: on_missing='skip' emits exactly one WARNING log line."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), area_deps("nope")
+        )
+        with caplog.at_level(logging.WARNING):
+            await resolver.resolve([make_turn_start_event()])
+        assert len(warning_records(caplog)) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC 17 — on_missing: error
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownFileResolverOnMissingError:
+    @pytest.mark.asyncio
+    async def test_error_no_match_raises_from_resolve(self, tmp_path):
+        """AC 17: on_missing='error' with no matching file raises from resolve()."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error"), area_deps("nope")
+        )
+        with pytest.raises(FileNotFoundError):
+            await resolver.resolve([make_turn_start_event()])
+
+    def test_error_missing_file_does_not_raise_at_init(self, tmp_path):
+        """AC 17/16: in templated mode a missing file is not an init-time error;
+        the on_missing branch is evaluated at resolve() time, so build() succeeds."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        # Should build without raising even though nothing matches yet.
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error"), area_deps("nope")
+        )
+        assert resolver is not None
+
+
+# ---------------------------------------------------------------------------
+# AC 18 — no area available -> on_missing branch, never an empty-segment glob
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownFileResolverNoArea:
+    @pytest.mark.asyncio
+    async def test_provider_none_skip_returns_empty(self, tmp_path):
+        """AC 18: run_context_provider is None -> skip branch, empty content."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), Dependencies()
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert_empty_content(result)
+
+    @pytest.mark.asyncio
+    async def test_provider_returns_none_skip_returns_empty(self, tmp_path):
+        """AC 18: provider returns None -> skip branch, empty content."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), area_deps(None)
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert_empty_content(result)
+
+    @pytest.mark.asyncio
+    async def test_area_key_absent_skip_returns_empty(self, tmp_path):
+        """AC 18: 'area' key absent from run context -> skip branch, empty content."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), absent_area_deps()
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert_empty_content(result)
+
+    @pytest.mark.asyncio
+    async def test_empty_area_skip_returns_empty(self, tmp_path):
+        """AC 18: explicit empty area ('') -> skip branch, empty content."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), area_deps("")
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert_empty_content(result)
+
+    @pytest.mark.asyncio
+    async def test_no_area_error_raises_from_resolve(self, tmp_path):
+        """AC 18: with on_missing='error', no area takes the same branch as a
+        missing file and raises from resolve()."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error"), area_deps("")
+        )
+        with pytest.raises(FileNotFoundError):
+            await resolver.resolve([make_turn_start_event()])
+
+    @pytest.mark.asyncio
+    async def test_empty_area_does_not_substitute_empty_segment(self, tmp_path):
+        """AC 18 (sharp): an empty area must NOT be substituted into the path.
+
+        If the resolver replaced {area} with '', the glob of
+        '<base>//CLAUDE.md' would match '<base>/CLAUDE.md' and leak it. The
+        resolver must instead take the on_missing branch and return nothing.
+        """
+        base = tmp_path / "projects"
+        base.mkdir()
+        # This file sits exactly where an empty substitution would resolve to.
+        (base / "CLAUDE.md").write_text("LEAKED EMPTY-SEGMENT CONTENT")
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), area_deps("")
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert "LEAKED" not in combined_text(result)
+        assert_empty_content(result)
+
+
+# ---------------------------------------------------------------------------
+# AC 19 — non-templated path keeps today's init-time behavior (regression)
+# ---------------------------------------------------------------------------
+#
+# The pre-existing tests are the primary AC-19 proof:
+#   TestMarkdownFileResolverEmptyGlob::test_empty_glob_raises_at_init
+#   TestMarkdownFileResolverEmptyGlob::test_nonexistent_single_file_raises_at_init
+#   TestMarkdownFileResolverTokenBudget::test_budget_exceeded_raises_at_init
+# The tests below add backward-compat guards specific to the new feature's
+# presence (provider wired but path is non-templated).
+
+
+class TestMarkdownFileResolverNonTemplatedUnchanged:
+    @pytest.mark.asyncio
+    async def test_non_templated_ignores_run_context_provider(self, tmp_path):
+        """AC 19: a non-templated path loads at init and ignores the area provider."""
+        f = tmp_path / "doc.md"
+        f.write_text("STATIC CONTENT")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(str(f)), area_deps("some-area")
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert combined_text(result) == "STATIC CONTENT"
+
+    def test_non_templated_empty_glob_still_raises_at_init(self, tmp_path):
+        """AC 19: empty glob on a non-templated path still raises at __init__."""
+        pattern = str(tmp_path / "*.md")
+        with pytest.raises(FileNotFoundError):
+            MarkdownFileResolver.build(make_area_config(pattern), area_deps("x"))
+
+    def test_non_templated_budget_still_enforced_at_init(self, tmp_path):
+        """AC 19: max_tokens on a non-templated path is still enforced at __init__."""
+        f = tmp_path / "big.md"
+        f.write_text("x" * 400)  # ~100 tokens
+        with pytest.raises(MarkdownTokenBudgetError):
+            MarkdownFileResolver.build(
+                make_area_config(str(f), max_tokens=10), area_deps("x")
+            )
+
+
+# ---------------------------------------------------------------------------
+# AC 20 — max_tokens enforced at resolve() in templated mode
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownFileResolverTemplatedMaxTokens:
+    def test_over_budget_does_not_raise_at_init_in_templated_mode(self, tmp_path):
+        """AC 20: in templated mode, an over-budget file is not caught at init;
+        enforcement is deferred to resolve()."""
+        base = tmp_path / "projects"
+        (base / "alpha").mkdir(parents=True)
+        (base / "alpha" / "CLAUDE.md").write_text("x" * 400)  # ~100 tokens
+        templated = str(base / "{area}" / "CLAUDE.md")
+        # build must succeed even though the eventual file exceeds the budget.
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error", max_tokens=10),
+            area_deps("alpha"),
+        )
+        assert resolver is not None
+
+    @pytest.mark.asyncio
+    async def test_over_budget_raises_at_resolve_in_templated_mode(self, tmp_path):
+        """AC 20: max_tokens is enforced at resolve() against the file loaded that turn."""
+        base = tmp_path / "projects"
+        (base / "alpha").mkdir(parents=True)
+        (base / "alpha" / "CLAUDE.md").write_text("x" * 400)  # ~100 tokens
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error", max_tokens=10),
+            area_deps("alpha"),
+        )
+        with pytest.raises(MarkdownTokenBudgetError):
+            await resolver.resolve([make_turn_start_event()])
+
+    @pytest.mark.asyncio
+    async def test_within_budget_resolves_in_templated_mode(self, tmp_path):
+        """AC 20: a file within budget resolves normally in templated mode."""
+        base = tmp_path / "projects"
+        (base / "alpha").mkdir(parents=True)
+        (base / "alpha" / "CLAUDE.md").write_text("small")  # ~1 token
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error", max_tokens=1000),
+            area_deps("alpha"),
+        )
+        result = await resolver.resolve([make_turn_start_event()])
+        assert combined_text(result) == "small"
+
+
+# ---------------------------------------------------------------------------
+# AC 21 — per-path/mtime caching: unchanged file is re-stat'd but not re-read
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownFileResolverCaching:
+    @pytest.mark.asyncio
+    async def test_unchanged_file_read_once_across_two_resolves(
+        self, tmp_path, monkeypatch
+    ):
+        """AC 21: two consecutive turns on an unchanged file read it only once."""
+        base = tmp_path / "projects"
+        (base / "alpha").mkdir(parents=True)
+        target = base / "alpha" / "CLAUDE.md"
+        target.write_text("CACHED CONTENT")
+        templated = str(base / "{area}" / "CLAUDE.md")
+
+        reads: list[str] = []
+        orig_read_text = pathlib.Path.read_text
+
+        def counting_read_text(self, *args, **kwargs):
+            reads.append(str(self))
+            return orig_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "read_text", counting_read_text)
+
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error"), area_deps("alpha")
+        )
+
+        first = await resolver.resolve([make_turn_start_event()])
+        second = await resolver.resolve([make_turn_start_event()])
+
+        target_reads = [p for p in reads if p.endswith("CLAUDE.md")]
+        assert combined_text(first) == "CACHED CONTENT"
+        assert combined_text(second) == "CACHED CONTENT"
+        assert len(target_reads) == 1, (
+            f"expected the file to be read once across two resolves, "
+            f"got {len(target_reads)} reads: {target_reads}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_changed_mtime_triggers_reread(self, tmp_path, monkeypatch):
+        """AC 21: a change to the file's mtime invalidates the cache and re-reads."""
+        base = tmp_path / "projects"
+        (base / "alpha").mkdir(parents=True)
+        target = base / "alpha" / "CLAUDE.md"
+        target.write_text("VERSION ONE")
+        templated = str(base / "{area}" / "CLAUDE.md")
+
+        reads: list[str] = []
+        orig_read_text = pathlib.Path.read_text
+
+        def counting_read_text(self, *args, **kwargs):
+            reads.append(str(self))
+            return orig_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "read_text", counting_read_text)
+
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="error"), area_deps("alpha")
+        )
+
+        await resolver.resolve([make_turn_start_event()])
+
+        # Change content and bump mtime clearly into the future.
+        target.write_text("VERSION TWO")
+        future = os.stat(target).st_mtime + 1000
+        os.utime(target, (future, future))
+
+        second = await resolver.resolve([make_turn_start_event()])
+
+        target_reads = [p for p in reads if p.endswith("CLAUDE.md")]
+        assert combined_text(second) == "VERSION TWO"
+        assert len(target_reads) == 2, (
+            f"expected a re-read after mtime change, got {len(target_reads)} reads"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC 22 — docstring no longer claims ${VAR} interpolation of `path`
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownFileResolverDocstring:
+    def test_docstring_does_not_claim_var_interpolation(self):
+        """AC 22: the resolver docstring must not claim ${VAR} interpolation of path."""
+        doc = MarkdownFileResolver.__doc__ or ""
+        assert "${VAR}" not in doc, (
+            "docstring still claims ${VAR} interpolation of `path`, which is false"
+        )
