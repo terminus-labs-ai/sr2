@@ -189,10 +189,32 @@ class MarkdownFileResolver:
         )
         return ""
 
+    def _handle_no_area(self) -> str:
+        """Apply the on_missing branch for a run context that has no area.
+
+        Same branch as a missing file, reported as what it is. Reusing the
+        missing-file message here printed the raw, un-substituted pattern —
+        including a literal ``{area}`` — which reads like a templating
+        failure rather than an interface that resolves no areas. Skipping is
+        the expected steady state for such an interface, so it logs at DEBUG
+        rather than once per turn at WARNING.
+        """
+        if self._on_missing == "error":
+            raise FileNotFoundError(
+                "MarkdownFileResolver: the run context supplies no area; "
+                f"cannot resolve templated path {self._raw_path!r}"
+            )
+        logger.debug(
+            "MarkdownFileResolver: the run context supplies no area; "
+            "skipping templated path %r",
+            self._raw_path,
+        )
+        return ""
+
     def _resolve_templated(self) -> str:
         area = self._current_area()
         if area is None:
-            return self._handle_missing(self._raw_path)
+            return self._handle_no_area()
 
         substituted = self._raw_path.replace(_AREA_PLACEHOLDER, area)
         resolved_path = self._resolve_path(substituted, self._declaring_dir)
