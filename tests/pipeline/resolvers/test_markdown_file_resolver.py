@@ -744,6 +744,34 @@ class TestMarkdownFileResolverNoArea:
         assert_empty_content(result)
 
     @pytest.mark.asyncio
+    async def test_no_area_skip_reports_the_area_not_the_pattern(
+        self, tmp_path, caplog
+    ):
+        """No area is not a templating failure and must not be reported as one.
+
+        This branch used to reuse the missing-file WARNING, so an interface
+        that resolves no areas logged
+        "no files matched pattern '.../{area}/CLAUDE.md'" on every turn — the
+        raw, un-substituted path, which reads like broken templating. It is
+        the expected steady state for such an interface, so it belongs at
+        DEBUG and must name the missing area instead.
+        """
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated, on_missing="skip"), absent_area_deps()
+        )
+        with caplog.at_level(logging.DEBUG):
+            result = await resolver.resolve([make_turn_start_event()])
+
+        assert_empty_content(result)
+        assert warning_records(caplog) == []
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("supplies no area" in m for m in messages)
+        assert not any("no files matched pattern" in m for m in messages)
+
+    @pytest.mark.asyncio
     async def test_no_area_error_raises_from_resolve(self, tmp_path):
         """AC 18: with on_missing='error', no area takes the same branch as a
         missing file and raises from resolve()."""
