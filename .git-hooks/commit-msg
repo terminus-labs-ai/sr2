@@ -1,0 +1,7 @@
+#!/bin/sh
+# Installed by harbinger (hrb-33). Appends the bead id to commit messages
+# that omit it so the commit-evidence check passes deterministically.
+BEAD="obsidian-im0p"
+if ! grep -qF "$BEAD" "$1"; then
+    sed -i "1s/$/ ($BEAD)/" "$1"
+fi
