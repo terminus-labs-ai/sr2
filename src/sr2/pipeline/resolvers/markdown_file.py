@@ -12,7 +12,7 @@ from sr2.models import TextBlock
 from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import ResolvedContent
-from sr2.pipeline.token_counting import CHARS_PER_TOKEN, CharacterTokenCounter
+from sr2.pipeline.token_counting import CHARS_PER_TOKEN
 from sr2.pipeline.utils import PHASE_MAP, build_subscriptions
 
 if TYPE_CHECKING:
@@ -266,7 +266,6 @@ class MarkdownFileResolver:
         contents: list[tuple[Path, str]], max_tokens: int
     ) -> None:
         """Raise MarkdownTokenBudgetError if total tokens exceed max_tokens."""
-        counter = CharacterTokenCounter()
         per_file: list[tuple[Path, int]] = []
         total = 0
         for path, text in contents:
