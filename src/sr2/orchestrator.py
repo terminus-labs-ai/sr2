@@ -147,6 +147,8 @@ def _build_layer(
         provenance_store=provenance_store,
         degradation_category=layer_config.degradation_category,
         priority=layer_config.priority,
+        condition=layer_config.condition,
+        run_context_provider=deps.run_context_provider,
     )
 
 

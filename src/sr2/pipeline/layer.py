@@ -111,6 +111,8 @@ class Layer:
         tracer: "Tracer | None" = None,
         degradation_category: str | None = None,
         priority: int = 0,
+        condition: str | None = None,
+        run_context_provider: Callable[[], dict[str, str] | None] | None = None,
     ) -> None:
         self.name = name
         self.target = target
@@ -142,6 +144,12 @@ class Layer:
         # Degradation metadata (FR2 — sr2-82)
         self.degradation_category: str | None = degradation_category
         self.priority: int = priority
+
+        # Layer condition (obsidian-8h0z) — run-context key that gates this layer.
+        # When set, the layer only renders when the run context has a non-empty
+        # string for that key.  None (default) means always active.
+        self.condition: str | None = condition
+        self._run_context_provider: Callable[[], dict[str, str] | None] | None = run_context_provider
 
     # -- wiring ---------------------------------------------------------------
 
@@ -226,6 +234,30 @@ class Layer:
             if comp.execution_count > 0 and comp.execution_count < comp.max_executions:
                 return False
         return True
+
+    # -- layer condition (obsidian-8h0z) --------------------------------------
+
+    def is_active(self) -> bool:
+        """Return True when this layer should participate in the current turn.
+
+        A layer with no ``condition`` is always active (regression-safe).
+        A layer with a condition (e.g. ``"area"``) is active only when the
+        run context contains a non-empty string for that key.
+
+        The condition is evaluated against the *current* run context at call
+        time, so the same layer instance can be active on one turn and
+        inactive on the next (e.g. area present in a channel turn, absent in
+        a DM turn).
+        """
+        if self.condition is None:
+            return True
+        if self._run_context_provider is None:
+            return False
+        ctx = self._run_context_provider()
+        if ctx is None:
+            return False
+        value = ctx.get(self.condition)
+        return isinstance(value, str) and value != ""
 
     # -- eligibility filter ---------------------------------------------------
 
