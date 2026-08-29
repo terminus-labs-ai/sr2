@@ -173,9 +173,16 @@ class PipelineEngine:
         await self.run_loop()
 
     async def _process_layers(self) -> bool:
-        """Process pending events in all layers. Returns True if any work done."""
+        """Process pending events in all layers. Returns True if any work done.
+
+        Layers whose condition (obsidian-8h0z) is not satisfied by the current
+        run context are skipped entirely — their resolvers/transformers do not
+        fire and they contribute no content.
+        """
         any_changed = False
         for layer in self._layers:
+            if not layer.is_active():
+                continue
             changed = await layer.process_pending()
             if changed:
                 any_changed = True
@@ -198,6 +205,10 @@ class PipelineEngine:
         )
 
         for layer in self._layers:
+            # obsidian-8h0z: Skip layers whose condition is not satisfied
+            if not layer.is_active():
+                continue
+
             # FR5: Skip layers whose category is not active
             if active_cats is not None and layer.degradation_category is not None:
                 if layer.degradation_category not in active_cats:
@@ -285,6 +296,10 @@ class PipelineEngine:
         warnings: List[str] = []
 
         for layer in self._layers:
+            # obsidian-8h0z: Inactive layers contribute nothing — omit from metrics
+            if not layer.is_active():
+                continue
+
             content = layer.get_content()
             tokens_used = self.token_counter.count(content)
             total_tokens += tokens_used
