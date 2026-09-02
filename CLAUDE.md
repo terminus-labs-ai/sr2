@@ -40,6 +40,7 @@
       utils.py                  # build_subscriptions(), extract_user_input_text(), PHASE_MAP
       resolvers/
         static.py               # StaticResolver — fixed text from config
+        static_text.py          # StaticTextResolver — config text with {area} interpolation
         input.py                # InputResolver — wraps user_input event as Message
         session.py              # SessionResolver — accumulates conversation history across turns
         event_payload.py        # EventPayloadResolver — surfaces event.data as provenance entries
@@ -92,6 +93,8 @@ input = "sr2.pipeline.resolvers.input:InputResolver"
 session = "sr2.pipeline.resolvers.session:SessionResolver"
 event_payload = "sr2.pipeline.resolvers.event_payload:EventPayloadResolver"
 memory = "sr2.memory.memory_resolver:MemoryResolver"
+markdown_file = "sr2.pipeline.resolvers.markdown_file:MarkdownFileResolver"
+static_text = "sr2.pipeline.resolvers.static_text:StaticTextResolver"
 
 [project.entry-points."sr2.transformers"]
 summarize = "sr2.pipeline.transformers.summarization:SummarizationTransformer"
@@ -176,10 +179,12 @@ Each component also exposes `subscriptions: list[EventSubscription]`, `max_execu
 | Name | Entry point key | Trigger | Output |
 |---|---|---|---|
 | `StaticResolver` | `static` | `turn_start` | Fixed `TextBlock` from config |
+| `StaticTextResolver` | `static_text` | `turn_start` | Config `TextBlock` with `{area}` interpolation |
 | `InputResolver` | `input` | `user_input` | `Message(role='user')` wrapping event data |
 | `SessionResolver` | `session` | `user_input` + `assistant_response` | Prior turn history as `list[Message]` |
 | `EventPayloadResolver` | `event_payload` | configurable | Event payload blocks as provenance entries |
 | `MemoryResolver` | `memory` | `user_input` | Matched memories as `TextBlock` |
+| `MarkdownFileResolver` | `markdown_file` | `turn_start` | Markdown files loaded from config |
 
 ### Built-in Transformers
 
