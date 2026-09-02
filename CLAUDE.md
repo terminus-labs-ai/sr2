@@ -215,6 +215,7 @@ class LayerConfig(BaseModel):
     tool_providers: list[ToolProviderConfig] | None = None
     target: str                  # required: "system" | "messages" | "tools"
     position: str = "append"     # "append" | "prefix"
+    condition: str | None = None  # run-context key required for layer participation
 
 class ResolverConfig(BaseModel):
     type: str                    # entry-point key (e.g. "static", "session")
@@ -225,6 +226,10 @@ class ResolverConfig(BaseModel):
 ```
 
 `config` dicts use `_LiveDict` — Pydantic does not copy them, so hot-reload works correctly.
+
+When `condition` is set, the layer participates only if the current run
+context contains a non-empty string for that key. A layer with no condition
+participates on every turn.
 
 ### LLM Integration
 

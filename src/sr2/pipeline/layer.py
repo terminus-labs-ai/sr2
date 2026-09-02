@@ -111,6 +111,8 @@ class Layer:
         tracer: "Tracer | None" = None,
         degradation_category: str | None = None,
         priority: int = 0,
+        condition: str | None = None,
+        run_context_provider: Callable[[], dict[str, str] | None] | None = None,
     ) -> None:
         self.name = name
         self.target = target
@@ -142,6 +144,9 @@ class Layer:
         # Degradation metadata (FR2 — sr2-82)
         self.degradation_category: str | None = degradation_category
         self.priority: int = priority
+
+        self.condition: str | None = condition
+        self._run_context_provider = run_context_provider
 
     # -- wiring ---------------------------------------------------------------
 
@@ -226,6 +231,23 @@ class Layer:
             if comp.execution_count > 0 and comp.execution_count < comp.max_executions:
                 return False
         return True
+
+    def is_active(self) -> bool:
+        """Return whether this layer participates in the current run context.
+
+        A conditioned layer requires a non-empty string for its condition key.
+        The provider is called for each evaluation so later turns can use a
+        different run context.
+        """
+        if self.condition is None:
+            return True
+        if self._run_context_provider is None:
+            return False
+        context = self._run_context_provider()
+        if context is None:
+            return False
+        value = context.get(self.condition)
+        return isinstance(value, str) and value != ""
 
     # -- eligibility filter ---------------------------------------------------
 

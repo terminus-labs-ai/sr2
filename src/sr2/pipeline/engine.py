@@ -176,6 +176,8 @@ class PipelineEngine:
         """Process pending events in all layers. Returns True if any work done."""
         any_changed = False
         for layer in self._layers:
+            if not layer.is_active():
+                continue
             changed = await layer.process_pending()
             if changed:
                 any_changed = True
@@ -198,6 +200,9 @@ class PipelineEngine:
         )
 
         for layer in self._layers:
+            if not layer.is_active():
+                continue
+
             # FR5: Skip layers whose category is not active
             if active_cats is not None and layer.degradation_category is not None:
                 if layer.degradation_category not in active_cats:
@@ -285,6 +290,9 @@ class PipelineEngine:
         warnings: List[str] = []
 
         for layer in self._layers:
+            if not layer.is_active():
+                continue
+
             content = layer.get_content()
             tokens_used = self.token_counter.count(content)
             total_tokens += tokens_used
