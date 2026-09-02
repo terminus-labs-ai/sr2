@@ -129,9 +129,7 @@ class MarkdownFileResolver:
         self._files: list[Path] = self._expand_and_sort(resolved_path)
 
         if not self._files:
-            raise FileNotFoundError(
-                f"MarkdownFileResolver: no files matched pattern {resolved_path!r}"
-            )
+            raise FileNotFoundError(self._no_files_message(resolved_path))
 
         # Read all file contents now (at init) so token counting can happen.
         self._contents: list[tuple[Path, str]] = [
@@ -180,9 +178,7 @@ class MarkdownFileResolver:
     def _handle_missing(self, pattern: str) -> str:
         """Apply the on_missing branch: raise (error) or warn+empty (skip)."""
         if self._on_missing == "error":
-            raise FileNotFoundError(
-                f"MarkdownFileResolver: no files matched pattern {pattern!r}"
-            )
+            raise FileNotFoundError(self._no_files_message(pattern))
         logger.warning(
             "MarkdownFileResolver: no files matched pattern %r; returning empty content",
             pattern,
@@ -240,6 +236,11 @@ class MarkdownFileResolver:
     # ------------------------------------------------------------------
     # Internal helpers — shared
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _no_files_message(pattern: str) -> str:
+        """Shared FileNotFoundError text for an unmatched pattern."""
+        return f"MarkdownFileResolver: no files matched pattern {pattern!r}"
 
     @staticmethod
     def _resolve_path(raw_path: str, declaring_dir: str | None) -> str:
