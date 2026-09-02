@@ -107,6 +107,12 @@ class LayerConfig(BaseModel):
   position: str = "append"
   degradation_category: str | None = None
   priority: int = 0
+  condition: str | None = None
+  """Run-context key required for this layer to participate.
+
+  When set, the layer is active only when the current run context contains a
+  non-empty string for this key. A ``None`` condition leaves the layer active.
+  """
 
 
 class PipelineConfig(BaseModel):
