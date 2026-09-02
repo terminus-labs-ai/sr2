@@ -160,7 +160,7 @@ via Python entry points — nothing activates unless your config names it:
 
 | Group | Protocol | Built-ins |
 |---|---|---|
-| `sr2.resolvers` | `Resolver` | `static`, `input`, `session`, `event_payload`, `memory` |
+| `sr2.resolvers` | `Resolver` | `static`, `input`, `session`, `event_payload`, `memory`, `markdown_file`, `static_text` |
 | `sr2.transformers` | `Transformer` | `summarize`, `memory_extraction`, `compaction` |
 | `sr2.extractors` | `MemoryExtractor` | `rule_based` |
 | `sr2.tool_providers` | `ToolProvider` | *(extension point; no built-ins yet)* |
