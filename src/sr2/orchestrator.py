@@ -44,6 +44,27 @@ logger = logging.getLogger(__name__)
 # FR1: Type alias for the tool executor callable.
 ToolExecutor = Callable[[ToolUseBlock], Awaitable[ToolResultBlock]]
 
+
+def _malformed_tool_call_message(tool_name: str, meta: Mapping[str, Any]) -> str:
+  """Build the tool result a model receives when its tool-call arguments fail to parse.
+
+  obsidian-1fmv: keeps the turn alive. The message distinguishes a hard
+  stop (invalid JSON) from a soft one (the call was cut off by the output
+  token limit, i.e. finish_reason "length"), so the model knows whether it
+  should retry with valid arguments or a shorter payload.
+  """
+  error = meta.get("error") or "unparseable arguments"
+  if meta.get("truncated"):
+    return (
+      f"Tool call '{tool_name}' was truncated by the output length limit "
+      f"before its arguments were complete (arguments ended mid-JSON: {error}). "
+      "The call was not executed. Retry with a shorter or split-up argument payload."
+    )
+  return (
+    f"Tool call '{tool_name}' was not executed: its arguments are invalid JSON "
+    f"(parse error: {error}). Retry with valid JSON arguments."
+  )
+
 # sr2-37: Placeholder text used when the LLM returns an empty response twice
 # in a row (original + one retry). Stored in history like normal final text.
 EMPTY_RESPONSE_PLACEHOLDER = "[empty model response]"
@@ -64,8 +85,15 @@ class ToolIterationResult:
     text: str
     """Concatenated text from LLM stream events in this iteration."""
 
+    had_tool_events: bool = False
+    """obsidian-1fmv: the LLM emitted at least one tool_use stream event in this
+    iteration. Distinct from ``tool_use_blocks`` — malformed tool calls are
+    excluded from ``tool_use_blocks`` (they are not executed) yet still make
+    the iteration a tool-use iteration that must feed back a tool result."""
+
     tool_use_blocks: list[ToolUseBlock] = field(default_factory=list)
-    """Tool-use blocks extracted from the LLM response (empty → final iteration)."""
+    """Tool-use blocks extracted from the LLM response that are valid enough to
+    execute (empty → nothing to run this iteration)."""
 
     tool_result_blocks: list[ToolResultBlock] = field(default_factory=list)
     """Results from executing the tool-use blocks (empty if final or no executor)."""
@@ -290,7 +318,11 @@ class SR2:
         "No real text" means empty or whitespace-only — thinking-only output
         produces no text events, so it also counts as empty.
         """
-        return not iteration.tool_use_blocks and not iteration.text.strip()
+        return (
+            not iteration.had_tool_events
+            and not iteration.tool_use_blocks
+            and not iteration.text.strip()
+        )
 
     async def _execute_tools(
         self,
@@ -445,21 +477,44 @@ class SR2:
             )
 
         # Build all ToolUseBlocks in order (preserves mapping for result ordering).
+        # obsidian-1fmv: tool calls whose arguments failed to parse are flagged by
+        # the LLM integration via ``meta["invalid_arguments"]``. They are kept in
+        # the assistant message (so the wire pairs their tool result) but never
+        # sent to the executor — the model receives a tool result explaining the
+        # failure and can retry.
         tool_use_blocks: list[ToolUseBlock] = []
+        tool_result_blocks: list[ToolResultBlock] = []
         for tu_event in iter_tool_use:
+            tu_meta = tu_event.meta or {}
             tool_block = ToolUseBlock(
                 id=tu_event.tool_use_id,
                 name=tu_event.tool_name,
                 input=tu_event.tool_input,
             )
+            if tu_meta:
+                tool_block.meta.update(tu_meta)
             self._stamp_block(tool_block, origin)
             assistant_content.append(tool_block)
-            tool_use_blocks.append(tool_block)
+            if tu_meta.get("invalid_arguments"):
+                malformed_result = ToolResultBlock(
+                    tool_use_id=tu_event.tool_use_id,
+                    content=_malformed_tool_call_message(
+                        tool_name=tu_event.tool_name,
+                        meta=tu_meta,
+                    ),
+                    is_error=True,
+                )
+                self._stamp_block(malformed_result, origin)
+                tool_result_blocks.append(malformed_result)
+            else:
+                tool_use_blocks.append(tool_block)
 
-        # Execute tools concurrently.
-        tool_result_blocks = await self._execute_tools(tool_use_blocks, origin)
+        # Execute (valid) tools concurrently.
+        if tool_use_blocks:
+            tool_result_blocks.extend(await self._execute_tools(tool_use_blocks, origin))
 
         return ToolIterationResult(
+            had_tool_events=True,
             text=full_iter_text,
             tool_use_blocks=tool_use_blocks,
             tool_result_blocks=tool_result_blocks,
@@ -592,9 +647,12 @@ class SR2:
                     yield StreamEvent(type="end")
                     return
 
-            if not iteration.tool_use_blocks:
+            if not iteration.had_tool_events:
                 # ---------------------------------------------------------------
-                # Final iteration — no more tool calls
+                # Final iteration — no more tool calls. Uses had_tool_events (not
+                # tool_use_blocks) so an iteration where every tool call was
+                # malformed is not mistaken for a final text-only response: it
+                # still feeds a tool result back to the model (obsidian-1fmv).
                 # ---------------------------------------------------------------
                 content: list = []
                 if iteration.text:

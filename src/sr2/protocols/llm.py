@@ -31,6 +31,13 @@ class StreamEvent(BaseModel):
   tool_results: list[ToolResultBlock] | None = None
   iteration: int | None = None
   errors: list[str] | None = None
+  meta: dict[str, Any] | None = None
+  """obsidian-1fmv: per-event side-channel metadata.
+
+  The LLM integration uses this to flag tool calls whose arguments failed to
+  parse (``{"invalid_arguments": True, ...}``) so the orchestrator can answer
+  them with an explanatory tool result instead of executing a bogus call.
+  """
 
 
 @runtime_checkable
