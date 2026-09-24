@@ -518,3 +518,100 @@ class TestSessionHistoryStaysPairedAcrossTurns:
     assert _unpaired_tool_results(turn2_request) == []
     assert _unanswered_tool_calls(turn2_request) == []
     assert _tool_messages(turn2_request) == {"tc_ok": "EXECUTED list_dir"}
+
+
+# ---------------------------------------------------------------------------
+# AC 5 — text alongside tool calls: history and tool_use_emitted unchanged
+# ---------------------------------------------------------------------------
+
+
+def _text_then_tool_calls(text: str, calls: list[tuple[str, str, str]]) -> list[MagicMock]:
+  return [_chunk(_delta(content=text))] + _tool_call_stream(calls)
+
+
+class TestTextWithToolCallsUnchanged:
+  @pytest.mark.asyncio
+  async def test_text_plus_valid_call_next_turn_history_matches_pre_change_behavior(self):
+    fake = _FakeLiteLLM([
+      _text_then_tool_calls("Let me look.", [("tc_ok", "list_dir", '{"path": "/vault"}')]),
+      _text_stream("Scanned."),
+      _text_stream("Summary."),
+    ])
+
+    turn2_request = await _run_two_turns(fake, _RecordingExecutor())
+
+    # Captured from the pre-change code (aa7229e) for this exact scenario.
+    non_system = [m for m in turn2_request["messages"] if m["role"] != "system"]
+    assert non_system == [
+      {"role": "user", "content": "scan the vault"},
+      {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+          {
+            "id": "tc_ok",
+            "type": "function",
+            "function": {"name": "list_dir", "arguments": '{"path": "/vault"}'},
+          }
+        ],
+      },
+      {"role": "tool", "tool_call_id": "tc_ok", "content": "EXECUTED list_dir"},
+      {"role": "assistant", "content": "Scanned."},
+      {"role": "user", "content": "now summarize"},
+    ]
+
+
+async def _tool_use_emitted_payloads(fake: _FakeLiteLLM) -> list[list]:
+  """Run one turn and return the data of every tool_use_emitted engine-bus event."""
+  from sr2.orchestrator import SR2
+
+  sr2 = SR2(
+    pipeline_config=make_minimal_config(),
+    llm=LiteLLMCallable("test-model"),
+    token_counter=CharacterTokenCounter(),
+    tool_executor=_RecordingExecutor(),
+  )
+  collected: list = []
+  sr2.bus.subscribe("tool_use_emitted", lambda e: collected.append(e))
+  with patch("litellm.acompletion", new=fake):
+    [e async for e in sr2.turn(make_user_input("scan the vault"))]
+  return [e.data for e in collected]
+
+
+class TestToolUseEmittedBusPayload:
+  @pytest.mark.asyncio
+  async def test_text_plus_valid_call_payload_holds_only_tool_use_blocks(self):
+    fake = _FakeLiteLLM([
+      _text_then_tool_calls("Let me look.", [("tc_ok", "list_dir", '{"path": "/vault"}')]),
+      _text_stream("Scanned."),
+    ])
+
+    payloads = await _tool_use_emitted_payloads(fake)
+
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert all(isinstance(b, ToolUseBlock) for b in payload), (
+      f"tool_use_emitted data must be a list of ToolUseBlock only, got {[type(b).__name__ for b in payload]}"
+    )
+    assert [(b.id, b.name, b.input) for b in payload] == [("tc_ok", "list_dir", {"path": "/vault"})]
+
+  @pytest.mark.asyncio
+  async def test_text_plus_mixed_calls_payload_holds_only_tool_use_blocks_including_malformed(self):
+    fake = _FakeLiteLLM([
+      _text_then_tool_calls("Let me look.", [
+        ("tc_good", "list_dir", '{"path": "/vault"}'),
+        ("tc_bad", "read_file", UNTERMINATED),
+      ]),
+      _text_stream("Scanned."),
+    ])
+
+    payloads = await _tool_use_emitted_payloads(fake)
+
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert all(isinstance(b, ToolUseBlock) for b in payload), (
+      f"tool_use_emitted data must be a list of ToolUseBlock only, got {[type(b).__name__ for b in payload]}"
+    )
+    assert {b.id for b in payload} == {"tc_good", "tc_bad"}, (
+      "every tool call, malformed ones included, must be in tool_use_emitted"
+    )
