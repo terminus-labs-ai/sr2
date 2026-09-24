@@ -1,12 +1,39 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 import litellm
 
 from sr2.models import TextBlock, TokenUsage, ToolUseBlock, ToolResultBlock
 from sr2.protocols.llm import CompletionRequest, CompletionResponse, StreamEvent
+
+logger = logging.getLogger(__name__)
+
+# obsidian-1fmv: cap on raw argument text kept in WARNING logs.
+RAW_ARG_LOG_LIMIT = 2000
+
+
+def _finish_reason_text(value: object) -> str:
+  """Normalise a finish_reason to a log-safe string."""
+  if value is None:
+    return "unknown"
+  if isinstance(value, str):
+    return value
+  return "unknown"
+
+
+def _safe_parse_tool_arguments(arguments: str) -> tuple[dict | None, str | None]:
+  """json.loads for tool-call arguments that survives invalid JSON.
+
+  Returns (parsed, None) on success, (None, error_message) on failure.
+  """
+  try:
+    return json.loads(arguments), None
+  except (json.JSONDecodeError, TypeError) as exc:
+    return None, str(exc)
 
 
 class LiteLLMCallable:
@@ -107,12 +134,43 @@ class LiteLLMCallable:
       content: list = []
       if choice.message.content:
         content.append(TextBlock(text=choice.message.content))
+      finish_reason = _finish_reason_text(choice.finish_reason)
       for tc in tool_calls:
-        content.append(ToolUseBlock(
-          id=tc.id,
-          name=tc.function.name,
-          input=json.loads(tc.function.arguments),
-        ))
+        name = tc.function.name
+        arguments = tc.function.arguments
+        parsed, parse_error = _safe_parse_tool_arguments(arguments)
+        if parsed is not None:
+          content.append(ToolUseBlock(id=tc.id, name=name, input=parsed))
+          continue
+        truncated = choice.finish_reason == "length"
+        if truncated:
+          logger.warning(
+            "truncated tool call (finish_reason=length): tool=%s error=%s raw=%r",
+            name,
+            parse_error,
+            arguments[:RAW_ARG_LOG_LIMIT],
+          )
+        else:
+          logger.warning(
+            "invalid tool-call arguments: tool=%s finish_reason=%s error=%s raw=%r",
+            name,
+            finish_reason,
+            parse_error,
+            arguments[:RAW_ARG_LOG_LIMIT],
+          )
+        content.append(
+          ToolUseBlock(
+            id=tc.id,
+            name=name,
+            input={},
+            meta={
+              "invalid_arguments": True,
+              "truncated": truncated,
+              "error": parse_error,
+              "raw_arguments": arguments[:RAW_ARG_LOG_LIMIT],
+            },
+          )
+        )
       stop_reason = "tool_use"
     else:
       content = [TextBlock(text=choice.message.content or "")]
@@ -142,10 +200,17 @@ class LiteLLMCallable:
 
     # index → {"id": str, "name": str, "arguments": str}
     tool_call_acc: dict[int, dict] = {}
+    finish_reason: str | None = None
 
     async for chunk in response:
       if chunk.choices:
-        delta = chunk.choices[0].delta
+        choice = chunk.choices[0]
+        delta = choice.delta
+
+        # obsidian-1fmv: record finish_reason so malformed/truncated tool
+        # calls can be reported accurately.
+        if choice.finish_reason is not None:
+          finish_reason = choice.finish_reason
 
         # Text content
         if delta.content:
@@ -180,13 +245,57 @@ class LiteLLMCallable:
           ),
         )
 
+    # obsidian-1fmv: finish_reason "length" with pending tool calls means the
+    # model was cut off — a truncation, not an invalid-arguments case.
+    length_finish = finish_reason == "length" and bool(tool_call_acc)
+    if length_finish:
+      logger.warning(
+        "stream ended with finish_reason=length while %d tool call(s) were pending — "
+        "reporting as truncation",
+        len(tool_call_acc),
+      )
+
+    # Parse accumulated tool calls without raising on invalid JSON — the
+    # orchestrator converts unparseable calls into tool results that tell the
+    # model to retry.
     for idx in sorted(tool_call_acc):
       acc = tool_call_acc[idx]
+      parsed, parse_error = _safe_parse_tool_arguments(acc["arguments"])
+      if parsed is not None:
+        meta: dict[str, Any] = {}
+        if length_finish:
+          # Arguments are complete, but the stop was length-driven — tag the
+          # event so callers can see the call arrived at a length boundary.
+          meta["truncated"] = True
+        yield StreamEvent(
+          type="tool_use",
+          tool_use_id=acc["id"],
+          tool_name=acc["name"],
+          tool_input=parsed,
+          meta=meta,
+        )
+        continue
+
+      meta: dict[str, Any] = {
+        "invalid_arguments": True,
+        "error": parse_error,
+        "raw_arguments": acc["arguments"][:RAW_ARG_LOG_LIMIT],
+      }
+      if length_finish:
+        meta["truncated"] = True
+      logger.warning(
+        "invalid tool-call arguments: tool=%s finish_reason=%s error=%s raw=%r",
+        acc["name"],
+        _finish_reason_text(finish_reason),
+        parse_error,
+        acc["arguments"][:RAW_ARG_LOG_LIMIT],
+      )
       yield StreamEvent(
         type="tool_use",
         tool_use_id=acc["id"],
         tool_name=acc["name"],
-        tool_input=json.loads(acc["arguments"]),
+        tool_input={},
+        meta=meta,
       )
 
     yield StreamEvent(type="end")
