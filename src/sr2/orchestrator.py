@@ -693,12 +693,17 @@ class SR2:
             assistant_content = iteration.assistant_content
 
             # FR9: Queue tool_use_emitted on the engine bus (internal subscribers).
+            # obsidian-1fmv: data carries the full assistant content (text + all
+            # tool blocks, including malformed ones) — matching the assistant
+            # message appended to the next request — so SessionResolver history
+            # stays paired with tool_result_received: every tool result must
+            # follow an assistant tool_calls entry carrying its id on the wire.
             self._engine.bus.queue(
                 Event(
                     name="tool_use_emitted",
                     phase=EventPhase.COMPLETED,
                     source_layer="orchestrator",
-                    data=tool_use_blocks,
+                    data=list(assistant_content),
                     iteration_seq=iteration_seq,
                 )
             )
