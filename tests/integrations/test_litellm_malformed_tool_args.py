@@ -412,3 +412,109 @@ class TestValidToolCallUnchanged:
     assert [(b.id, b.name, b.input) for b in executor.blocks] == [("tc_ok", "list_dir", args)]
     assert _tool_messages(fake.calls[1]) == {"tc_ok": "EXECUTED list_dir"}
     assert "list_dir" not in _warning_text(caplog)
+
+
+# ---------------------------------------------------------------------------
+# AC 1 + AC 5 — the conversation stays protocol-valid across turns
+# ---------------------------------------------------------------------------
+
+
+def _unpaired_tool_results(call_kwargs: dict) -> list[str]:
+  """tool_call_ids of tool messages with no matching id in a PRECEDING assistant tool_calls."""
+  seen: set[str] = set()
+  orphans: list[str] = []
+  for m in call_kwargs["messages"]:
+    if m.get("role") == "assistant":
+      for tc in m.get("tool_calls") or []:
+        seen.add(tc["id"])
+    elif m.get("role") == "tool" and m["tool_call_id"] not in seen:
+      orphans.append(m["tool_call_id"])
+  return orphans
+
+
+def _unanswered_tool_calls(call_kwargs: dict) -> list[str]:
+  """Assistant tool_calls ids with no LATER tool message carrying that tool_call_id."""
+  pending: list[str] = []
+  for m in call_kwargs["messages"]:
+    if m.get("role") == "assistant":
+      pending.extend(tc["id"] for tc in m.get("tool_calls") or [])
+    elif m.get("role") == "tool" and m["tool_call_id"] in pending:
+      pending.remove(m["tool_call_id"])
+  return pending
+
+
+async def _run_two_turns(fake: _FakeLiteLLM, executor: _RecordingExecutor) -> dict:
+  """Run two user turns on one SR2 session; return the kwargs of the final LLM call."""
+  from sr2.orchestrator import SR2
+
+  sr2 = SR2(
+    pipeline_config=make_minimal_config(),
+    llm=LiteLLMCallable("test-model"),
+    token_counter=CharacterTokenCounter(),
+    tool_executor=executor,
+  )
+  with patch("litellm.acompletion", new=fake):
+    turn1 = [e async for e in sr2.turn(make_user_input("scan the vault"))]
+    assert turn1[-1].type == "end"
+    turn2 = [e async for e in sr2.turn(make_user_input("now summarize"))]
+    assert turn2[-1].type == "end"
+  return fake.calls[-1]
+
+
+class TestSessionHistoryStaysPairedAcrossTurns:
+  @pytest.mark.asyncio
+  async def test_mixed_batch_every_tool_result_in_next_turn_is_paired(self):
+    fake = _FakeLiteLLM([
+      _tool_call_stream([
+        ("tc_good", "list_dir", '{"path": "/vault"}'),
+        ("tc_bad", "read_file", UNTERMINATED),
+      ]),
+      _text_stream("Scanned."),
+      _text_stream("Summary."),
+    ])
+
+    turn2_request = await _run_two_turns(fake, _RecordingExecutor())
+
+    assert len(fake.calls) == 3
+    assert _unpaired_tool_results(turn2_request) == [], (
+      "every tool result in the next turn's history must follow an assistant tool_calls entry with its id"
+    )
+    assert _unanswered_tool_calls(turn2_request) == [], (
+      "every assistant tool_calls entry in the next turn's history must have a later tool result"
+    )
+    assert {"tc_good", "tc_bad"} <= _assistant_tool_call_ids(turn2_request)
+
+  @pytest.mark.asyncio
+  async def test_all_malformed_batch_every_tool_result_in_next_turn_is_paired(self):
+    fake = _FakeLiteLLM([
+      _tool_call_stream([("tc_bad", "read_file", UNTERMINATED)]),
+      _text_stream("Retried."),
+      _text_stream("Summary."),
+    ])
+
+    turn2_request = await _run_two_turns(fake, _RecordingExecutor())
+
+    assert len(fake.calls) == 3
+    assert _unpaired_tool_results(turn2_request) == [], (
+      "every tool result in the next turn's history must follow an assistant tool_calls entry with its id"
+    )
+    assert _unanswered_tool_calls(turn2_request) == [], (
+      "every assistant tool_calls entry in the next turn's history must have a later tool result"
+    )
+    assert "tc_bad" in _assistant_tool_call_ids(turn2_request), (
+      "the malformed call must remain in the assistant tool_calls history"
+    )
+
+  @pytest.mark.asyncio
+  async def test_valid_batch_every_tool_result_in_next_turn_is_paired(self):
+    fake = _FakeLiteLLM([
+      _tool_call_stream([("tc_ok", "list_dir", '{"path": "/vault"}')]),
+      _text_stream("Scanned."),
+      _text_stream("Summary."),
+    ])
+
+    turn2_request = await _run_two_turns(fake, _RecordingExecutor())
+
+    assert _unpaired_tool_results(turn2_request) == []
+    assert _unanswered_tool_calls(turn2_request) == []
+    assert _tool_messages(turn2_request) == {"tc_ok": "EXECUTED list_dir"}
