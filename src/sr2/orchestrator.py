@@ -615,6 +615,11 @@ class SR2:
                     # so a tool call from the retry belongs to this iteration.
                     empty_retry_used = True
                     logger.warning("empty LLM response — retrying the request once")
+                    yield StreamEvent(
+                        type="retry",
+                        iteration=iteration_seq,
+                        meta={"reason": "empty_response", "attempt": 1},
+                    )
                     iteration = await self._run_tool_iteration(
                         current_request, iteration_seq, origin
                     )
