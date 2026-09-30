@@ -298,4 +298,4 @@ class LiteLLMCallable:
         meta=meta,
       )
 
-    yield StreamEvent(type="end")
+    yield StreamEvent(type="end", meta={"finish_reason": finish_reason})
