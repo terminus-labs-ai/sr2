@@ -195,3 +195,50 @@ class TestStreamEventSerialization:
         data = event.model_dump()
         assert data["type"] == "usage"
         assert data["usage"]["input_tokens"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 5. sr2-111: model lifecycle signals — per-call end finish_reason + retry
+# ---------------------------------------------------------------------------
+
+
+class TestStreamEventLifecycleSignals:
+    def test_end_event_carries_finish_reason_in_meta(self):
+        event = StreamEvent(type="end", meta={"finish_reason": "stop"})
+        assert event.type == "end"
+        assert event.meta["finish_reason"] == "stop"
+
+    def test_end_event_finish_reason_may_be_none(self):
+        event = StreamEvent(type="end", meta={"finish_reason": None})
+        assert "finish_reason" in event.meta
+        assert event.meta["finish_reason"] is None
+
+    def test_retry_is_a_valid_event_type(self):
+        event = StreamEvent(type="retry")
+        assert event.type == "retry"
+
+    def test_retry_event_carries_iteration_and_reason(self):
+        event = StreamEvent(
+            type="retry",
+            iteration=2,
+            meta={"reason": "empty_response", "attempt": 1},
+        )
+        assert event.type == "retry"
+        assert event.iteration == 2
+        assert event.meta["reason"] == "empty_response"
+        assert event.meta["attempt"] == 1
+
+    def test_retry_event_round_trip(self):
+        original = StreamEvent(
+            type="retry",
+            iteration=0,
+            meta={"reason": "empty_response", "attempt": 1},
+        )
+        restored = StreamEvent.model_validate(original.model_dump())
+        assert restored == original
+
+    def test_end_event_with_finish_reason_round_trip(self):
+        original = StreamEvent(type="end", meta={"finish_reason": "tool_calls"})
+        restored = StreamEvent.model_validate(original.model_dump())
+        assert restored == original
+        assert restored.meta == {"finish_reason": "tool_calls"}

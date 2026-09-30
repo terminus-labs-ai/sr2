@@ -521,3 +521,203 @@ class TestRetryDoesNotConsumeIteration:
             f"Retry's tool call must execute in the same iteration and the "
             f"loop must finish normally. Yielded: {_yielded_text(events)!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# sr2-111: explicit empty_response retry event on the public turn() stream
+# ---------------------------------------------------------------------------
+
+
+class _OrderRecordingLLM(SequentialMockLLM):
+    """SequentialMockLLM that records, at the start of each stream() call,
+    how many turn() events the consumer had already received."""
+
+    def __init__(self, call_sequences, received: list[StreamEvent]) -> None:
+        super().__init__(call_sequences)
+        self._received = received
+        self.received_at_call: list[int] = []
+
+    async def stream(self, request):
+        self.received_at_call.append(len(self._received))
+        async for event in super().stream(request):
+            yield event
+
+
+async def _drain_recording(sr2, received: list[StreamEvent], text: str = "Hello") -> list[StreamEvent]:
+    start = len(received)
+    async for event in sr2.turn(make_user_input(text)):
+        received.append(event)
+    return received[start:]
+
+
+def _retry_events(events: list[StreamEvent]) -> list[StreamEvent]:
+    return [e for e in events if e.type == "retry"]
+
+
+def _assert_empty_response_retry(event: StreamEvent, iteration: int) -> None:
+    assert event.type == "retry"
+    assert event.iteration == iteration, (
+        f"retry event must name the current iteration {iteration}, got {event.iteration}"
+    )
+    assert event.meta is not None
+    assert event.meta.get("reason") == "empty_response"
+    assert event.meta.get("attempt") == 1
+
+
+class TestEmptyResponseRetryEvent:
+    @pytest.mark.asyncio
+    async def test_retry_event_yielded_immediately_before_repeated_call(self):
+        """The retry event is the last event the caller receives before the
+        repeated model call starts, and the retry's output follows it."""
+        received: list[StreamEvent] = []
+        llm = _OrderRecordingLLM(
+            [
+                _empty_sequence(),
+                [StreamEvent(type="text", text="Recovered answer."), StreamEvent(type="end")],
+            ],
+            received,
+        )
+        sr2 = _make_sr2(llm)
+
+        events = await _drain_recording(sr2, received)
+
+        retries = _retry_events(events)
+        assert len(retries) == 1, f"expected one retry event, got {[e.type for e in events]}"
+        retry_index = events.index(retries[0])
+        _assert_empty_response_retry(retries[0], iteration=0)
+
+        assert len(llm.received_at_call) == 2
+        assert llm.received_at_call[0] <= retry_index, (
+            "the original model call must start before the retry event is yielded"
+        )
+        assert llm.received_at_call[1] == retry_index + 1, (
+            "the retry event must be the last event yielded before the repeated "
+            f"model call; caller had received {llm.received_at_call[1]} events, "
+            f"retry event is at index {retry_index}"
+        )
+
+        text_indices = [i for i, e in enumerate(events) if e.type == "text"]
+        assert text_indices and all(i > retry_index for i in text_indices)
+        assert events[-1].type == "end"
+
+    @pytest.mark.asyncio
+    async def test_retry_event_names_current_iteration_after_tool_iteration(self):
+        """Tool iteration 0 completes, iteration 1 is empty → the retry event
+        carries iteration 1 and precedes the repeated call."""
+        received: list[StreamEvent] = []
+        llm = _OrderRecordingLLM(
+            [
+                [tool_use_event(tool_use_id="tc_1"), StreamEvent(type="end")],
+                _empty_sequence(),
+                [StreamEvent(type="text", text="Final after retry."), StreamEvent(type="end")],
+            ],
+            received,
+        )
+        sr2 = _make_sr2(llm, tool_executor=stub_executor)
+
+        events = await _drain_recording(sr2, received)
+
+        retries = _retry_events(events)
+        assert len(retries) == 1
+        retry_index = events.index(retries[0])
+        completes = [e for e in events if e.type == "iteration_complete"]
+        assert [e.iteration for e in completes] == [0]
+        assert events.index(completes[0]) < retry_index
+        _assert_empty_response_retry(retries[0], iteration=1)
+
+        assert len(llm.received_at_call) == 3
+        assert llm.received_at_call[2] == retry_index + 1, (
+            "the retry event must be the last event yielded before the repeated model call"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_event_emitted_when_retry_is_also_empty(self):
+        """Double empty: the retry still happens, so exactly one retry event
+        precedes it; the placeholder text follows the retry event."""
+        received: list[StreamEvent] = []
+        llm = _OrderRecordingLLM([_empty_sequence(), _empty_sequence()], received)
+        sr2 = _make_sr2(llm)
+
+        events = await _drain_recording(sr2, received)
+
+        retries = _retry_events(events)
+        assert len(retries) == 1
+        retry_index = events.index(retries[0])
+        _assert_empty_response_retry(retries[0], iteration=0)
+        assert llm.received_at_call[1] == retry_index + 1
+        placeholder_indices = [
+            i for i, e in enumerate(events) if e.type == "text" and PLACEHOLDER in e.text
+        ]
+        assert placeholder_indices and placeholder_indices[0] > retry_index
+        assert [e.type for e in events].count("end") == 1
+        assert events[-1].type == "end"
+
+    @pytest.mark.asyncio
+    async def test_no_retry_event_for_non_empty_response(self):
+        llm = MockLLM(events=[
+            StreamEvent(type="text", text="Normal answer."),
+            StreamEvent(type="end"),
+        ])
+        sr2 = _make_sr2(llm)
+
+        events = await _drain(sr2)
+
+        assert _retry_events(events) == []
+
+    @pytest.mark.asyncio
+    async def test_no_retry_event_for_tool_only_iteration(self):
+        """A tool-call iteration without text is not empty — no retry event."""
+        llm = SequentialMockLLM([
+            [tool_use_event(tool_use_id="tc_1"), StreamEvent(type="end")],
+            [StreamEvent(type="text", text="Done."), StreamEvent(type="end")],
+        ])
+        sr2 = _make_sr2(llm, tool_executor=stub_executor)
+
+        events = await _drain(sr2)
+
+        assert _retry_events(events) == []
+
+    @pytest.mark.asyncio
+    async def test_at_most_one_retry_event_per_turn(self):
+        """empty → retry (tool call) → empty again: the second empty iteration
+        finalizes without retrying, so only one retry event is yielded."""
+        llm = SequentialMockLLM([
+            _empty_sequence(),
+            [tool_use_event(tool_use_id="tc_1"), StreamEvent(type="end")],
+            _empty_sequence(),
+        ])
+        sr2 = _make_sr2(llm, tool_executor=stub_executor)
+
+        events = await _drain(sr2)
+
+        retries = _retry_events(events)
+        assert len(retries) == 1
+        _assert_empty_response_retry(retries[0], iteration=0)
+
+    @pytest.mark.asyncio
+    async def test_pathologically_empty_llm_yields_one_retry_event(self):
+        llm = SequentialMockLLM([_empty_sequence()] * 4)
+        sr2 = _make_sr2(llm)
+
+        events = await _drain(sr2)
+
+        assert len(_retry_events(events)) == 1
+
+    @pytest.mark.asyncio
+    async def test_each_turn_reports_its_own_retry_event(self):
+        """The retry budget resets per turn, and so does the retry event."""
+        llm = SequentialMockLLM([
+            _empty_sequence(),
+            [StreamEvent(type="text", text="Turn one."), StreamEvent(type="end")],
+            _empty_sequence(),
+            [StreamEvent(type="text", text="Turn two."), StreamEvent(type="end")],
+        ])
+        sr2 = _make_sr2(llm)
+
+        events1 = await _drain(sr2, "first")
+        events2 = await _drain(sr2, "second")
+
+        for events in (events1, events2):
+            retries = _retry_events(events)
+            assert len(retries) == 1
+            _assert_empty_response_retry(retries[0], iteration=0)

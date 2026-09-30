@@ -1297,3 +1297,152 @@ class TestStreamToolCallEvents:
 
     tool_events = [e for e in events if e.type == "tool_use"]
     assert len(tool_events) == 0
+
+
+# ---------------------------------------------------------------------------
+# sr2-111: stream — per-call end event carries the provider finish_reason
+# ---------------------------------------------------------------------------
+
+
+def _with_finish_reason(chunk: MagicMock, finish_reason: str | None) -> MagicMock:
+  """Pin choice.finish_reason on a chunk (MagicMock would otherwise auto-vivify it)."""
+  chunk.choices[0].finish_reason = finish_reason
+  return chunk
+
+
+def _usage_only_chunk(prompt_tokens: int = 7, completion_tokens: int = 2) -> MagicMock:
+  """A trailing provider chunk with no choices, only usage (OpenAI include_usage shape)."""
+  usage = MagicMock()
+  usage.prompt_tokens = prompt_tokens
+  usage.completion_tokens = completion_tokens
+  chunk = MagicMock()
+  chunk.choices = []
+  chunk.usage = usage
+  return chunk
+
+
+async def _stream_events(chunks: list[MagicMock]) -> list[StreamEvent]:
+  async def fake_acompletion(*args, **kwargs):
+    return _async_gen(*chunks)
+
+  with patch("litellm.acompletion", new=fake_acompletion):
+    client = LiteLLMCallable("model")
+    return [e async for e in client.stream(_make_request())]
+
+
+def _single_end(events: list[StreamEvent]) -> StreamEvent:
+  end_events = [e for e in events if e.type == "end"]
+  assert len(end_events) == 1, f"expected exactly one end event, got {len(end_events)}"
+  assert events[-1].type == "end", "end event must be the last event of the model call"
+  return end_events[0]
+
+
+class TestStreamEndEventFinishReason:
+  @pytest.mark.asyncio
+  async def test_stop_finish_reason_on_end_event(self):
+    events = await _stream_events([
+      _with_finish_reason(_make_stream_chunk(content="Hello"), None),
+      _with_finish_reason(_make_stream_chunk(content=None), "stop"),
+    ])
+
+    end = _single_end(events)
+    assert end.meta is not None
+    assert end.meta["finish_reason"] == "stop"
+
+  @pytest.mark.asyncio
+  async def test_length_finish_reason_on_end_event(self):
+    events = await _stream_events([
+      _with_finish_reason(_make_stream_chunk(content="cut off mid-sen"), "length"),
+    ])
+
+    end = _single_end(events)
+    assert end.meta is not None
+    assert end.meta["finish_reason"] == "length"
+
+  @pytest.mark.asyncio
+  async def test_tool_calls_finish_reason_on_end_event(self):
+    tool_chunk = _make_tool_call_chunk(
+      index=0, id="tc_1", name="get_weather", arguments_fragment='{"location": "Oslo"}'
+    )
+    tool_chunk.choices[0].finish_reason = None
+    events = await _stream_events([
+      tool_chunk,
+      _with_finish_reason(_make_stream_chunk(content=None), "tool_calls"),
+    ])
+
+    assert any(e.type == "tool_use" for e in events)
+    end = _single_end(events)
+    assert end.meta is not None
+    assert end.meta["finish_reason"] == "tool_calls"
+
+  @pytest.mark.asyncio
+  async def test_provider_value_passed_through_unchanged(self):
+    """The end event reports the provider's own value, not a normalised one."""
+    events = await _stream_events([
+      _with_finish_reason(_make_stream_chunk(content="partial"), "content_filter"),
+    ])
+
+    end = _single_end(events)
+    assert end.meta is not None
+    assert end.meta["finish_reason"] == "content_filter"
+
+  @pytest.mark.asyncio
+  async def test_finish_reason_survives_trailing_usage_only_chunk(self):
+    """Providers often send usage in a final chunk with no choices after the
+    finish_reason chunk; the finish reason must still reach the end event."""
+    events = await _stream_events([
+      _with_finish_reason(_make_stream_chunk(content="Hi"), None),
+      _with_finish_reason(_make_stream_chunk(content=None), "stop"),
+      _usage_only_chunk(),
+    ])
+
+    assert any(e.type == "usage" for e in events)
+    end = _single_end(events)
+    assert end.meta is not None
+    assert end.meta["finish_reason"] == "stop"
+
+  @pytest.mark.asyncio
+  async def test_finish_reason_none_when_provider_omits_it(self):
+    events = await _stream_events([
+      _with_finish_reason(_make_stream_chunk(content="Hello"), None),
+      _with_finish_reason(_make_stream_chunk(content=" world"), None),
+    ])
+
+    end = _single_end(events)
+    assert end.meta is not None
+    assert "finish_reason" in end.meta
+    assert end.meta["finish_reason"] is None
+
+  @pytest.mark.asyncio
+  async def test_finish_reason_none_on_empty_stream(self):
+    events = await _stream_events([])
+
+    assert len(events) == 1
+    end = events[0]
+    assert end.type == "end"
+    assert end.meta is not None
+    assert "finish_reason" in end.meta
+    assert end.meta["finish_reason"] is None
+
+  @pytest.mark.asyncio
+  async def test_each_call_reports_its_own_finish_reason(self):
+    """The finish reason is per model call: a second stream() on the same
+    callable must not inherit the first call's value."""
+    sequences = [
+      [_with_finish_reason(_make_stream_chunk(content="a"), "length")],
+      [_with_finish_reason(_make_stream_chunk(content="b"), None)],
+    ]
+    calls = iter(sequences)
+
+    async def fake_acompletion(*args, **kwargs):
+      return _async_gen(*next(calls))
+
+    with patch("litellm.acompletion", new=fake_acompletion):
+      client = LiteLLMCallable("model")
+      first = [e async for e in client.stream(_make_request())]
+      second = [e async for e in client.stream(_make_request())]
+
+    assert _single_end(first).meta["finish_reason"] == "length"
+    second_end = _single_end(second)
+    assert second_end.meta is not None
+    assert second_end.meta["finish_reason"] is None
