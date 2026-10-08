@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as _datetime
+import types as _types
 from typing import TYPE_CHECKING
 
 from sr2.config.models import ResolverConfig
@@ -14,8 +16,26 @@ from sr2.pipeline.utils import PHASE_MAP, build_subscriptions
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+
+def _make_date_namespace() -> _types.ModuleType:
+    """Mutable ``date`` namespace so tests can patch ``date.today`` here.
+
+    ``datetime.date`` is an immutable C type, so monkeypatching
+    ``datetime.date.today`` directly is impossible.  This module exposes a
+    plain module object under the name ``date`` whose ``today`` attribute can
+    be set and restored.  A module object (not the class) is required because
+    pytest's monkeypatch refuses to set attributes on any ``type``.
+    """
+    namespace = _types.ModuleType("date")
+    namespace.today = _datetime.date.today  # type: ignore[attr-defined]
+    return namespace
+
+
+date = _make_date_namespace()
+
 _DEFAULT_SUBSCRIPTION = EventSubscription(event_name="turn_start", phase=EventPhase.STARTING)
 _AREA_PLACEHOLDER = "{area}"
+_DATE_PLACEHOLDER = "{date}"
 
 
 class StaticTextResolver:
@@ -49,6 +69,8 @@ class StaticTextResolver:
         text = self._config.config["text"]
         if _AREA_PLACEHOLDER in text:
             text = text.replace(_AREA_PLACEHOLDER, self._current_area())
+        if _DATE_PLACEHOLDER in text:
+            text = text.replace(_DATE_PLACEHOLDER, self._today_iso())
         return ResolvedContent(
             resolver_name=self.name,
             source_layer="static_text",
@@ -64,3 +86,8 @@ class StaticTextResolver:
             return ""
         area = context.get("area")
         return area if isinstance(area, str) else ""
+
+    @staticmethod
+    def _today_iso() -> str:
+        """Return the local host date as an ISO-8601 string (YYYY-MM-DD)."""
+        return date.today().isoformat()
