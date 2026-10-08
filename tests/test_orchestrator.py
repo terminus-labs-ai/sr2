@@ -1377,3 +1377,314 @@ class TestRunToolIteration:
         )
         with pytest.raises(ConfigError, match="tool_executor not configured"):
             await sr2._run_tool_iteration(request, iteration_seq=0, origin="")
+
+
+# ===========================================================================
+# obsidian-t4p8 — live streaming cage
+#
+# The primary test (the AC) is RED against the current implementation:
+# ``turn()`` drains the entire LLM stream inside ``_run_tool_iteration``
+# (via ``_collect_stream``) and only re-yields the text deltas after the round
+# has finished, so a consumer cannot observe an early delta before the LLM has
+# produced the final one. The secondary tests pin the invariants the
+# restructure must preserve (text/usage ordering, tool-loop events, sr2-37
+# empty-response retry) and are written to pass BOTH today and after the fix.
+# ===========================================================================
+
+
+class LiveStreamingFakeLLM:
+    """Fake LLM whose ``stream()`` yields text deltas while sleeping between them.
+
+    ``yield_counter`` records, per stream() call, how many deltas have been
+    produced so far (incremented synchronously just before each delta is
+    yielded). A consumer-side test reads it from within the turn() loop to
+    assert, deterministically, that it saw the first delta before the LLM had
+    produced the last one — no wall-clock timing involved.
+    """
+
+    def __init__(self, deltas: list[str]) -> None:
+        self._deltas = list(deltas)
+        self.stream_calls: list[CompletionRequest] = []
+        self.yield_counter: list[int] = []
+
+    def yield_count(self) -> int:
+        """Deltas produced so far on the first stream() call (0 if not started)."""
+        return self.yield_counter[0] if self.yield_counter else 0
+
+    async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        # Not used by these tests; required by the LLMCallable protocol.
+        return CompletionResponse(
+            id="live-fake",
+            content=[TextBlock(text="".join(self._deltas))],
+            stop_reason="end_turn",
+            usage=TokenUsage(),
+        )
+
+    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
+        self.stream_calls.append(request)
+        self.yield_counter.append(0)
+        for delta in self._deltas:
+            # Real delay so the LLM is genuinely still generating while the
+            # consumer processes earlier deltas.
+            await asyncio.sleep(0.05)
+            self.yield_counter[-1] += 1
+            yield StreamEvent(type="text", text=delta)
+        yield StreamEvent(type="usage", usage=TokenUsage(input_tokens=1, output_tokens=1))
+        yield StreamEvent(type="end")
+
+
+class TestLiveStreaming:
+    """AC (obsidian-t4p8): a consumer of turn() receives text StreamEvents while
+    the LLM is still generating — the first delta is observed before the last
+    delta is produced."""
+
+    @pytest.mark.asyncio
+    async def test_consumer_receives_first_delta_before_last_is_produced(self):
+        """The consumer sees the first text delta before the fake LLM has produced
+        the last one.
+
+        Deterministic: the fake LLM sleeps 0.05 s between deltas and records how
+        many deltas it has produced. At the moment the consumer receives the
+        first text StreamEvent, we read that counter. If it already equals the
+        total number of deltas, the LLM finished generating before the consumer
+        saw anything → turn() drained the whole stream instead of streaming live.
+        """
+        from sr2.orchestrator import SR2
+
+        deltas = ["alpha ", "beta ", "gamma"]
+        llm = LiveStreamingFakeLLM(deltas)
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        received: list[StreamEvent] = []
+        first_delta_llm_yield_count: int | None = None
+
+        async for event in sr2.turn(make_user_input()):
+            received.append(event)
+            if event.type == "text" and first_delta_llm_yield_count is None:
+                # How many deltas had the LLM produced by the time the consumer
+                # received the first text delta?
+                first_delta_llm_yield_count = llm.yield_count()
+
+        text_events = [e for e in received if e.type == "text"]
+        assert text_events, "consumer did not receive any text deltas"
+        assert "".join(e.text for e in text_events) == "".join(deltas), (
+            f"Consumer text does not match the LLM deltas. "
+            f"Got: {''.join(e.text for e in text_events)!r}"
+        )
+
+        assert first_delta_llm_yield_count is not None, (
+            "Consumer never received a text delta to observe."
+        )
+        assert first_delta_llm_yield_count < len(deltas), (
+            f"By the time the consumer received the first text delta, the LLM had "
+            f"already produced {first_delta_llm_yield_count}/{len(deltas)} deltas — "
+            f"turn() drained the whole stream before re-yielding instead of "
+            f"streaming live."
+        )
+
+
+class TestLiveStreamingInvariants:
+    """Secondary invariants the live-streaming restructure must not break.
+
+    Each passes against BOTH the current (drain-first) and the live (stream-as-
+    it-goes) implementation, so they guard the fix without over-specifying it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_final_iteration_event_ordering_unchanged(self):
+        """A final text-only iteration yields the same events in the same order:
+        the text deltas, then the usage event, then exactly one terminal end.
+        (The LLM's own 'end' StreamEvent is not forwarded to the consumer.)"""
+        from sr2.orchestrator import SR2
+
+        deltas = ["Hello ", "world"]
+        llm = LiveStreamingFakeLLM(deltas)
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        received = [e async for e in sr2.turn(make_user_input())]
+
+        types = [e.type for e in received]
+        assert types == ["text", "text", "usage", "end"], (
+            f"Expected exactly [text, text, usage, end], got {types!r}"
+        )
+        assert [e.text for e in received if e.type == "text"] == deltas
+        usage_events = [e for e in received if e.type == "usage"]
+        assert len(usage_events) == 1
+        assert usage_events[0].usage is not None
+        assert usage_events[0].usage.output_tokens == 1
+        assert received[-1].type == "end"
+        assert types.count("end") == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_iteration_yields_tool_events_after_execution(self):
+        """A tool-use iteration still yields text deltas (arriving first), then
+        tool_use_emitted, tool_result_received, and iteration_complete after the
+        tool has executed. The tool actually runs and its result is returned."""
+        executed: list[ToolUseBlock] = []
+
+        async def capturing_executor(block: ToolUseBlock) -> ToolResultBlock:
+            executed.append(block)
+            return ToolResultBlock(tool_use_id=block.id, content="tool_result")
+
+        llm = LiveStreamingToolLLM()
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+            tool_executor=capturing_executor,
+        )
+
+        received = [e async for e in sr2.turn(make_user_input())]
+
+        # The tool ran exactly once with the expected name.
+        assert len(executed) == 1, f"expected one tool execution, got {len(executed)}"
+        assert executed[0].name == "get_weather"
+
+        types = [e.type for e in received]
+
+        # Text deltas arrive before the tool events.
+        first_text_idx = types.index("text")
+        tu_emitted_idx = types.index("tool_use_emitted")
+        assert first_text_idx < tu_emitted_idx, (
+            f"text deltas must precede tool_use_emitted; got {types!r}"
+        )
+
+        # tool_use_emitted → tool_result_received → iteration_complete, in order.
+        tr_received_idx = types.index("tool_result_received")
+        iteration_complete_idx = types.index("iteration_complete")
+        assert tu_emitted_idx < tr_received_idx < iteration_complete_idx, (
+            f"expected tool_use_emitted < tool_result_received < iteration_complete; "
+            f"got {types!r}"
+        )
+
+        # The tool events carry the executed block and its result.
+        tu_event = received[tu_emitted_idx]
+        assert tu_event.tool_uses is not None
+        assert any(b.id == "call_001" for b in tu_event.tool_uses)
+        tr_event = received[tr_received_idx]
+        assert tr_event.tool_results is not None
+        assert any(r.content == "tool_result" for r in tr_event.tool_results)
+
+        # The turn completes with exactly one terminal end.
+        assert types.count("end") == 1
+        assert types[-1] == "end"
+
+    @pytest.mark.asyncio
+    async def test_empty_response_retry_still_yields_retry_event_once(self):
+        """The sr2-37 empty-response retry budget is preserved: an empty response
+        yields exactly one retry event, the request is retried exactly once
+        (two stream() calls), and the recovered text is streamed to the caller
+        after the retry event."""
+        llm = LiveStreamingRetryLLM()
+        from sr2.orchestrator import SR2
+
+        sr2 = SR2(
+            pipeline_config=make_minimal_config(),
+            llm={"default": llm},
+            token_counter=CharacterTokenCounter(),
+        )
+
+        received = [e async for e in sr2.turn(make_user_input())]
+
+        retries = [e for e in received if e.type == "retry"]
+        assert len(retries) == 1, (
+            f"expected exactly one retry event, got {[e.type for e in received]}"
+        )
+        retry = retries[0]
+        assert retry.meta is not None
+        assert retry.meta.get("reason") == "empty_response"
+        assert retry.meta.get("attempt") == 1
+
+        # Retried exactly once: one empty call + one retry call.
+        assert len(llm.stream_calls) == 2, (
+            f"expected 2 stream() calls (original + 1 retry), got {len(llm.stream_calls)}"
+        )
+
+        # The retry's text is streamed to the caller, after the retry event.
+        text_events = [e for e in received if e.type == "text"]
+        assert any("Recovered answer." in e.text for e in text_events), (
+            f"expected the retry text to be streamed; "
+            f"got {[e.text for e in text_events]!r}"
+        )
+        retry_idx = received.index(retry)
+        text_indices = [i for i, e in enumerate(received) if e.type == "text"]
+        assert text_indices and all(i > retry_idx for i in text_indices), (
+            f"retry text must follow the retry event; got {[(e.type) for e in received]!r}"
+        )
+
+        # Still terminates with exactly one end.
+        assert received[-1].type == "end"
+        assert [e.type for e in received].count("end") == 1
+
+
+class LiveStreamingToolLLM:
+    """Fake LLM: first call streams a text delta then a tool_use call; the
+    follow-up call streams a short text delta. Yields with a real sleep between
+    events to mirror live generation."""
+
+    def __init__(self) -> None:
+        self.stream_calls: list[CompletionRequest] = []
+
+    async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        return CompletionResponse(
+            id="tool-fake",
+            content=[TextBlock(text="ok")],
+            stop_reason="end_turn",
+            usage=TokenUsage(),
+        )
+
+    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
+        self.stream_calls.append(request)
+        call_index = len(self.stream_calls) - 1
+        if call_index == 0:
+            await asyncio.sleep(0.05)
+            yield StreamEvent(type="text", text="Let me check")
+            await asyncio.sleep(0.05)
+            yield StreamEvent(
+                type="tool_use",
+                tool_use_id="call_001",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            )
+            yield StreamEvent(type="end")
+        else:
+            await asyncio.sleep(0.05)
+            yield StreamEvent(type="text", text="The weather is sunny.")
+            yield StreamEvent(type="end")
+
+
+class LiveStreamingRetryLLM:
+    """Fake LLM: first call is empty (only a terminal end), the retry call
+    streams a text delta after a real sleep."""
+
+    def __init__(self) -> None:
+        self.stream_calls: list[CompletionRequest] = []
+
+    async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        return CompletionResponse(
+            id="retry-fake",
+            content=[TextBlock(text="Recovered answer.")],
+            stop_reason="end_turn",
+            usage=TokenUsage(),
+        )
+
+    async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
+        self.stream_calls.append(request)
+        call_index = len(self.stream_calls) - 1
+        if call_index == 0:
+            # Empty response: no text, no tool_use.
+            yield StreamEvent(type="end")
+        else:
+            await asyncio.sleep(0.05)
+            yield StreamEvent(type="text", text="Recovered answer.")
+            yield StreamEvent(type="end")
