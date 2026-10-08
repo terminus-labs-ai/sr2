@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
+from unittest.mock import patch
+
 import pytest
 
 from sr2.config.models import ResolverConfig
@@ -45,6 +48,72 @@ class TestStaticTextResolver:
         result = await resolver.resolve([turn_start_event()])
 
         assert result.content == [TextBlock(text="You are Spectre. Be direct.")]
+
+    @pytest.mark.asyncio
+    async def test_interpolates_date_placeholder_with_local_today(self, monkeypatch):
+        fixed = datetime.date(2026, 10, 8)
+        monkeypatch.setattr(
+            "sr2.pipeline.resolvers.static_text.date.today",
+            lambda: fixed,
+        )
+        resolver = StaticTextResolver(
+            make_config("Hoje é {date}."),
+            run_context_provider=lambda: {"area": "culinaria-e-dieta"},
+        )
+
+        result = await resolver.resolve([turn_start_event()])
+
+        assert result.content == [TextBlock(text="Hoje é 2026-10-08.")]
+
+    @pytest.mark.asyncio
+    async def test_date_placeholder_substitutes_all_occurrences(self, monkeypatch):
+        fixed = datetime.date(2026, 1, 2)
+        monkeypatch.setattr(
+            "sr2.pipeline.resolvers.static_text.date.today",
+            lambda: fixed,
+        )
+        resolver = StaticTextResolver(
+            make_config("Criado em {date}; atualizado em {date}."),
+        )
+
+        result = await resolver.resolve([turn_start_event()])
+
+        assert result.content == [TextBlock(text="Criado em 2026-01-02; atualizado em 2026-01-02.")]
+
+    @pytest.mark.asyncio
+    async def test_date_placeholder_works_alongside_area_placeholder(self, monkeypatch):
+        fixed = datetime.date(2027, 3, 15)
+        monkeypatch.setattr(
+            "sr2.pipeline.resolvers.static_text.date.today",
+            lambda: fixed,
+        )
+        resolver = StaticTextResolver(
+            make_config("Canal: {area} — data: {date}."),
+            run_context_provider=lambda: {"area": "jeep"},
+        )
+
+        result = await resolver.resolve([turn_start_event()])
+
+        assert result.content == [TextBlock(text="Canal: jeep — data: 2027-03-15.")]
+
+    @pytest.mark.asyncio
+    async def test_date_placeholder_never_emits_raw_braces_when_resolving(self, monkeypatch):
+        """Any text containing the placeholder must have it replaced, never emitted raw."""
+        fixed = datetime.date(2030, 6, 1)
+        monkeypatch.setattr(
+            "sr2.pipeline.resolvers.static_text.date.today",
+            lambda: fixed,
+        )
+        resolver = StaticTextResolver(
+            make_config("Data atual: {date}."),
+            run_context_provider=lambda: {"area": "any"},
+        )
+
+        result = await resolver.resolve([turn_start_event()])
+
+        text = result.content[0].text
+        assert "{date}" not in text
+        assert text == "Data atual: 2030-06-01."
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
