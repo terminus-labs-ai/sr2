@@ -120,6 +120,7 @@ class PipelineConfig(BaseModel):
   token_budget: int = 200_000
   max_tool_iterations: int = 25
   max_parallel_tools: int | None = None
+  replay_reasoning: bool = True
   llm_timeout_seconds: float | None = None
   circuit_breaker_failure_threshold: int = 3
   circuit_breaker_recovery_timeout: float = 60.0

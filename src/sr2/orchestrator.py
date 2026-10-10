@@ -22,7 +22,7 @@ from sr2.pipeline.provenance import InMemoryProvenanceStore, ProvenanceStore
 if TYPE_CHECKING:
     from sr2.pipeline.tracing import Tracer
     from sr2.memory.protocol import MemoryExtractor, MemoryStore
-from sr2.models import Message, TextBlock, TokenUsage, ToolResultBlock, ToolUseBlock
+from sr2.models import Message, TextBlock, ThinkingBlock, TokenUsage, ToolResultBlock, ToolUseBlock
 from sr2.pipeline.compilation import AppendStrategy, PrefixStrategy
 from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.engine import PipelineEngine
@@ -215,6 +215,7 @@ class SR2:
         self._tool_executor: ToolExecutor | None = tool_executor
         self._max_tool_iterations = pipeline_config.max_tool_iterations
         self._max_parallel_tools = pipeline_config.max_parallel_tools
+        self._replay_reasoning = pipeline_config.replay_reasoning
         self.session_id = session_id if session_id is not None else str(ULID())
         self._circuit_breaker = CircuitBreaker(
             failure_threshold=pipeline_config.circuit_breaker_failure_threshold,
@@ -408,6 +409,7 @@ class SR2:
         """
         # Accumulate stream events for this iteration.
         iter_text: list[str] = []
+        iter_thinking: list[str] = []
         iter_tool_use: list[StreamEvent] = []
         iter_usage: TokenUsage | None = None
 
@@ -440,6 +442,10 @@ class SR2:
         for event in raw_events:
             if event.type == "text" and event.text:
                 iter_text.append(event.text)
+            elif event.type == "thinking" and event.text:
+                # sr2-113: collect this iteration's reasoning for replay;
+                # never forwarded to the caller (that is sr2-110).
+                iter_thinking.append(event.text)
             elif event.type == "tool_use":
                 iter_tool_use.append(event)
             elif event.type == "usage" and event.usage is not None:
@@ -466,6 +472,13 @@ class SR2:
 
         # Build assistant content: text + tool-use blocks.
         assistant_content: list = []
+        if self._replay_reasoning and iter_thinking:
+            # sr2-113: replay this iteration's reasoning as a ThinkingBlock,
+            # placed first so the next request carries it as
+            # reasoning_content on this assistant message.
+            thinking_block = ThinkingBlock(text="".join(iter_thinking))
+            self._stamp_block(thinking_block, origin)
+            assistant_content.append(thinking_block)
         if full_iter_text:
             text_block = TextBlock(text=full_iter_text)
             self._stamp_block(text_block, origin)

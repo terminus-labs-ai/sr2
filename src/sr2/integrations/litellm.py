@@ -7,7 +7,7 @@ from typing import Any
 
 import litellm
 
-from sr2.models import TextBlock, TokenUsage, ToolUseBlock, ToolResultBlock
+from sr2.models import TextBlock, ThinkingBlock, TokenUsage, ToolUseBlock, ToolResultBlock
 from sr2.protocols.llm import CompletionRequest, CompletionResponse, StreamEvent
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,9 @@ class LiteLLMCallable:
       elif any(isinstance(b, ToolUseBlock) for b in msg.content):
         text_parts = [b.text for b in msg.content if isinstance(b, TextBlock)]
         text_content = "".join(text_parts) if text_parts else None
+        # sr2-113: replayed reasoning is sent as reasoning_content, never as
+        # visible content. Multiple ThinkingBlocks are joined in order.
+        thinking_parts = [b.text for b in msg.content if isinstance(b, ThinkingBlock)]
         tool_calls = [
           {
             "id": block.id,
@@ -85,19 +88,30 @@ class LiteLLMCallable:
           for block in msg.content
           if isinstance(block, ToolUseBlock)
         ]
-        result.append({
+        out: dict[str, Any] = {
           "role": "assistant",
           "content": text_content,
           "tool_calls": tool_calls,
-        })
+        }
+        if thinking_parts:
+          out["reasoning_content"] = "".join(thinking_parts)
+        result.append(out)
       # Default: plain text message
       else:
-        result.append({
+        # sr2-113: ThinkingBlock has a .text attribute but is not visible
+        # content — send it as reasoning_content, never in content.
+        thinking_parts = [b.text for b in msg.content if isinstance(b, ThinkingBlock)]
+        out = {
           "role": msg.role,
           "content": "".join(
-            b.text for b in msg.content if hasattr(b, "text")
+            b.text
+            for b in msg.content
+            if hasattr(b, "text") and not isinstance(b, ThinkingBlock)
           ),
-        })
+        }
+        if msg.role == "assistant" and thinking_parts:
+          out["reasoning_content"] = "".join(thinking_parts)
+        result.append(out)
     return result
 
   def _build_extra(self, request: CompletionRequest) -> dict:
