@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic.functional_validators import PlainValidator
 
 
@@ -137,6 +137,25 @@ DEFAULT_FINAL_ANSWER_FALLBACK = (
 DEFAULT_FINAL_ANSWER_NOT_RUN = "Not run: the run is ending."
 
 
+# ---------------------------------------------------------------------------
+# Repeat guard config (sr2-122 — role-run stop rules, spec spc-959)
+# ---------------------------------------------------------------------------
+
+# Default message texts (spec spc-959 § Interfaces). ``note`` interpolates
+# ``{first_call}`` and ``{repeat}``; ``warning`` interpolates ``{repeat}``.
+
+DEFAULT_REPEAT_NOTE = (
+  "Result not shown: this call is identical to call {first_call} and "
+  "returned the same result. Do not repeat it. Change your approach, or if "
+  "you cannot make progress, stop and escalate in your contract's format."
+)
+
+DEFAULT_REPEAT_WARNING = (
+  " This is repeat {repeat}; the next identical call ends the run with an "
+  "escalation."
+)
+
+
 class FinalAnswerConfig(BaseModel):
   """Forced final answer at the tool-iteration limit (spec spc-959 FR 1-6).
 
@@ -158,6 +177,32 @@ class FinalAnswerConfig(BaseModel):
   """Result given to every tool call of the unexecuted iteration."""
 
 
+class RepeatGuardConfig(BaseModel):
+  """Consecutive repeat guard in the tool loop (spec spc-959 FR 7-18).
+
+  Off by default: a pipeline with no ``repeat_guard`` block never has its
+  tool results altered. When enabled, every executed call still runs; an
+  identical call (same tool, same sorted-key JSON arguments) with the same
+  result gets ``note`` instead of its real result, ``warning`` is appended
+  on repeat ``notes_before_stop``, and the next same-result repeat — or
+  ``max_identical_calls`` consecutive identical calls whatever the results —
+  ends the run through the forced final answer with reason ``repeat``.
+  """
+
+  enabled: bool = False
+  notes_before_stop: int = Field(2, ge=1)
+  """Same-result repeats that get the note before the run stops."""
+
+  max_identical_calls: int = Field(10, ge=2)
+  """Consecutive identical calls that stop the run whatever the results."""
+
+  note: str = DEFAULT_REPEAT_NOTE
+  """Replaces the result of a same-result repeat. ``{first_call}``, ``{repeat}``."""
+
+  warning: str = DEFAULT_REPEAT_WARNING
+  """Appended to the note on repeat ``notes_before_stop``. ``{repeat}``."""
+
+
 class PipelineConfig(BaseModel):
   layers: list[LayerConfig]
   token_budget: int = 200_000
@@ -169,3 +214,4 @@ class PipelineConfig(BaseModel):
   circuit_breaker_recovery_timeout: float = 60.0
   degradation: DegradationConfig | None = None
   final_answer: FinalAnswerConfig = FinalAnswerConfig()
+  repeat_guard: RepeatGuardConfig = RepeatGuardConfig()
