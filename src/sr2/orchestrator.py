@@ -100,7 +100,8 @@ class _GuardStop:
 
     Carries the trigger back to ``turn()``: the stop note already replaced
     the triggering call's result, and the forced final answer (reason
-    ``repeat``) is built from the iteration's tool_use stream events.
+    ``repeat``) is built from the iteration's already-built assistant content
+    and results (sr2-123), not from its tool_use stream events.
     """
 
     reason_text: str
@@ -341,8 +342,12 @@ class _RepeatGuard:
             result.content = note
             return self._meta("note")
 
-        # FR 11 / 13: the stop. The triggering call's result is the note.
-        result.content = note
+        # FR 11 / 13: the stop. The triggering call's result is the note —
+        # except a max_identical_calls stop whose result differs from the
+        # previous call's, which passes its real result (FR 13 as amended
+        # 2026-10-20, sr2-123).
+        if not (stop and not same_result):
+            result.content = note
         return self._meta("stop")
 
     def _meta(self, action: str) -> dict:
@@ -599,6 +604,7 @@ class SR2:
         iter_tool_use: list[StreamEvent],
         reason: FinalAnswerReason,
         reason_text: str,
+        executed: tuple[list, list] | None = None,
     ) -> ToolIterationResult:
         """sr2-121: end a run with one tool-less LLM call (spec spc-959 FR 2-4).
 
@@ -611,6 +617,12 @@ class SR2:
         exactly one LLM call with ``tools=None`` (the litellm integration
         omits the ``tools`` field when it is None).
 
+        ``executed`` (sr2-123, spec spc-959 AC9) is the stop iteration's
+        ``(assistant_content, tool_result_blocks)`` when its calls already
+        ran — the repeat-guard stop. The forced request then reuses those
+        blocks instead of the not_run results and skips the bus pair, which
+        ``turn()`` already queued for the executed iteration.
+
         Non-whitespace text with no tool call in that reply becomes the turn's
         final text; an empty, whitespace-only or tool-calling reply yields
         ``final_answer.fallback`` with ``{reason}`` filled. No retry.
@@ -622,52 +634,65 @@ class SR2:
         iteration, so it can never re-enter the limit path (a tool call in
         the reply is answered with the fallback, not with another forced call).
         """
-        # Assistant content for the unexecuted iteration, built exactly like
-        # the normal path: replayed reasoning first, then text, then calls.
-        assistant_content: list = []
-        if self._replay_reasoning and iter_thinking:
-            thinking_block = ThinkingBlock(text="".join(iter_thinking))
-            self._stamp_block(thinking_block, origin)
-            assistant_content.append(thinking_block)
-        if iter_text:
-            text_block = TextBlock(text=iter_text)
-            self._stamp_block(text_block, origin)
-            assistant_content.append(text_block)
-        tool_blocks = self._tool_call_blocks(iter_tool_use, origin)
-        assistant_content.extend(tool_blocks)
+        # Assistant content for the ending iteration, built exactly like the
+        # normal path: replayed reasoning first, then text, then calls.
+        if executed is not None:
+            # sr2-123 (AC9): the calls already ran — the guard's note or the
+            # real result is their content; nothing is rebuilt or not_run.
+            assistant_content = list(executed[0])
+            tool_blocks = [b for b in assistant_content if isinstance(b, ToolUseBlock)]
+        else:
+            assistant_content = []
+            if self._replay_reasoning and iter_thinking:
+                thinking_block = ThinkingBlock(text="".join(iter_thinking))
+                self._stamp_block(thinking_block, origin)
+                assistant_content.append(thinking_block)
+            if iter_text:
+                text_block = TextBlock(text=iter_text)
+                self._stamp_block(text_block, origin)
+                assistant_content.append(text_block)
+            tool_blocks = self._tool_call_blocks(iter_tool_use, origin)
+            assistant_content.extend(tool_blocks)
 
         # Every unexecuted call gets final_answer.not_run as its result so the
-        # tool_use blocks stay paired on the wire.
-        not_run_results: list[ToolResultBlock] = []
-        for block in tool_blocks:
-            result_block = ToolResultBlock(
-                tool_use_id=block.id,
-                content=self._final_answer.not_run,
-            )
-            self._stamp_block(result_block, origin)
-            not_run_results.append(result_block)
+        # tool_use blocks stay paired on the wire. An executed iteration keeps
+        # its own results (sr2-123).
+        if executed is not None:
+            result_blocks: list[ToolResultBlock] = list(executed[1])
+        else:
+            result_blocks = []
+            for block in tool_blocks:
+                result_block = ToolResultBlock(
+                    tool_use_id=block.id,
+                    content=self._final_answer.not_run,
+                )
+                self._stamp_block(result_block, origin)
+                result_blocks.append(result_block)
 
-        # Session-history capture for the unexecuted iteration, mirroring the
-        # tool-use branch of turn(): the pair goes on the bus so the session
-        # resolver records the assistant message and its tool results.
-        self._engine.bus.queue(
-            Event(
-                name="tool_use_emitted",
-                phase=EventPhase.COMPLETED,
-                source_layer="orchestrator",
-                data=list(tool_blocks),
-                iteration_seq=iteration_seq,
+        # Session-history capture for this iteration, mirroring the tool-use
+        # branch of turn(): the pair goes on the bus so the session resolver
+        # records the assistant message and its tool results. An executed
+        # iteration's pair is already on the bus (turn() queued it before the
+        # guard stop) — queuing it again would duplicate the history (AC9).
+        if executed is None:
+            self._engine.bus.queue(
+                Event(
+                    name="tool_use_emitted",
+                    phase=EventPhase.COMPLETED,
+                    source_layer="orchestrator",
+                    data=list(tool_blocks),
+                    iteration_seq=iteration_seq,
+                )
             )
-        )
-        self._engine.bus.queue(
-            Event(
-                name="tool_result_received",
-                phase=EventPhase.COMPLETED,
-                source_layer="orchestrator",
-                data=list(not_run_results),
-                iteration_seq=iteration_seq,
+            self._engine.bus.queue(
+                Event(
+                    name="tool_result_received",
+                    phase=EventPhase.COMPLETED,
+                    source_layer="orchestrator",
+                    data=list(result_blocks),
+                    iteration_seq=iteration_seq,
+                )
             )
-        )
 
         instruction_block = TextBlock(
             text=self._final_answer.instruction.format(reason=reason_text)
@@ -680,7 +705,7 @@ class SR2:
                 Message(role="assistant", content=assistant_content),
                 Message(
                     role="user",
-                    content=list(not_run_results),  # type: ignore[arg-type]
+                    content=list(result_blocks),  # type: ignore[arg-type]
                 ),
                 Message(role="user", content=[instruction_block]),
             ],
@@ -1221,19 +1246,25 @@ class SR2:
             if iteration.repeat_guard_stop is not None:
                 stop = iteration.repeat_guard_stop
                 yield StreamEvent(type="repeat_guard", iteration=iteration_seq, meta=stop.meta)
+                # sr2-123 (AC9): this iteration's calls executed — the forced
+                # request keeps its assistant content and the results the
+                # guard gave each call (the note, or the real result on a
+                # different-result max_identical_calls stop, FR 13 amended),
+                # never final_answer.not_run. The bus pair queued above is
+                # the iteration's only one.
                 forced = await self._forced_final_answer(
                     current_request,
                     origin,
                     iteration_seq,
                     iter_text=iteration.text,
                     iter_thinking=[],
-                    iter_tool_use=[
-                        event
-                        for event in iteration.raw_events
-                        if event.type == "tool_use"
-                    ],
+                    iter_tool_use=[],
                     reason="repeat",
                     reason_text=stop.reason_text,
+                    executed=(
+                        iteration.assistant_content,
+                        iteration.tool_result_blocks,
+                    ),
                 )
                 # Finalize and stream exactly like the forced_final_answer
                 # branch above (sr2-121): one final_answer event, then the
