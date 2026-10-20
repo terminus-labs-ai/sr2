@@ -11,11 +11,11 @@ import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from ulid import ULID
 
-from sr2.config.models import ConfigError, LayerConfig, PipelineConfig, ResolverConfig, ToolLoopLimitError, ToolProviderConfig, TransformerConfig
+from sr2.config.models import ConfigError, FinalAnswerConfig, LayerConfig, PipelineConfig, ResolverConfig, ToolLoopLimitError, ToolProviderConfig, TransformerConfig
 from sr2.degradation.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from sr2.pipeline.provenance import InMemoryProvenanceStore, ProvenanceStore
 
@@ -70,6 +70,20 @@ def _malformed_tool_call_message(tool_name: str, meta: Mapping[str, Any]) -> str
 EMPTY_RESPONSE_PLACEHOLDER = "[empty model response]"
 
 
+# sr2-121: How the forced final answer classifies the reason it stopped a run.
+# The repeat guard (sr2-122) passes "repeat" with its own reason text.
+FinalAnswerReason = Literal["limit", "repeat"]
+
+
+def _limit_reason_text(max_tool_iterations: int) -> str:
+    """sr2-121: the ``{reason}`` text for a run stopped at the tool-call limit.
+
+    Spec spc-959 § Interfaces: ``you reached the tool-call limit of
+    {max_tool_iterations} iterations``.
+    """
+    return f"you reached the tool-call limit of {max_tool_iterations} iterations"
+
+
 @dataclass(frozen=True)
 class ToolIterationResult:
     """Return value of SR2._run_tool_iteration().
@@ -106,6 +120,22 @@ class ToolIterationResult:
 
     raw_events: list[StreamEvent] = field(default_factory=list)
     """Raw StreamEvents from the LLM for re-yielding to the caller."""
+
+    forced_final_answer: bool = False
+    """sr2-121: True when this iteration is the forced final answer — the tool
+    calls of the current iteration were deliberately left unexecuted (each got
+    ``final_answer.not_run`` as its result) and one tool-less LLM call has
+    already been made to produce ``text``. ``turn()`` finalizes immediately
+    instead of rebuilding a tool-carrying request."""
+
+    reason: str = ""
+    """sr2-121: why the run was forced — ``"limit"`` or ``"repeat"``. Only
+    meaningful when ``forced_final_answer`` is True; carried on the
+    ``final_answer`` stream event's meta (spec spc-959 FR 6)."""
+
+    fallback_used: bool = False
+    """sr2-121: True when the forced reply was empty, whitespace-only or
+    contained a tool call and ``final_answer.fallback`` replaced it."""
 
 
 # Plugin registries (entry-point based, lazy discovery).
@@ -216,6 +246,8 @@ class SR2:
         self._max_tool_iterations = pipeline_config.max_tool_iterations
         self._max_parallel_tools = pipeline_config.max_parallel_tools
         self._replay_reasoning = pipeline_config.replay_reasoning
+        # sr2-121: forced final answer at the tool-iteration limit.
+        self._final_answer: FinalAnswerConfig = pipeline_config.final_answer
         self.session_id = session_id if session_id is not None else str(ULID())
         self._circuit_breaker = CircuitBreaker(
             failure_threshold=pipeline_config.circuit_breaker_failure_threshold,
@@ -385,11 +417,163 @@ class SR2:
             self._stamp_block(result_block, origin)
         return tool_result_blocks
 
+    def _tool_call_blocks(self, iter_tool_use: list[StreamEvent], origin: str) -> list[ToolUseBlock]:
+        """sr2-121: build the ToolUseBlocks of one iteration's tool_use events.
+
+        Carried meta (e.g. the LLM integration's ``invalid_arguments`` flag) is
+        preserved, and each block is frame-stamped like every other block the
+        orchestrator produces. Split out of ``_run_tool_iteration`` so the
+        forced-final-answer path can put the same blocks in the assistant
+        message without executing them.
+        """
+        blocks: list[ToolUseBlock] = []
+        for tu_event in iter_tool_use:
+            tu_meta = tu_event.meta or {}
+            tool_block = ToolUseBlock(
+                id=tu_event.tool_use_id,
+                name=tu_event.tool_name,
+                input=tu_event.tool_input,
+            )
+            if tu_meta:
+                tool_block.meta.update(tu_meta)
+            self._stamp_block(tool_block, origin)
+            blocks.append(tool_block)
+        return blocks
+
+    async def _forced_final_answer(
+        self,
+        request: CompletionRequest,
+        origin: str,
+        iteration_seq: int,
+        *,
+        iter_text: str,
+        iter_thinking: list[str],
+        iter_tool_use: list[StreamEvent],
+        reason: FinalAnswerReason,
+        reason_text: str,
+    ) -> ToolIterationResult:
+        """sr2-121: end a run with one tool-less LLM call (spec spc-959 FR 2-4).
+
+        Builds the current iteration's assistant content (replay thinking and
+        text, then the ToolUseBlocks) and its ``final_answer.not_run`` results
+        — the synthesized-result precedent is the malformed-call path in
+        ``_run_tool_iteration`` — queues the pair on the engine bus so the
+        session resolver captures them, appends a user message holding
+        ``final_answer.instruction`` with ``{reason}`` filled, and makes
+        exactly one LLM call with ``tools=None`` (the litellm integration
+        omits the ``tools`` field when it is None).
+
+        Non-whitespace text with no tool call in that reply becomes the turn's
+        final text; an empty, whitespace-only or tool-calling reply yields
+        ``final_answer.fallback`` with ``{reason}`` filled. No retry.
+
+        ``reason``/``reason_text`` are parameters so the repeat guard
+        (sr2-122) can reuse this with reason ``"repeat"``.
+
+        The forced call passes ``iteration_seq = -1``: it is not a tool-loop
+        iteration, so it can never re-enter the limit path (a tool call in
+        the reply is answered with the fallback, not with another forced call).
+        """
+        # Assistant content for the unexecuted iteration, built exactly like
+        # the normal path: replayed reasoning first, then text, then calls.
+        assistant_content: list = []
+        if self._replay_reasoning and iter_thinking:
+            thinking_block = ThinkingBlock(text="".join(iter_thinking))
+            self._stamp_block(thinking_block, origin)
+            assistant_content.append(thinking_block)
+        if iter_text:
+            text_block = TextBlock(text=iter_text)
+            self._stamp_block(text_block, origin)
+            assistant_content.append(text_block)
+        tool_blocks = self._tool_call_blocks(iter_tool_use, origin)
+        assistant_content.extend(tool_blocks)
+
+        # Every unexecuted call gets final_answer.not_run as its result so the
+        # tool_use blocks stay paired on the wire.
+        not_run_results: list[ToolResultBlock] = []
+        for block in tool_blocks:
+            result_block = ToolResultBlock(
+                tool_use_id=block.id,
+                content=self._final_answer.not_run,
+            )
+            self._stamp_block(result_block, origin)
+            not_run_results.append(result_block)
+
+        # Session-history capture for the unexecuted iteration, mirroring the
+        # tool-use branch of turn(): the pair goes on the bus so the session
+        # resolver records the assistant message and its tool results.
+        self._engine.bus.queue(
+            Event(
+                name="tool_use_emitted",
+                phase=EventPhase.COMPLETED,
+                source_layer="orchestrator",
+                data=list(tool_blocks),
+                iteration_seq=iteration_seq,
+            )
+        )
+        self._engine.bus.queue(
+            Event(
+                name="tool_result_received",
+                phase=EventPhase.COMPLETED,
+                source_layer="orchestrator",
+                data=list(not_run_results),
+                iteration_seq=iteration_seq,
+            )
+        )
+
+        instruction_block = TextBlock(
+            text=self._final_answer.instruction.format(reason=reason_text)
+        )
+        self._stamp_block(instruction_block, origin)
+        forced_request = CompletionRequest(
+            system=request.system,
+            messages=list(request.messages)
+            + [
+                Message(role="assistant", content=assistant_content),
+                Message(
+                    role="user",
+                    content=list(not_run_results),  # type: ignore[arg-type]
+                ),
+                Message(role="user", content=[instruction_block]),
+            ],
+            tools=None,
+        )
+
+        # forced=True: the reply is judged here (fallback on empty or on a
+        # tool call, spec spc-959 FR 4), so the iteration must never execute
+        # tools or re-enter the limit path itself.
+        forced_iteration = await self._run_tool_iteration(
+            forced_request, -1, origin, forced=True
+        )
+
+        had_tool_call = bool(forced_iteration.tool_use_blocks)
+        text = forced_iteration.text
+        fallback_used = had_tool_call or not text.strip()
+        final_text = (
+            self._final_answer.fallback.format(reason=reason_text)
+            if fallback_used
+            else text
+        )
+        final_block = TextBlock(text=final_text)
+        self._stamp_block(final_block, origin)
+
+        return ToolIterationResult(
+            text=final_text,
+            assistant_content=[final_block],
+            usage=forced_iteration.usage,
+            raw_events=[StreamEvent(type="text", text=final_text)],
+            forced_final_answer=True,
+            reason=reason,
+            fallback_used=fallback_used,
+        )
+
     async def _run_tool_iteration(
         self,
         request: CompletionRequest,
         iteration_seq: int,
         origin: str,
+        *,
+        forced: bool = False,
     ) -> ToolIterationResult:
         """Run one LLM stream + tool-execution cycle.
 
@@ -401,6 +585,12 @@ class SR2:
         Returns a ``ToolIterationResult`` with empty ``tool_use_blocks``
         when the LLM produced no tool calls (i.e. this is the final
         iteration).
+
+        ``forced=True`` (sr2-121) marks the forced-final-answer call: tool
+        calls in the reply are reported (``had_tool_events`` /
+        ``tool_use_blocks``) but never executed and never re-checked against
+        the iteration limit — ``_forced_final_answer`` turns them into the
+        fallback text.
 
         Raises:
             CircuitBreakerOpenError: If the circuit breaker is open.
@@ -463,11 +653,35 @@ class SR2:
             )
 
         # There are tool_use blocks — check the iteration limit before executing.
+        # sr2-121 (spec spc-959 FR 1-2): with final_answer.enabled the limit no
+        # longer raises — the iteration's tool calls are left unexecuted and
+        # one tool-less LLM call writes the run's final answer. A forced call's
+        # own tool calls are never executed either (FR 4): report and return.
+        if forced and iter_tool_use:
+            forced_blocks = self._tool_call_blocks(iter_tool_use, origin)
+            return ToolIterationResult(
+                had_tool_events=True,
+                text=full_iter_text,
+                tool_use_blocks=forced_blocks,
+                usage=usage,
+                raw_events=raw_events,
+            )
         if iteration_seq >= self._max_tool_iterations:
-            raise ToolLoopLimitError(
-                f"Tool loop limit exceeded: {iteration_seq} iterations reached "
-                f"(max_tool_iterations={self._max_tool_iterations}). "
-                f"The LLM kept requesting tools without converging."
+            if not self._final_answer.enabled:
+                raise ToolLoopLimitError(
+                    f"Tool loop limit exceeded: {iteration_seq} iterations reached "
+                    f"(max_tool_iterations={self._max_tool_iterations}). "
+                    f"The LLM kept requesting tools without converging."
+                )
+            return await self._forced_final_answer(
+                request,
+                origin,
+                iteration_seq,
+                iter_text=full_iter_text,
+                iter_thinking=iter_thinking,
+                iter_tool_use=iter_tool_use,
+                reason="limit",
+                reason_text=_limit_reason_text(self._max_tool_iterations),
             )
 
         # Build assistant content: text + tool-use blocks.
@@ -497,22 +711,14 @@ class SR2:
         # failure and can retry.
         tool_use_blocks: list[ToolUseBlock] = []
         tool_result_blocks: list[ToolResultBlock] = []
-        for tu_event in iter_tool_use:
-            tu_meta = tu_event.meta or {}
-            tool_block = ToolUseBlock(
-                id=tu_event.tool_use_id,
-                name=tu_event.tool_name,
-                input=tu_event.tool_input,
-            )
-            if tu_meta:
-                tool_block.meta.update(tu_meta)
-            self._stamp_block(tool_block, origin)
+        for tool_block in self._tool_call_blocks(iter_tool_use, origin):
             assistant_content.append(tool_block)
+            tu_meta = tool_block.meta
             if tu_meta.get("invalid_arguments"):
                 malformed_result = ToolResultBlock(
-                    tool_use_id=tu_event.tool_use_id,
+                    tool_use_id=tool_block.id,
                     content=_malformed_tool_call_message(
-                        tool_name=tu_event.tool_name,
+                        tool_name=tool_block.name,
                         meta=tu_meta,
                     ),
                     is_error=True,
@@ -664,6 +870,46 @@ class SR2:
 
                     yield StreamEvent(type="end")
                     return
+
+            if iteration.forced_final_answer:
+                # ---------------------------------------------------------------
+                # sr2-121: forced final answer (spec spc-959 FR 3, 6). The
+                # unexecuted tool calls and their not_run results are already in
+                # the forced request's message list; the session resolver
+                # captured them via the bus events queued below. Finalize like
+                # the normal final iteration so session history and
+                # post_process run, and emit exactly one final_answer event
+                # before the final text.
+                # ---------------------------------------------------------------
+                content = list(iteration.assistant_content)
+                final_response = CompletionResponse(
+                    id="turn-response",
+                    content=content,
+                    stop_reason="end_turn",
+                    usage=iteration.usage,
+                )
+
+                # sr2-80: Finalize BEFORE yielding any events.
+                await self._finalize_turn(final_response)
+
+                yield StreamEvent(
+                    type="final_answer",
+                    iteration=iteration_seq,
+                    meta={
+                        "reason": iteration.reason,
+                        "fallback_used": iteration.fallback_used,
+                    },
+                )
+                for event in iteration.raw_events:
+                    if event.type == "text" and event.text:
+                        yield event
+
+                # FR7: Surface accumulated in-band bus errors before the final end event.
+                if in_band_errors:
+                    yield StreamEvent(type="error", errors=in_band_errors)
+
+                yield StreamEvent(type="end")
+                return
 
             if not iteration.had_tool_events:
                 # ---------------------------------------------------------------

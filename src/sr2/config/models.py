@@ -115,6 +115,49 @@ class LayerConfig(BaseModel):
   """
 
 
+# ---------------------------------------------------------------------------
+# Forced final answer config (sr2-121 — role-run stop rules, spec spc-959)
+# ---------------------------------------------------------------------------
+
+# Default message texts. Every text the forced final answer uses is a YAML
+# field with one of these defaults (spec FR 22); none is hardcoded at the
+# call site. ``instruction``, ``fallback`` and the reason text interpolate
+# with str.format placeholders.
+
+DEFAULT_FINAL_ANSWER_INSTRUCTION = (
+  "The harness is ending this run: {reason}. Tools are no longer available. "
+  "Write your final answer now in your contract's format: your result if you "
+  "have one, otherwise an escalation that says what blocked you and what you tried."
+)
+
+DEFAULT_FINAL_ANSWER_FALLBACK = (
+  "Run stopped by the harness: {reason}. The model produced no final answer."
+)
+
+DEFAULT_FINAL_ANSWER_NOT_RUN = "Not run: the run is ending."
+
+
+class FinalAnswerConfig(BaseModel):
+  """Forced final answer at the tool-iteration limit (spec spc-959 FR 1-6).
+
+  Off by default: a pipeline with no ``final_answer`` block ends its tool
+  loop with ``ToolLoopLimitError`` exactly as before. When enabled, an
+  iteration that brings tool calls at ``max_tool_iterations`` runs none of
+  them and makes one final tool-less LLM call instead of raising.
+  """
+
+  enabled: bool = False
+  instruction: str = DEFAULT_FINAL_ANSWER_INSTRUCTION
+  """Appended as a user message before the forced call. ``{reason}`` filled."""
+
+  fallback: str = DEFAULT_FINAL_ANSWER_FALLBACK
+  """Final text when the forced reply is empty, whitespace-only or has a
+  tool call. ``{reason}`` filled. There is no retry."""
+
+  not_run: str = DEFAULT_FINAL_ANSWER_NOT_RUN
+  """Result given to every tool call of the unexecuted iteration."""
+
+
 class PipelineConfig(BaseModel):
   layers: list[LayerConfig]
   token_budget: int = 200_000
@@ -125,3 +168,4 @@ class PipelineConfig(BaseModel):
   circuit_breaker_failure_threshold: int = 3
   circuit_breaker_recovery_timeout: float = 60.0
   degradation: DegradationConfig | None = None
+  final_answer: FinalAnswerConfig = FinalAnswerConfig()

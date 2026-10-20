@@ -21,7 +21,7 @@ class CompletionResponse(BaseModel):
 
 
 class StreamEvent(BaseModel):
-  type: Literal["text", "thinking", "usage", "end", "tool_use", "iteration_complete", "tool_use_emitted", "tool_result_received", "error", "retry"]
+  type: Literal["text", "thinking", "usage", "end", "tool_use", "iteration_complete", "tool_use_emitted", "tool_result_received", "error", "retry", "final_answer"]
   text: str = ""
   usage: TokenUsage | None = None
   tool_use_id: str = ""
