@@ -894,6 +894,9 @@ class SR2:
         # sees, while the guard keeps the real result for the next comparison.
         guard_event: dict | None = None
         if guard is not None:
+            # tool_result_blocks holds the malformed results first, then one
+            # result per executed block in tool_use_blocks order: the zip
+            # pairs each executed block with its own result.
             for block, result_block in zip(tool_use_blocks, tool_result_blocks):
                 meta = guard.observe(block, result_block)
                 if meta is not None:
