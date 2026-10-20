@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass, field
@@ -15,7 +16,7 @@ from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from ulid import ULID
 
-from sr2.config.models import ConfigError, FinalAnswerConfig, LayerConfig, PipelineConfig, ResolverConfig, ToolLoopLimitError, ToolProviderConfig, TransformerConfig
+from sr2.config.models import ConfigError, FinalAnswerConfig, LayerConfig, PipelineConfig, RepeatGuardConfig, ResolverConfig, ToolLoopLimitError, ToolProviderConfig, TransformerConfig
 from sr2.degradation.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from sr2.pipeline.provenance import InMemoryProvenanceStore, ProvenanceStore
 
@@ -84,6 +85,28 @@ def _limit_reason_text(max_tool_iterations: int) -> str:
     return f"you reached the tool-call limit of {max_tool_iterations} iterations"
 
 
+def _repeat_reason_text(first_call: int, identical_calls: int) -> str:
+    """sr2-122: the ``{reason}`` text for a run stopped by the repeat guard.
+
+    Spec spc-959 § Interfaces: ``you repeated call {first_call}
+    {identical_calls} times``.
+    """
+    return f"you repeated call {first_call} {identical_calls} times"
+
+
+@dataclass(frozen=True)
+class _GuardStop:
+    """sr2-122: the repeat guard ended the run inside one tool iteration.
+
+    Carries the trigger back to ``turn()``: the stop note already replaced
+    the triggering call's result, and the forced final answer (reason
+    ``repeat``) is built from the iteration's tool_use stream events.
+    """
+
+    reason_text: str
+    meta: dict
+
+
 @dataclass(frozen=True)
 class ToolIterationResult:
     """Return value of SR2._run_tool_iteration().
@@ -136,6 +159,16 @@ class ToolIterationResult:
     fallback_used: bool = False
     """sr2-121: True when the forced reply was empty, whitespace-only or
     contained a tool call and ``final_answer.fallback`` replaced it."""
+
+    repeat_guard_event: "dict | None" = None
+    """sr2-122: the repeat_guard meta (spec spc-959 FR 17) of the guard action
+    this iteration produced, if any — ``action`` ``"note"`` or ``"stop"``.
+    At most one call per turn triggers an action: the stop ends the run."""
+
+    repeat_guard_stop: "_GuardStop | None" = None
+    """sr2-122: set when the repeat guard stopped the run in this iteration.
+    ``turn()`` runs the forced final answer with reason ``repeat`` from it
+    (spec spc-959 FR 11), regardless of ``final_answer.enabled``."""
 
 
 # Plugin registries (entry-point based, lazy discovery).
@@ -210,6 +243,119 @@ def _build_layer(
     )
 
 
+class _RepeatGuard:
+    """sr2-122: per-turn state of the consecutive repeat guard (spec spc-959 FR 7-17).
+
+    Numbers the executed tool calls of one turn from 1 in assistant order
+    (FR 7; malformed calls never reach ``observe``), compares each executed
+    call to the previous executed call, and decides note / warning / stop.
+    An instance is created per ``turn()`` call (FR 16).
+
+    Comparison is exact: same tool name and same arguments serialized as
+    JSON with sorted keys (FR 8). The same-result test is same content and
+    same ``is_error`` against the previous call's *real* result, never the
+    note that replaced it (FR 10, 15).
+    """
+
+    def __init__(self, config: RepeatGuardConfig) -> None:
+        self._config = config
+        self.call_count = 0
+        """Executed calls observed so far this turn (malformed calls excluded)."""
+
+        self._prev_key: tuple[str, str] | None = None
+        """(tool name, sorted-key JSON arguments) of the previous executed call."""
+
+        self._prev_result: tuple[Any, bool] | None = None
+        """Real (content, is_error) of the previous executed call (FR 15)."""
+
+        self.first_call = 0
+        """Number of the first call of the current same-result chain."""
+
+        self.run_start = 0
+        """Number of the first call of the current identical-call run (FR 13)."""
+
+        self.identical_calls = 0
+        """Consecutive identical calls including the first of the run (FR 13)."""
+
+        self.same_result_repeats = 0
+        """Repeats within the run whose result matched the previous call's."""
+
+    def observe(self, block: ToolUseBlock, result: ToolResultBlock) -> dict | None:
+        """Number one executed call and classify it.
+
+        Returns the ``repeat_guard`` meta for an emitted action (spec
+        spc-959 FR 17) with ``action`` ``"note"`` or ``"stop"``, and mutates
+        ``result.content`` to the note (plus warning) in that case. Returns
+        ``None`` when the real result passes through untouched.
+
+        Two counts run over the executed calls (case table, confirmed
+        2026-10-19): the identical-call run (``run_start`` /
+        ``identical_calls``) breaks only on a non-identical call and counts
+        whatever the results (FR 13, AC5-r2); the same-result chain
+        (``first_call`` / ``same_result_repeats``) breaks when a repeat's
+        result differs, so a note always names the first call that returned
+        that result (AC5-r1).
+        """
+        self.call_count += 1
+        key = (block.name, json.dumps(block.input, sort_keys=True))
+        identical = key == self._prev_key
+        same_result = identical and (result.content, result.is_error) == self._prev_result
+        # FR 15: keep the REAL result for the next comparison, before the
+        # content below is possibly replaced by the note.
+        self._prev_key = key
+        self._prev_result = (result.content, result.is_error)
+
+        if not identical:
+            # FR 14: not identical to the previous executed call — reset both
+            # counts; this call starts both the run and the same-result chain.
+            self.run_start = self.call_count
+            self.identical_calls = 1
+            self.first_call = self.call_count
+            self.same_result_repeats = 0
+            return None
+
+        self.identical_calls += 1
+        if same_result:
+            self.same_result_repeats += 1
+        else:
+            # FR 12: identical call, different result — the real result
+            # passes; the same-result chain restarts at this call while the
+            # identical-call run continues.
+            self.same_result_repeats = 0
+            self.first_call = self.call_count
+
+        stop = self.same_result_repeats > self._config.notes_before_stop
+        stop = stop or self.identical_calls >= self._config.max_identical_calls
+
+        # FR 10: the note names the first call of the same-result chain; the
+        # warning belongs to the repeat whose count equals notes_before_stop.
+        note = self._config.note.format(
+            first_call=self.first_call, repeat=self.same_result_repeats
+        )
+        if same_result and self.same_result_repeats == self._config.notes_before_stop:
+            note += self._config.warning.format(repeat=self.same_result_repeats)
+
+        if not stop:
+            if not same_result:
+                return None
+            result.content = note
+            return self._meta("note")
+
+        # FR 11 / 13: the stop. The triggering call's result is the note.
+        result.content = note
+        return self._meta("stop")
+
+    def _meta(self, action: str) -> dict:
+        """The repeat_guard event meta (spec spc-959 FR 17)."""
+        return {
+            "call": self.call_count,
+            "first_call": self.first_call,
+            "identical_calls": self.identical_calls,
+            "same_result_repeats": self.same_result_repeats,
+            "action": action,
+        }
+
+
 class SR2:
     """Top-level orchestrator: turns a PipelineConfig into a streaming turn loop."""
 
@@ -248,6 +394,8 @@ class SR2:
         self._replay_reasoning = pipeline_config.replay_reasoning
         # sr2-121: forced final answer at the tool-iteration limit.
         self._final_answer: FinalAnswerConfig = pipeline_config.final_answer
+        # sr2-122: consecutive repeat guard (state itself is per turn, FR 16).
+        self._repeat_guard: RepeatGuardConfig = pipeline_config.repeat_guard
         self.session_id = session_id if session_id is not None else str(ULID())
         self._circuit_breaker = CircuitBreaker(
             failure_threshold=pipeline_config.circuit_breaker_failure_threshold,
@@ -574,6 +722,7 @@ class SR2:
         origin: str,
         *,
         forced: bool = False,
+        guard: "_RepeatGuard | None" = None,
     ) -> ToolIterationResult:
         """Run one LLM stream + tool-execution cycle.
 
@@ -591,6 +740,11 @@ class SR2:
         ``tool_use_blocks``) but never executed and never re-checked against
         the iteration limit — ``_forced_final_answer`` turns them into the
         fallback text.
+
+        ``guard`` (sr2-122) is the turn's repeat-guard state, or ``None``
+        when the guard is disabled: results are then never altered (FR 18).
+        The guard is not passed to the forced call — the forced reply's tool
+        calls never execute.
 
         Raises:
             CircuitBreakerOpenError: If the circuit breaker is open.
@@ -732,6 +886,31 @@ class SR2:
         if tool_use_blocks:
             tool_result_blocks.extend(await self._execute_tools(tool_use_blocks, origin))
 
+        # sr2-122 (spec spc-959 FR 7-17): the repeat guard walks the executed
+        # calls in assistant order after execution (FR 9 — including calls of
+        # the same message). Malformed calls are not in tool_use_blocks, so
+        # they are never numbered and never reset the guard (FR 7). Results
+        # are mutated in place: the note replaces the real content the model
+        # sees, while the guard keeps the real result for the next comparison.
+        guard_event: dict | None = None
+        if guard is not None:
+            for block, result_block in zip(tool_use_blocks, tool_result_blocks):
+                meta = guard.observe(block, result_block)
+                if meta is not None:
+                    guard_event = meta
+
+        repeat_guard_event = guard_event
+        repeat_guard_stop: _GuardStop | None = None
+        if guard_event is not None and guard_event["action"] == "stop" and guard is not None:
+            # FR 11: the guard stopped the run. turn() runs the forced final
+            # answer with reason "repeat" from this trigger.
+            repeat_guard_stop = _GuardStop(
+                reason_text=_repeat_reason_text(
+                    guard.run_start, guard.identical_calls
+                ),
+                meta=guard_event,
+            )
+
         return ToolIterationResult(
             had_tool_events=True,
             text=full_iter_text,
@@ -740,6 +919,8 @@ class SR2:
             assistant_content=assistant_content,
             usage=usage,
             raw_events=raw_events,
+            repeat_guard_event=repeat_guard_event,
+            repeat_guard_stop=repeat_guard_stop,
         )
 
     # ------------------------------------------------------------------
@@ -815,9 +996,17 @@ class SR2:
         # sr2-37: Empty-response retry budget — at most ONE retry per turn.
         empty_retry_used = False
 
+        # sr2-122 (spec spc-959 FR 16): the repeat guard's state is per turn;
+        # None when the guard is disabled — results are then never altered (FR 18).
+        guard = (
+            _RepeatGuard(self._repeat_guard)
+            if self._repeat_guard.enabled
+            else None
+        )
+
         while True:
             iteration = await self._run_tool_iteration(
-                current_request, iteration_seq, origin
+                current_request, iteration_seq, origin, guard=guard
             )
 
             # ---------------------------------------------------------------
@@ -1019,6 +1208,71 @@ class SR2:
 
             # Emit tool_result_received after all executor results are collected.
             yield StreamEvent(type="tool_result_received", tool_results=tool_result_blocks)
+
+            # sr2-122 (spec spc-959 FR 11, 17): the guard stopped the run in
+            # this iteration. The stop note already replaced the triggering
+            # call's result and is in the events above; emit the stop event,
+            # then end the run through the forced final answer with reason
+            # "repeat" — regardless of final_answer.enabled. The forced call
+            # gets no guard: its reply's tool calls never execute.
+            if iteration.repeat_guard_stop is not None:
+                stop = iteration.repeat_guard_stop
+                yield StreamEvent(type="repeat_guard", iteration=iteration_seq, meta=stop.meta)
+                forced = await self._forced_final_answer(
+                    current_request,
+                    origin,
+                    iteration_seq,
+                    iter_text=iteration.text,
+                    iter_thinking=[],
+                    iter_tool_use=[
+                        event
+                        for event in iteration.raw_events
+                        if event.type == "tool_use"
+                    ],
+                    reason="repeat",
+                    reason_text=stop.reason_text,
+                )
+                # Finalize and stream exactly like the forced_final_answer
+                # branch above (sr2-121): one final_answer event, then the
+                # final text, then end.
+                final_response = CompletionResponse(
+                    id="turn-response",
+                    content=list(forced.assistant_content),
+                    stop_reason="end_turn",
+                    usage=forced.usage,
+                )
+
+                # sr2-80: Finalize BEFORE yielding any events.
+                await self._finalize_turn(final_response)
+
+                yield StreamEvent(
+                    type="final_answer",
+                    iteration=iteration_seq,
+                    meta={
+                        "reason": forced.reason,
+                        "fallback_used": forced.fallback_used,
+                    },
+                )
+                for event in forced.raw_events:
+                    if event.type == "text" and event.text:
+                        yield event
+
+                # FR7: Surface accumulated in-band bus errors before the final end event.
+                if in_band_errors:
+                    yield StreamEvent(type="error", errors=in_band_errors)
+
+                yield StreamEvent(type="end")
+                return
+
+            # sr2-122 (spec spc-959 FR 17): emit one repeat_guard event per
+            # note this iteration produced (the stop event is emitted at the
+            # stop above).
+            if iteration.repeat_guard_event is not None:
+                yield StreamEvent(
+                    type="repeat_guard",
+                    iteration=iteration_seq,
+                    meta=iteration.repeat_guard_event,
+                )
 
             # Append assistant message (with tool_use blocks) and tool_result
             # user message to the conversation for the next LLM call.
