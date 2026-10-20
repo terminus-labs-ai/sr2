@@ -73,6 +73,11 @@ def _iter_events(*calls: StreamEvent) -> list[StreamEvent]:
     return list(calls) + [StreamEvent(type="end")]
 
 
+def _iter_text_events(text: str, *calls: StreamEvent) -> list[StreamEvent]:
+    """A tool iteration whose reply carries text before the calls (AC9-r3)."""
+    return [StreamEvent(type="text", text=text)] + list(calls) + [StreamEvent(type="end")]
+
+
 def _text_reply(text: str) -> list[StreamEvent]:
     return [StreamEvent(type="text", text=text), StreamEvent(type="end")]
 
@@ -182,6 +187,13 @@ def _rg_events(events: list[StreamEvent]) -> list[StreamEvent]:
 
 def _fa_events(events: list[StreamEvent]) -> list[StreamEvent]:
     return [e for e in events if e.type == "final_answer"]
+
+
+def _collect_bus(sr2_instance: Any, event_name: str) -> list[Any]:
+    """Subscribe to the engine bus for event_name before the turn (test_bus_events idiom)."""
+    collected: list[Any] = []
+    sr2_instance._engine.bus.subscribe(event_name, lambda e: collected.append(e))
+    return collected
 
 
 def _final_text(events: list[StreamEvent]) -> str:
@@ -358,17 +370,18 @@ class TestAC5DifferentResultsAndCap:
         rg = _rg_events(events)
         assert len(rg) == 1 and rg[0].meta["action"] == "stop"
         assert _final_text(events) == "FINAL"
-        # The stop fired on call 10: its result is not shown to the model —
-        # the forced request's history ends at r9, and the forced pair carries
-        # the not_run result for c10.
+        # The stop fired on call 10: its real result r10 is what the model is
+        # shown (FR 13 as amended 2026-10-20) — the forced request's history
+        # ends with the executed iteration's results, and no call of it is
+        # final_answer.not_run (AC9).
         history_results = [
             block
-            for message in forced_request.messages[:-2]
+            for message in forced_request.messages[:-1]
             for block in message.content
             if isinstance(block, ToolResultBlock)
         ]
-        assert [r.tool_use_id for r in history_results] == [f"c{i}" for i in range(1, 10)]
-        assert history_results[-1].content == "r9"
+        assert [r.tool_use_id for r in history_results] == [f"c{i}" for i in range(1, 11)]
+        assert history_results[-1].content == "r10"
         not_run = [
             block
             for message in forced_request.messages[-2:]
@@ -376,7 +389,8 @@ class TestAC5DifferentResultsAndCap:
             if isinstance(block, ToolResultBlock)
         ]
         assert not_run[0].tool_use_id == "c10"
-        assert not_run[0].content == DEFAULT_FINAL_ANSWER_NOT_RUN
+        assert not_run[0].content == "r10"
+        assert DEFAULT_FINAL_ANSWER_NOT_RUN not in [r.content for r in history_results]
 
     @pytest.mark.asyncio
     async def test_ac5_r3_comparison_uses_the_real_previous_result(self):
@@ -550,6 +564,152 @@ class TestAC6ResetsDisabledAndEvents:
         assert executor.order == ["c1", "c2"]
         _assert_results(llm, script, {})
         assert _rg_events(events1 + events2) == []
+        await sr2.aclose()
+
+
+# ---------------------------------------------------------------------------
+# AC9 — the stop keeps the results the guard gave the executed calls
+# ---------------------------------------------------------------------------
+
+
+class TestAC9StopKeepsExecutedResults:
+    """The forced final-answer request of a guard stop pairs every executed
+    call of the stop iteration with the result the guard gave it (spec
+    spc-959 FR 11, 13 amended 2026-10-20, 14), never ``not_run``, and the
+    iteration's tool pair reaches the engine bus exactly once.
+    """
+
+    @staticmethod
+    def _forced_blocks(forced_request):
+        """The forced request's ending-iteration pair: the ToolUseBlocks of
+        its assistant message (third from the end) and the tool results of
+        the user message before the instruction.
+
+        Returns (tool_use_ids, results_by_id)."""
+        tool_use_ids = [
+            block.id
+            for block in forced_request.messages[-3].content
+            if isinstance(block, ToolUseBlock)
+        ]
+        results = [
+            block
+            for message in forced_request.messages[-2:-1]
+            for block in message.content
+            if isinstance(block, ToolResultBlock)
+        ]
+        return tool_use_ids, {r.tool_use_id: r.content for r in results}
+
+    @pytest.mark.asyncio
+    async def test_ac9_r1_stop_iteration_pairs_c4_with_the_note(self):
+        """AC9-r1: X ×4 (same result). The forced request pairs c4 with the
+        note (first_call 1, repeat 3, no warning); no not_run anywhere."""
+        script = {f"c{i}": "1 failed" for i in range(1, 5)}
+        events, llm, _ = await _run_turn(
+            _config(repeat_guard=_guard()),
+            [_iter_events(_x(f"c{i}")) for i in range(1, 5)],
+            script,
+        )
+
+        forced_request = llm.stream_calls[4]
+        tool_use_ids, results = self._forced_blocks(forced_request)
+        assert tool_use_ids == ["c4"], "the stop iteration's call keeps its pairing"
+        assert results["c4"].startswith(_note(1, 3)), "the note, not not_run"
+        assert not results["c4"].endswith(DEFAULT_REPEAT_WARNING.format(repeat=2))
+        all_results = [
+            block
+            for message in forced_request.messages
+            for block in message.content
+            if isinstance(block, ToolResultBlock)
+        ]
+        assert DEFAULT_FINAL_ANSWER_NOT_RUN not in [r.content for r in all_results]
+
+    @pytest.mark.asyncio
+    async def test_ac9_r2_different_result_stop_pairs_the_real_result(self):
+        """AC9-r2: X ×10 with distinct results r1..r10. The forced request
+        pairs c10 with its real result r10 (FR 13 as amended); no not_run."""
+        script = {f"c{i}": f"r{i}" for i in range(1, 11)}
+        events, llm, _ = await _run_turn(
+            _config(repeat_guard=_guard()),
+            [_iter_events(_x(f"c{i}")) for i in range(1, 11)],
+            script,
+        )
+
+        forced_request = llm.stream_calls[10]
+        tool_use_ids, results = self._forced_blocks(forced_request)
+        assert tool_use_ids == ["c10"]
+        assert results["c10"] == "r10", "the real result, not the note or not_run"
+        all_results = [
+            block
+            for message in forced_request.messages
+            for block in message.content
+            if isinstance(block, ToolResultBlock)
+        ]
+        assert DEFAULT_FINAL_ANSWER_NOT_RUN not in [r.content for r in all_results]
+
+    @pytest.mark.asyncio
+    async def test_ac9_r3_stop_in_a_multi_call_message_keeps_every_result(self):
+        """AC9-r3: X, X, X (same), then one message [X, Y]. The X stops; the
+        forced request pairs it with the note and Y with its real result, in
+        assistant order; no not_run."""
+        y = tool_use_event(tool_use_id="c5", tool_name="grep", tool_input={"pattern": "x"})
+        script = {"c1": "1 failed", "c2": "1 failed", "c3": "1 failed", "c4": "1 failed", "c5": "hit"}
+        events, llm, executor = await _run_turn(
+            _config(repeat_guard=_guard()),
+            [
+                _iter_events(_x("c1")),
+                _iter_events(_x("c2")),
+                _iter_events(_x("c3")),
+                _iter_text_events("wrapping up", _x("c4"), y),
+            ],
+            script,
+        )
+
+        assert executor.order == ["c1", "c2", "c3", "c4", "c5"], "both calls ran"
+        forced_request = llm.stream_calls[4]
+        tool_use_ids, results = self._forced_blocks(forced_request)
+        assert tool_use_ids == ["c4", "c5"], "assistant order preserved"
+        assert results["c4"].startswith(_note(1, 3)), "the stop note"
+        assert results["c5"] == "hit", "the other executed call keeps its real result"
+        assert events[-1].type == "end"
+        all_results = [
+            block
+            for message in forced_request.messages
+            for block in message.content
+            if isinstance(block, ToolResultBlock)
+        ]
+        assert DEFAULT_FINAL_ANSWER_NOT_RUN not in [r.content for r in all_results]
+
+    @pytest.mark.asyncio
+    async def test_ac9_r4_stop_iteration_tool_pair_is_queued_once(self):
+        """AC9-r4: X ×4 (same result). The stop iteration's tool_use_emitted
+        and tool_result_received bus events are each queued exactly once, with
+        the note as c4's result."""
+        script = {f"c{i}": "1 failed" for i in range(1, 5)}
+        executor = ScriptedExecutor(script)
+        sequences = [_iter_events(_x(f"c{i}")) for i in range(1, 5)] + [_text_reply("FINAL")] * 2
+        llm = SequentialMockLLM(sequences)
+        sr2 = _build_sr2(llm, executor, _config(repeat_guard=_guard()))
+        use_events = _collect_bus(sr2, "tool_use_emitted")
+        result_events = _collect_bus(sr2, "tool_result_received")
+        [e async for e in sr2.turn(make_user_input())]
+
+        assert len(use_events) == 4, (
+            f"one tool_use_emitted per iteration, the stop included once; got {len(use_events)}"
+        )
+        assert len(result_events) == 4, (
+            f"one tool_result_received per iteration, the stop included once; got {len(result_events)}"
+        )
+        stop_results = [
+            block for event in result_events for block in event.data if block.tool_use_id == "c4"
+        ]
+        assert len(stop_results) == 1, "c4's result is queued exactly once"
+        assert stop_results[0].content.startswith(_note(1, 3)), "the note, not not_run"
+        assert [block.id for event in use_events for block in event.data] == [
+            "c1",
+            "c2",
+            "c3",
+            "c4",
+        ]
         await sr2.aclose()
 
 
