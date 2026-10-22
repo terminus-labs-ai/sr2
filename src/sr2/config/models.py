@@ -235,6 +235,73 @@ class ContinuityConfig(BaseModel):
     return self
 
 
+# ---------------------------------------------------------------------------
+# Retrieval policy profiles (FR15 — sr2-97, AC8)
+# ---------------------------------------------------------------------------
+
+#: The profile defaults the policy engine understands. A typed ``Literal``
+#: so a typo'd default (or a typo'd rule ``effect``) fails at config load
+#: instead of silently deciding every retrieval.
+RETRIEVAL_PROFILE_DEFAULTS = ("allow", "deny", "deny_cross_agent_personal")
+
+
+class RetrievalRuleConfig(BaseModel):
+  """One retrieval-profile rule, in the YAML spelling of the spec's example.
+
+  A rule is conjunctive: it applies only when the candidate record satisfies
+  every field the rule declares; a field the rule omits matches anything.
+  ``project_relation: current`` matches records associated with one of the
+  context's active projects. ``weight`` only means anything on a ``boost``
+  rule.
+  """
+
+  id: str
+  effect: Literal["allow", "deny", "boost"]
+  kinds: list[str] = []
+  topics: list[str] = []
+  sensitivity: list[str] = []
+  agents: list[str] = []
+  agent_tags: list[str] = []
+  target_agents: list[str] = []
+  target_agent_tags: list[str] = []
+  projects: list[str] = []
+  project_relation: Literal["current", "other"] | None = None
+  weight: float = 1.0
+
+  @model_validator(mode="after")
+  def _validate_weight(self) -> "RetrievalRuleConfig":
+    if self.weight < 0:
+      raise _ValidatableConfigError(
+        f"retrieval rule {self.id!r}: weight must be non-negative; got {self.weight}"
+      )
+    return self
+
+
+class RetrievalProfileConfig(BaseModel):
+  """One named retrieval profile from ``retrieval_profiles`` (spec example).
+
+  ``rules`` keep the YAML order: deny rules win wherever they match,
+  evaluated before any allow or boost is considered. The ``default`` decides
+  records no allow rule matched — a profile is configuration, so an unknown
+  default (or an unknown rule effect) is rejected at load time rather than
+  silently allowing everything.
+  """
+
+  default: Literal[RETRIEVAL_PROFILE_DEFAULTS] = "deny_cross_agent_personal"
+  rules: list[RetrievalRuleConfig] = []
+
+  @model_validator(mode="after")
+  def _validate_rule_ids_unique(self) -> "RetrievalProfileConfig":
+    seen: set[str] = set()
+    for rule in self.rules:
+      if rule.id in seen:
+        raise _ValidatableConfigError(
+          f"duplicate retrieval rule id: {rule.id!r}"
+        )
+      seen.add(rule.id)
+    return self
+
+
 class PipelineConfig(BaseModel):
   layers: list[LayerConfig]
   token_budget: int = 200_000
@@ -248,3 +315,4 @@ class PipelineConfig(BaseModel):
   final_answer: FinalAnswerConfig = FinalAnswerConfig()
   repeat_guard: RepeatGuardConfig = RepeatGuardConfig()
   continuity: ContinuityConfig | None = None
+  retrieval_profiles: dict[str, RetrievalProfileConfig] = {}
