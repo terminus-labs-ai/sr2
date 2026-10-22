@@ -292,7 +292,7 @@ AC5_TURN = [
         "correction: we adopted SQLite, not Postgres.",
         {"supersedes_subject": "subject-no-such-yet"},
     ),
-    ("assistant", "I believe the cache defaults to redis.", {}),
+    ("assistant", "I believe the cache defaults to redis.", {"about_subject": "subject-cache-backend"}),
 ]
 
 
@@ -763,7 +763,7 @@ async def correction_setup(tmp_path, db_name: str):
         "correction: we adopted SQLite, not Postgres.",
         {"supersedes_subject": "subject-db-backend"},
     )
-    consolidator = RuleBasedContinuityConsolidator(provenance=builder_store(builder))
+    consolidator = RuleBasedContinuityConsolidator(provenance=builder_store(builder), store=store)
     records = await consolidator.consolidate(
         request_for([correction_entry_id], project_hints=("sr2",))
     )
