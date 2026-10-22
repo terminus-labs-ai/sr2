@@ -439,22 +439,29 @@ class TestLayerAddContentBackwardCompat:
         assert len(content) == 1
         assert content[0].text == "legacy content"
 
-    def test_old_content_path_does_not_write_to_store(self):
-        """FR7: Old content= path does NOT write to the provenance store."""
+    def test_old_content_path_buffers_entries_for_store(self):
+        """sr2-92 (retargeted): raw content= path now buffers a pending write
+        per item and keeps compiled content identical (no-store bypass
+        removed)."""
         store = InMemoryProvenanceStore()
         layer = make_layer(provenance_store=store)
 
+        block = TextBlock(text="x")
         layer.add_content(
             ResolvedContent(
                 resolver_name="r",
                 source_layer="test",
-                content=[TextBlock(text="x")],
+                content=[block],
             )
         )
 
-        # _pending_writes should be empty — no store writes for old-path content
+        # Compiled content unchanged by the new behavior.
+        assert layer.get_content() == [block]
+
+        # The raw item is now buffered as a stored entry (one per item).
         pending = getattr(layer, "_pending_writes", [])
-        assert pending == []
+        assert len(pending) == 1
+        assert pending[0].content == block
 
     def test_multiple_old_path_calls_accumulate_content(self):
         """Backward compat: multiple content= add_content calls accumulate in order."""
@@ -504,21 +511,31 @@ class TestLayerProcessPendingFlushesStore:
 
     @pytest.mark.asyncio
     async def test_process_pending_after_old_path_add_content_is_noop(self):
-        """Backward compat: process_pending after old content= path does not write to store."""
+        """sr2-92: process_pending after the raw content= path writes the
+        raw item to the store (was a no-op; the no-store bypass is gone)."""
         store = InMemoryProvenanceStore()
         layer = make_layer(provenance_store=store)
 
+        block = TextBlock(text="x")
         layer.add_content(
             ResolvedContent(
                 resolver_name="r",
                 source_layer="test",
-                content=[TextBlock(text="x")],
+                content=[block],
             )
         )
         await layer.process_pending()
 
-        session_entries = await store.get_session("session-test")
-        assert session_entries == []
+        # The raw item now has a stored provenance entry. Session id is
+        # implementation-chosen, so scan plausible partitions.
+        all_entries = []
+        for sid in ("default", "session-test"):
+            all_entries.extend(await store.get_session(sid))
+        matches = [e for e in all_entries if e.content == block]
+        assert len(matches) == 1, (
+            "raw content= path must produce exactly one stored Entry "
+            f"(found {len(matches)})"
+        )
 
     @pytest.mark.asyncio
     async def test_process_pending_with_no_pending_writes_is_noop(self):
