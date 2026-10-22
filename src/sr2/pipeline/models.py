@@ -31,7 +31,14 @@ class CompilationTarget(Enum):
 
 @dataclass
 class ResolvedContent:
-  """Output of a Resolver: content blocks with resolver identity and token count."""
+  """Output of a Resolver: content blocks with resolver identity and token count.
+
+  ``provenance`` optionally declares per-item causal fields (reason,
+  authority, lifecycle) parallel to ``content`` for raw resolvers that
+  cannot build :class:`Entry` objects themselves. Entries for raw content
+  are synthesized at the layer/store boundary (provenance-complete
+  context, sr2-92).
+  """
 
   resolver_name: str
   source_layer: str
@@ -39,11 +46,17 @@ class ResolvedContent:
   token_count: int = 0
   entries: list[Entry] = field(default_factory=list)
   events: list[Event] = field(default_factory=list)
+  provenance: list[dict] | None = None
 
 
 @dataclass
 class TransformationResult:
-  """Output of a Transformer: transformed content with optional emitted events."""
+  """Output of a Transformer: transformed content with optional emitted events.
+
+  ``provenance`` declares per-item causal fields (reason, authority,
+  lifecycle, and optionally real ``sources`` entry IDs) parallel to
+  ``content`` for transformers that return raw content without entries.
+  """
 
   transformer_name: str
   source_layer: str
@@ -53,6 +66,7 @@ class TransformationResult:
   tokens_after: int = 0
   tokens_saved: int = 0
   entries: list[Entry] = field(default_factory=list)
+  provenance: list[dict] | None = None
 
 
 # ---------------------------------------------------------------------------
