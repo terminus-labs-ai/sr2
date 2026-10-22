@@ -326,8 +326,11 @@ class TestInMemoryProvenanceStoreWriteGet:
         await store.write_batch([])
 
     @pytest.mark.asyncio
-    async def test_second_write_overwrites_first(self):
-        """Writing an entry with the same id twice keeps the latest write."""
+    async def test_second_write_with_different_payload_is_noop(self):
+        """FR4 append-only (sr2-92): a second write for a stored id leaves
+        the stored entry unchanged — entries are never updated. Replaces the
+        pre-sr2-92 overwrite assertion, which contradicted FR4 and the
+        approved AC1-r11 immutability rows in test_sqlite_provenance.py."""
         store = InMemoryProvenanceStore()
         eid = _next_id()
         first = make_entry(id=eid, layer="system")
@@ -335,7 +338,8 @@ class TestInMemoryProvenanceStoreWriteGet:
         await store.write(first)
         await store.write(second)
         retrieved = await store.get(eid)
-        assert retrieved.layer == "conversation"
+        assert retrieved == first
+        assert retrieved.layer == "system"
 
 
 # ---------------------------------------------------------------------------
