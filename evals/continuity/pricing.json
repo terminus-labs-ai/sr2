@@ -1,0 +1,7 @@
+{
+  "model": "claude-sonnet-4-5",
+  "usd_per_mtok_input": 3.0,
+  "usd_per_mtok_output": 15.0,
+  "source_url": "https://www.anthropic.com/pricing#anthropic-api",
+  "fetched_date": "2026-10-22"
+}
