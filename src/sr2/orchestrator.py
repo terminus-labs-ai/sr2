@@ -32,6 +32,7 @@ from sr2.pipeline.provenance import (
 )
 
 if TYPE_CHECKING:
+    from sr2.continuity.store import ContinuityStore
     from sr2.pipeline.tracing import Tracer
     from sr2.memory.protocol import MemoryExtractor, MemoryStore
 from sr2.models import Message, TextBlock, ThinkingBlock, TokenUsage, ToolResultBlock, ToolUseBlock
@@ -475,6 +476,8 @@ class SR2:
         token_counter: TokenCounter,
         session_id: str | None = None,
         provenance_store: ProvenanceStore | None = None,
+        continuity_consolidator: Any | None = None,
+        continuity_store: "ContinuityStore | None" = None,
         tracer: "Tracer | None" = None,
         memory_store: "MemoryStore | None" = None,
         memory_extractor: "MemoryExtractor | None" = None,
@@ -521,7 +524,14 @@ class SR2:
             active_frame_provider=active_frame_provider,
             run_context_provider=run_context_provider,
             tool_source=tool_source,
+            continuity_consolidator=continuity_consolidator,
+            continuity_store=continuity_store,
         )
+        # sr2-96 (FR10, FR14): the post-process consolidation seam. Both
+        # parts are opt-in; when either is absent post_process stays the
+        # MVP no-op.
+        self._continuity_consolidator = deps.continuity_consolidator
+        self._continuity_store = deps.continuity_store
         self._active_frame_provider = deps.active_frame_provider
 
         # Resolve shared infrastructure before building layers so layers receive
@@ -1550,5 +1560,48 @@ class SR2:
             self._pp_task = None
 
     async def post_process(self, response: CompletionResponse) -> None:
-        """Post-turn processing hook. No-op in MVP."""
-        return
+        """Post-turn processing hook.
+
+        MVP no-op while continuity is unconfigured. sr2-96 (FR10, FR14):
+        when a consolidator AND a continuity store are wired, this barrier
+        consolidates the just-completed turn's archive and appends the
+        typed records to the ledger. It runs deferred after turn N and the
+        next turn awaits it before starting — that IS FR14's one-turn-lag
+        correctness barrier, so no separate worker exists.
+
+        A consolidation failure is logged and swallowed (degraded
+        continuity, mirroring the turn archivist): it must never crash a
+        turn nor raise out of this hook.
+        """
+        if self._continuity_consolidator is None or self._continuity_store is None:
+            return
+        try:
+            await self._consolidate_completed_turn()
+        except Exception:
+            logger.exception(
+                "continuity consolidation failed (session=%s); continuing "
+                "in degraded continuity",
+                self.session_id,
+            )
+        return None
+
+    async def _consolidate_completed_turn(self) -> None:
+        """Consolidate the current turn's archived entries into the ledger."""
+        from ulid import ULID as _ULID  # local import: avoids module-load cycle
+
+        from sr2.continuity.consolidation import ConsolidationRequest
+        from sr2.pipeline.provenance import read_turn_archive
+
+        turn_seq = self._turn_archivist.turn_seq
+        entries = await read_turn_archive(
+            self._turn_archivist._store, self.session_id, turn_seq
+        )
+        request = ConsolidationRequest(
+            turn_id=f"{self.session_id}:{turn_seq}:{_ULID()}",
+            entry_ids=tuple(entry.id for entry in entries),
+            owner_id=self.session_id,  # the SR2 session owns the archive
+            agent_id="sr2",
+        )
+        records = await self._continuity_consolidator.consolidate(request)
+        for record in records:
+            await self._continuity_store.append(record)
