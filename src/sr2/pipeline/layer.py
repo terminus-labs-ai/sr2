@@ -6,18 +6,30 @@ budgets, and compiles content for its compilation target.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable
 
 from sr2.models import ContentBlock, Message, TextBlock, ToolDefinition
+from ulid import ULID
 from sr2.pipeline.compilation import PositionStrategy, get_compilation_targets
 from sr2.pipeline.event_bus import EventBus
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
 from sr2.pipeline.models import CompilationTarget
 from sr2.pipeline.models import ResolvedContent, TransformationResult
 from sr2.pipeline.protocols import Resolver, Seedable, TokenCounter, ToolProvider, Transformer
-from sr2.pipeline.provenance import Entry, InMemoryProvenanceStore, ProvenanceStore
+from sr2.pipeline.provenance import (
+    ContextAuthority,
+    ContextLifecycle,
+    ContextReason,
+    ContextScope,
+    Entry,
+    EntryOrigin,
+    InMemoryProvenanceStore,
+    ProvenanceStore,
+)
 
 from sr2.pipeline.tracing import FiringRecord
 
@@ -90,6 +102,269 @@ _COMPONENT_DISPATCH: dict[str, _ComponentStrategy] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Provenance synthesis for raw content (sr2-92 — no-store bypass removed)
+# ---------------------------------------------------------------------------
+
+_CAUSAL_ENUMS: dict[str, type] = {
+    "reason": ContextReason,
+    "authority": ContextAuthority,
+    "lifecycle": ContextLifecycle,
+}
+
+# Known production components whose raw output carries a fixed causal
+# classification until they emit provenance-aware Entries themselves
+# (resolver names and source layers, from sr2.pipeline.resolvers and
+# sr2.memory). Each entry: (reason, authority, lifecycle, meta-source_ref
+# or None). Unknown names fall through to structural inference.
+_PRODUCTION_CAUSAL: dict[str, tuple[ContextReason, ContextAuthority, ContextLifecycle]] = {
+    "input": (ContextReason.USER_INPUT, ContextAuthority.USER, ContextLifecycle.TURN),
+    "session": (ContextReason.USER_INPUT, ContextAuthority.USER, ContextLifecycle.RECENT),
+    "static": (ContextReason.SYSTEM_CONFIG, ContextAuthority.VERIFIED, ContextLifecycle.PINNED),
+    "static_text": (
+        ContextReason.SYSTEM_CONFIG,
+        ContextAuthority.VERIFIED,
+        ContextLifecycle.PINNED,
+    ),
+    "markdown_file": (
+        ContextReason.LIVE_SOURCE,
+        ContextAuthority.LIVE_SOURCE,
+        ContextLifecycle.PROJECT,
+    ),
+    "memory": (ContextReason.RETRIEVAL, ContextAuthority.DERIVED, ContextLifecycle.RETRIEVED),
+    "assistant_output": (
+        ContextReason.ASSISTANT_OUTPUT,
+        ContextAuthority.AGENT_TENTATIVE,
+        ContextLifecycle.RECENT,
+    ),
+    "tool_events": (ContextReason.TOOL_USE, ContextAuthority.AGENT_TENTATIVE, ContextLifecycle.TURN),
+}
+
+# Production entry-emitting components (their entries are genesis
+# resolver-origin entries; dangling declared sources are a store bug).
+_PRODUCTION_ENTRY_COMPONENTS = frozenset({"event_payload", "summarization"})
+
+
+def _coerce_causal(declared: dict | None) -> dict:
+    """Normalize a provenance declaration into Entry keyword fields.
+
+    Unknown enum values raise ValueError here — at the boundary — rather
+    than persisting an invalid Entry.
+    """
+    out: dict = {}
+    for name, enum_cls in _CAUSAL_ENUMS.items():
+        value = (declared or {}).get(name)
+        if value is None:
+            continue
+        try:
+            out[name] = enum_cls(value)
+        except ValueError:
+            raise ValueError(
+                f"Unknown provenance {name} {value!r}; "
+                f"expected one of {[e.value for e in enum_cls]}"
+            ) from None
+    return out
+
+
+def _causal_for_item(
+    item: ContentBlock | Message,
+    source_layer: str,
+    declared: dict | None = None,
+    default_kind: str = "resolver",
+    origin_name: str = "",
+) -> dict:
+    """Derive the causal fields for one raw compiled item (FR2).
+
+    Priority (highest wins):
+
+    1. ``declared`` — the producer's per-item provenance declaration
+       (``ResolvedContent.provenance`` / ``TransformationResult.provenance``,
+       parallel to ``content``).
+    2. ``item.meta["provenance"]`` — per-block declaration carried on the
+       content block itself.
+    3. The item's own shape (Message role, block type).
+    4. Declared dialogue/live-source component vocabulary (``input``,
+       ``session``, ``static``, ``markdown_file``, ...).
+    5. Origin kind (transformer output is a transformation).
+
+    The vocabulary is the spec's generic enums only.
+    """
+    meta: dict[str, Any] = {}
+
+    kind = getattr(item, "type", None)
+    role = getattr(item, "role", None) if isinstance(item, Message) else None
+    reason: ContextReason
+    authority: ContextAuthority
+    lifecycle: ContextLifecycle
+
+    # A Message's own dialogue role is the strongest structural signal.
+    if role == "user":
+        reason, authority, lifecycle = (
+            ContextReason.USER_INPUT,
+            ContextAuthority.USER,
+            ContextLifecycle.RECENT,
+        )
+    elif role == "assistant":
+        reason, authority, lifecycle = (
+            ContextReason.ASSISTANT_OUTPUT,
+            ContextAuthority.AGENT_TENTATIVE,
+            ContextLifecycle.RECENT,
+        )
+    elif kind == "tool_use":
+        reason, authority, lifecycle = (
+            ContextReason.TOOL_USE,
+            ContextAuthority.AGENT_TENTATIVE,
+            ContextLifecycle.TURN,
+        )
+    elif kind == "tool_result":
+        reason, authority, lifecycle = (
+            ContextReason.TOOL_RESULT,
+            ContextAuthority.DERIVED,
+            ContextLifecycle.TURN,
+        )
+    elif origin_name in _PRODUCTION_CAUSAL:
+        reason, authority, lifecycle = _PRODUCTION_CAUSAL[origin_name]
+        if reason is ContextReason.LIVE_SOURCE and isinstance(item, TextBlock):
+            meta["content_hash"] = hashlib.sha256(
+                (item.text or "").encode("utf-8")
+            ).hexdigest()
+    elif source_layer in _PRODUCTION_CAUSAL:
+        reason, authority, lifecycle = _PRODUCTION_CAUSAL[source_layer]
+        if reason is ContextReason.LIVE_SOURCE and isinstance(item, TextBlock):
+            meta["content_hash"] = hashlib.sha256(
+                (item.text or "").encode("utf-8")
+            ).hexdigest()
+    elif default_kind == "transformer":
+        reason, authority, lifecycle = (
+            ContextReason.TRANSFORMATION,
+            ContextAuthority.DERIVED,
+            ContextLifecycle.TURN,
+        )
+    else:
+        reason, authority, lifecycle = (
+            ContextReason.SYSTEM_CONFIG,
+            ContextAuthority.DERIVED,
+            ContextLifecycle.TURN,
+        )
+
+    result: dict[str, Any] = {
+        "reason": reason,
+        "authority": authority,
+        "lifecycle": lifecycle,
+    }
+
+    # --- 2: per-block declaration on the content item -------------------
+    block_declared = getattr(item, "meta", None)
+    if isinstance(block_declared, dict):
+        block_declared = block_declared.get("provenance")
+        if isinstance(block_declared, dict):
+            result.update(_coerce_causal(block_declared))
+            if block_declared.get("source_ref") is not None:
+                meta["source_ref"] = block_declared["source_ref"]
+
+    # --- 1: producer declaration on the resolved content ----------------
+    explicit_lifecycle = (declared or {}).get("lifecycle")
+    result.update(_coerce_causal(declared))
+    for key in ("source_ref", "revision"):
+        if declared and declared.get(key) is not None:
+            meta[key] = declared[key]
+
+    if explicit_lifecycle is None and origin_name == "input":
+        # Fresh current-turn user input (InputResolver wraps the live
+        # user_input event; replayed dialogue comes from the session
+        # resolver instead).
+        result["lifecycle"] = ContextLifecycle.TURN
+
+    if result["reason"] is ContextReason.LIVE_SOURCE:
+        # External live/config/file sources carry a stable source reference,
+        # revision/hash, and observation time (spec, Interfaces).
+        meta.setdefault("source_ref", source_layer)
+        meta.setdefault("revision", meta.get("content_hash", ""))
+        meta.setdefault("observed_at", datetime.now(tz=timezone.utc).isoformat())
+
+    if meta:
+        result["meta"] = meta
+    return result
+
+
+def _content_hash_id(item: object) -> str:
+    """Content-addressed entry id: 26 chars from SHA-256 of canonical JSON.
+
+    Repeated compilations of unchanged content produce the same id, so the
+    append-only stores deduplicate re-persisted items instead of growing a
+    new row per turn. Falls back to a fresh ULID for payloads that cannot
+    be serialized deterministically.
+    """
+    try:
+        digest = hashlib.sha256(
+            item.model_dump_json().encode("utf-8")  # type: ignore[attr-defined]
+        ).hexdigest()
+    except (AttributeError, TypeError, ValueError):
+        return str(ULID())
+    chars = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32 alphabet
+    num = int(digest, 16)
+    out = ""
+    for _ in range(26):
+        out = chars[num % 32] + out
+        num //= 32
+    return out
+
+
+def _synthesize_entries(
+    items: list,
+    declarations: list | None,
+    origin_name: str,
+    origin_kind: str,
+    source_layer: str,
+    default_sources: tuple[str, ...] = (),
+) -> list[Entry]:
+    """Build one provenance Entry per raw content item (FR1).
+
+    The real item object is kept as the Entry payload (identity is
+    preserved so truncation and compile operate on the same objects); only
+    causal fields are derived. ``default_sources`` applies only to origins
+    that require sources (transformer); resolver-origin entries stay
+    genesis.
+    """
+    entries: list[Entry] = []
+    for index, item in enumerate(items):
+        declared = (
+            declarations[index]
+            if declarations and index < len(declarations)
+            and isinstance(declarations[index], dict)
+            else None
+        )
+        entry_id = _content_hash_id(item)
+        if declared and declared.get("id"):
+            entry_id = declared["id"]
+        sources = tuple(declared.get("sources") or ()) if declared else ()
+        if not sources and origin_kind == "transformer":
+            sources = default_sources
+        origin = EntryOrigin(
+            kind="transformer" if sources else origin_kind, name=origin_name
+        )
+        if origin.kind == "transformer" and not sources:
+            origin = EntryOrigin(kind="resolver", name=origin_name)
+        fields = _causal_for_item(
+            item, source_layer, declared, origin_kind, origin_name
+        )
+        entries.append(
+            Entry(
+                id=entry_id,
+                content=item,
+                sources=sources,
+                origin=origin,
+                layer=source_layer,
+                session_id=(declared or {}).get("session_id") or "default",
+                created_at=datetime.now(tz=timezone.utc),
+                scope=ContextScope(owner_id="default"),
+                meta=fields.pop("meta", {}),
+                **fields,
+            )
+        )
+    return entries
+
+
 class Layer:
     """A single pipeline layer that accumulates, budgets, and compiles content."""
 
@@ -140,6 +415,10 @@ class Layer:
         self._pending_events: list[Event] = []
         # Entries buffered for store write — flushed in process_pending
         self._pending_writes: list[Entry] = []
+        # Entry IDs persisted by this layer's most recent flush — used as
+        # causal sources for raw transformer output when nothing else is
+        # available (FR5: sources must be real stored IDs).
+        self._last_stored_ids: tuple[str, ...] = ()
 
         # Degradation metadata (FR2 — sr2-82)
         self.degradation_category: str | None = degradation_category
@@ -276,6 +555,17 @@ class Layer:
             yield comp
 
     # -- event handling (sync callback) ---------------------------------------
+
+    async def _stored_ids(self, candidate_ids: list[str]) -> tuple[str, ...]:
+        """Ids from ``candidate_ids`` already present in the provenance store."""
+        stored: list[str] = []
+        for candidate in candidate_ids:
+            try:
+                if await self._provenance_store.get(candidate) is not None:
+                    stored.append(candidate)
+            except Exception:  # pragma: no cover - exotic stores
+                continue
+        return tuple(stored)
 
     def handle_event(self, event: Event) -> None:
         """Collect incoming events. Called as a bus callback during drain.
@@ -420,6 +710,34 @@ class Layer:
                 # set_content already applied inside _fire_component
                 if result.entries:
                     self._pending_writes.extend(result.entries)
+                if result.content:
+                    # Raw transformer output is compiled content too — it
+                    # gets a stored entry like any other item (FR1). Its
+                    # sources are declared real entry IDs when given, and
+                    # otherwise the entries this run already buffered and
+                    # will flush in this same call — never generated
+                    # dangling IDs (FR5).
+                    raw_sources: tuple[str, ...] = ()
+                    for decl in result.provenance or []:
+                        if isinstance(decl, dict) and decl.get("sources"):
+                            raw_sources = tuple(decl["sources"])
+                            break
+                    if not raw_sources:
+                        raw_sources = await self._stored_ids(
+                            [e.id for e in self._pending_writes]
+                        )
+                    if not raw_sources:
+                        raw_sources = self._last_stored_ids or ()
+                    self._pending_writes.extend(
+                        _synthesize_entries(
+                            items=result.content,
+                            declarations=result.provenance,
+                            origin_name=result.transformer_name,
+                            origin_kind="transformer",
+                            source_layer=result.source_layer,
+                            default_sources=raw_sources,
+                        )
+                    )
                 # Queue events emitted by transformer
                 if result.events:
                     for ev in result.events:
@@ -450,6 +768,7 @@ class Layer:
         # Flush pending provenance writes (regardless of whether events fired)
         if self._pending_writes:
             await self._provenance_store.write_batch(self._pending_writes)
+            self._last_stored_ids = tuple(e.id for e in self._pending_writes)
             self._pending_writes = []
 
         return changed
@@ -461,13 +780,23 @@ class Layer:
 
     def add_content(self, resolved: ResolvedContent) -> None:
         if resolved.entries:
-            # New path: entries with provenance — extract content blocks and buffer for store
+            # Entries path — place their content and buffer for the store.
             entry_contents = [e.content for e in resolved.entries]
             self._content = self._position.place(self._content, entry_contents)
             self._pending_writes.extend(resolved.entries)
-        elif resolved.content:
-            # Old path: raw content blocks (backward compat) — no store write
+        if resolved.content:
+            # Raw content — placed as-is and synthesized into provenance
+            # entries (FR1: there is no raw-content/no-store bypass).
             self._content = self._position.place(self._content, resolved.content)
+            self._pending_writes.extend(
+                _synthesize_entries(
+                    items=resolved.content,
+                    declarations=resolved.provenance,
+                    origin_name=resolved.resolver_name,
+                    origin_kind="resolver",
+                    source_layer=resolved.source_layer,
+                )
+            )
         # Queue any events emitted by the resolver onto the bus
         if resolved.events and self._event_bus is not None:
             for ev in resolved.events:

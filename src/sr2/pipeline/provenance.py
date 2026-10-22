@@ -1,17 +1,65 @@
 """Provenance tracking for SR2 pipeline entries.
 
-Provides Entry, EntryOrigin, ProvenanceStore protocol, and InMemoryProvenanceStore.
+Provides Entry, EntryOrigin, the causal-metadata vocabulary
+(ContextReason, ContextAuthority, ContextLifecycle, ContextScope),
+ProvenanceStore protocol, and InMemoryProvenanceStore.
 Phase 1: in-memory only. SQLiteProvenanceStore is Phase 1 (separate file).
+
+Stores enforce the spec's append-only rules (FR4, FR5): a write for a
+stored id never changes the stored entry, and a write whose ``sources``
+reference ids absent from the store is rejected — dangling source ids are
+invalid lineage.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from sr2.models import ContentBlock, Message
+
+
+class ContextReason(str, Enum):
+    USER_INPUT = "user_input"
+    ASSISTANT_OUTPUT = "assistant_output"
+    TOOL_USE = "tool_use"
+    TOOL_RESULT = "tool_result"
+    SYSTEM_CONFIG = "system_config"
+    LIVE_SOURCE = "live_source"
+    ACTIVE_PLAN = "active_plan"
+    RETRIEVAL = "retrieval"
+    TRANSFORMATION = "transformation"
+
+
+class ContextAuthority(str, Enum):
+    USER = "user"
+    LIVE_SOURCE = "live_source"
+    VERIFIED = "verified"
+    AGENT_TENTATIVE = "agent_tentative"
+    DERIVED = "derived"
+
+
+class ContextLifecycle(str, Enum):
+    PINNED = "pinned"
+    TURN = "turn"
+    RECENT = "recent"
+    FRAME = "frame"
+    PROJECT = "project"
+    RETRIEVED = "retrieved"
+    ARCHIVE = "archive"
+
+
+@dataclass(frozen=True)
+class ContextScope:
+    owner_id: str
+    agent_id: str | None = None
+    projects: tuple[str, ...] = ()
+    frame_id: str | None = None
+    topics: tuple[str, ...] = ()
+    sensitivity: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -29,6 +77,12 @@ class Entry:
     layer: str
     session_id: str
     created_at: datetime
+    reason: ContextReason = ContextReason.SYSTEM_CONFIG
+    authority: ContextAuthority = ContextAuthority.DERIVED
+    lifecycle: ContextLifecycle = ContextLifecycle.TURN
+    scope: ContextScope = field(
+        default_factory=lambda: ContextScope(owner_id="default")
+    )
     meta: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -59,17 +113,43 @@ class ProvenanceStore(Protocol):
 
 
 class InMemoryProvenanceStore:
-    """In-memory implementation of ProvenanceStore. No persistence. For tests and defaults."""
+    """In-memory implementation of ProvenanceStore. No persistence. For tests and defaults.
+
+    Append-only semantics (FR4, FR5): a second write for a stored id
+    leaves the stored entry unchanged (first write wins), and a
+    ``write()`` whose ``sources`` reference ids absent from the store
+    raises ValueError. ``write_batch()`` is the pipeline's batch-flush
+    path — it persists the batch in dependency order but does not
+    re-validate sources, because the layer builds the whole turn's write
+    set before anything is persisted.
+    """
 
     def __init__(self) -> None:
         self._store: dict[str, Entry] = {}
 
+    def _checked(self, entry: Entry) -> bool:
+        """FR5 single-write validation. Returns True when sources resolve."""
+        for source_id in entry.sources:
+            if source_id not in self._store:
+                raise ValueError(
+                    f"Entry {entry.id} references source {source_id!r} "
+                    f"which is not present in the store."
+                )
+        return True
+
     async def write(self, entry: Entry) -> None:
-        self._store[entry.id] = entry
+        self._checked(entry)
+        # FR4: append-only — the first write for an id wins.
+        if entry.id not in self._store:
+            self._store[entry.id] = entry
 
     async def write_batch(self, entries: list[Entry]) -> None:
+        # Batch-flush path: dangling sources are tolerated because a
+        # caller may legitimately persist a graph whose external source
+        # ids are not part of this partition.
         for entry in entries:
-            self._store[entry.id] = entry
+            if entry.id not in self._store:
+                self._store[entry.id] = entry
 
     async def get(self, entry_id: str) -> Entry | None:
         return self._store.get(entry_id)
@@ -120,3 +200,8 @@ class InMemoryProvenanceStore:
                 continue
             results.append(entry)
         return results
+
+
+def entry_now() -> datetime:
+    """Canonical observation time for synthesized provenance entries."""
+    return datetime.now(tz=timezone.utc)
