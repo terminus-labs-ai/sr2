@@ -8,6 +8,15 @@ class ConfigError(Exception):
     """Raised when a pipeline configuration is invalid."""
 
 
+class _ValidatableConfigError(ConfigError, ValueError):
+    """ConfigError that pydantic wraps in a ValidationError.
+
+    Model validators must raise ``ValueError`` for pydantic to convert the
+    failure into a ``ValidationError``; this keeps the repo's ``ConfigError``
+    identity while satisfying that contract.
+    """
+
+
 class ToolLoopLimitError(Exception):
     """Raised when the tool iteration limit is exceeded within a single turn."""
 
@@ -203,6 +212,29 @@ class RepeatGuardConfig(BaseModel):
   """Appended to the note on repeat ``notes_before_stop``. ``{repeat}``."""
 
 
+class ContinuityConfig(BaseModel):
+  """Bounded working-set configuration (FR6/FR7 — sr2-94).
+
+  When absent (``None`` on ``PipelineConfig.continuity``), continuity is
+  disabled and configurations retain the legacy full-replay behavior.
+  """
+
+  recent_token_budget: int
+  """Token budget for the recent dialogue window the selector retains."""
+
+  hard_token_budget: int | None = None
+  """Hard cap on total resolver output. ``None`` means the recent window
+  budget alone bounds the compiled working set."""
+
+  @model_validator(mode="after")
+  def _validate_recent_budget_positive(self) -> "ContinuityConfig":
+    if self.recent_token_budget <= 0:
+      raise _ValidatableConfigError(
+        f"recent_token_budget must be positive; got {self.recent_token_budget}"
+      )
+    return self
+
+
 class PipelineConfig(BaseModel):
   layers: list[LayerConfig]
   token_budget: int = 200_000
@@ -215,3 +247,4 @@ class PipelineConfig(BaseModel):
   degradation: DegradationConfig | None = None
   final_answer: FinalAnswerConfig = FinalAnswerConfig()
   repeat_guard: RepeatGuardConfig = RepeatGuardConfig()
+  continuity: ContinuityConfig | None = None
