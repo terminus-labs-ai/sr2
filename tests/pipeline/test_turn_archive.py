@@ -175,6 +175,23 @@ def _build_sr2(
     )
 
 
+def _visible_results(events: list[StreamEvent]) -> list[ToolResultBlock]:
+    """The SR2-visible tool-result blocks, in occurrence order.
+
+    These are the blocks carried on the ``tool_result_received`` StreamEvents
+    — i.e. AFTER ``_stamp_block`` and AFTER ``_RepeatGuard.observe`` may have
+    replaced ``result.content`` with the repeat note (sr2-122/123 both mutate
+    the executor's block in place). AC2 fixes the archive against the
+    *SR2-visible* payload, so this — never the raw executor return object —
+    is the comparison target for a TOOL_RESULT entry.
+    """
+    visible: list[ToolResultBlock] = []
+    for event in events:
+        if event.type == "tool_result_received" and event.tool_results:
+            visible.extend(event.tool_results)
+    return visible
+
+
 def _iter(text: str | None, *calls: StreamEvent) -> list[StreamEvent]:
     events: list[StreamEvent] = []
     if text:
@@ -204,9 +221,14 @@ def _guard(**overrides: Any):
 class RecordingExecutor:
     """Async executor returning scripted contents per tool_use id.
 
-    The archived TOOL_RESULT must equal exactly what the executor returned —
-    capturing the returned blocks lets the tests compare against the very
-    objects SR2 received.
+    The archived TOOL_RESULT must equal exactly the tool-result block *as SR2
+    saw it*. ``returned`` keeps the objects this executor handed back, but
+    they are not the SR2-visible payload: ``_stamp_block`` stamps
+    ``meta["frame"]`` on them and ``_RepeatGuard.observe`` may replace
+    ``content`` with the repeat note, both in place (sr2-122/123). Drivers
+    that assert payload content therefore compare against the block carried
+    on the ``tool_result_received`` StreamEvent (see ``_visible_results``);
+    the raw returns stay here only to prove the executor actually ran.
     """
 
     def __init__(self, contents: dict[str, str]) -> None:
@@ -362,7 +384,9 @@ class TestAC2R3TruncationMarker:
     async def test_truncation_marker_archived_verbatim(self):
         """AC2-r3: a ToolResultBlock whose content ends with an upstream
         truncation marker is archived exactly, marker included; nothing
-        strips the marker and no additional raw payload appears."""
+        strips the marker and no additional raw payload appears. The
+        comparison target is the SR2-visible result block (post-stamping,
+        post-guard), per the "SR2-visible ... exactly" contract."""
         truncated = "alpha beta gamma ... [truncated]"
         executor = RecordingExecutor({"tc_1": truncated})
         # iter0 carries text so its assistant iteration is transcribed like
@@ -379,7 +403,15 @@ class TestAC2R3TruncationMarker:
         )
         store = prov.InMemoryProvenanceStore()
         sr2 = _build_sr2(llm=llm, store=store, tool_executor=executor)
-        await _drain(sr2, "go")
+        events = [e async for e in sr2.turn(make_user_input("go"), origin="")]
+        assert any(e.type == "end" for e in events), "turn must complete"
+        # The SR2-visible result block, post-stamping and post-guard: this is
+        # the payload the TOOL_RESULT entry must equal (see _visible_results).
+        visible = _visible_results(events)
+        assert len(visible) == 1, (
+            f"precondition: one executed tool call must produce exactly one "
+            f"SR2-visible tool result, got {visible!r}"
+        )
 
         entries = await read_turn_archive(store, sr2.session_id, _TURN0)
         tool_results = [
@@ -390,7 +422,7 @@ class TestAC2R3TruncationMarker:
             f"is expected, got {len(tool_results)}"
         )
         # Exactly the block SR2 received, marker included.
-        _assert_payload_equal(tool_results[0].content, executor.returned[0], where="TOOL_RESULT")
+        _assert_payload_equal(tool_results[0].content, visible[0], where="TOOL_RESULT")
         archived_content = tool_results[0].content
         assert isinstance(archived_content, ToolResultBlock)
         assert archived_content.content.endswith("... [truncated]"), (
@@ -511,7 +543,10 @@ class TestAC2R7ControlEventsNotArchived:
         repeat_guard / final_answer StreamEvents prove the control path ran;
         the archive still holds the executed tool calls/results in order and
         the forced final assistant output — and no entry represents
-        repeat_guard or finish_reason telemetry."""
+        repeat_guard or finish_reason telemetry. Tool results are compared to
+        the SR2-visible blocks (post-stamp, post-guard), so whatever the
+        guard left on the stopping call's result is what the archive must
+        carry."""
         executor = RecordingExecutor({"c1": "same", "c2": "same", "c3": "same"})
         llm = SequentialMockLLM(
             [
@@ -533,6 +568,11 @@ class TestAC2R7ControlEventsNotArchived:
             e.type == "final_answer" and (e.meta or {}).get("reason") == "repeat"
             for e in events
         ), "precondition: the forced final answer (reason=repeat) must have run"
+        # The SR2-visible results, captured from the events the guard path
+        # emitted: the comparison target for the TOOL_RESULT entries, post
+        # _stamp_block and post-guard (sr2-122/123 mutate the executor's
+        # block in place, so the raw return object is not what SR2 saw).
+        visible = _visible_results(events)
 
         entries = await read_turn_archive(store, sr2.session_id, _TURN0)
         reasons = [e.reason for e in entries]
@@ -562,12 +602,22 @@ class TestAC2R7ControlEventsNotArchived:
         }
         assert all(r in allowed for r in reasons), f"unexpected archived reason: {reasons!r}"
         # Tool payloads verbatim: each TOOL_USE is the call block, each
-        # TOOL_RESULT is what SR2 received for it.
+        # TOOL_RESULT is the block SR2 received for it (post-stamp,
+        # post-guard — the repeat note included where the guard replaced it).
         uses = [e.content for e in entries if e.reason == prov.ContextReason.TOOL_USE]
         assert [b.id for b in uses] == ["c1", "c2", "c3"]
         results = [e.content for e in entries if e.reason == prov.ContextReason.TOOL_RESULT]
-        for archived, returned in zip(results, executor.returned):
-            assert _content_equal(archived, returned)
+        assert len(results) == len(visible) == 3, (
+            f"each executed call archives one result; archived {len(results)} "
+            f"against {len(visible)} SR2-visible results"
+        )
+        for call_id, archived, seen in zip(
+            ("c1", "c2", "c3"), results, visible, strict=True
+        ):
+            assert _content_equal(archived, seen), (
+                f"TOOL_RESULT for {call_id}: archived {archived!r} does not "
+                f"equal the SR2-visible result block {seen!r}"
+            )
 
 
 # ===========================================================================

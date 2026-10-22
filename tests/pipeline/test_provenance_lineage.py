@@ -56,7 +56,7 @@ from conftest import (
 
 import sr2.pipeline.provenance as prov
 from sr2.config.models import PipelineConfig
-from sr2.models import Message, ToolResultBlock, ToolUseBlock
+from sr2.models import Message, TextBlock, ToolResultBlock, ToolUseBlock
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.protocols.llm import StreamEvent
 
@@ -76,6 +76,18 @@ def _valid_authority(value) -> None:
     presence/validity only (case-table grounding rule)."""
     assert value is not None
     assert isinstance(value, prov.ContextAuthority)
+
+
+def _entry_text(entry) -> str:
+    """The text an archived entry carries, whichever authorized encoding it
+    uses (a Message wrapper holding TextBlocks, or a bare TextBlock). Text
+    equality is what AC2 fixes; the wrapper is not asserted.
+    """
+    content = entry.content
+    blocks = content.content if isinstance(content, Message) else [content]
+    if not isinstance(blocks, list):
+        blocks = []
+    return "".join(b.text for b in blocks if isinstance(b, TextBlock))
 
 
 # ---------------------------------------------------------------------------
@@ -191,9 +203,15 @@ class TestAC2R5CausalFields:
             )
 
         # Payload sanity the causal fields attach to (kept minimal; r1
-        # owns payload equality).
-        assert isinstance(user_entry.content, Message)
-        assert user_entry.content.role == "user"
+        # owns payload equality). AC2 fixes the ordered payload *content*;
+        # how a payload is wrapped in an Entry (Message vs. bare block) is
+        # an encoding choice the amendment authorizes but does not fix, so
+        # only the user-input text is asserted here — as in the sibling
+        # rows.
+        user_text = _entry_text(user_entry)
+        assert user_text == "weather please", (
+            f"USER_INPUT entry must carry the turn's user input text, got {user_text!r}"
+        )
 
 
 # ===========================================================================
