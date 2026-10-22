@@ -766,22 +766,6 @@ class RuleBasedContinuityConsolidator:
             return [view.current_record for view in views.values()]
         return _CURRENT_PROJECTIONS.current_records()
 
-    async def _match_subject(self, subject_id: str) -> ContinuityRecord | None:
-        """Recorded subject an unknown subject id abbreviates, if any.
-
-        ``subject-cache`` resolves to ``subject-cache-backend`` — an operator
-        or a link names a subject by hand, and the ledger already holds it
-        under a longer id. Token-run containment, no score.
-        """
-        topic = _record_topic_like(subject_id)
-        if not topic:
-            return None
-        for record in await self._current_records():
-            recorded = _record_topic(record)
-            if topic == recorded or recorded.startswith(topic + "-"):
-                return record
-        return None
-
     async def _match_current_record(self, text: str) -> ContinuityRecord | None:
         """Current record an entry is about, or None.
 
