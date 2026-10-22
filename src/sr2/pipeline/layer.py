@@ -115,8 +115,7 @@ _CAUSAL_ENUMS: dict[str, type] = {
 # Known production components whose raw output carries a fixed causal
 # classification until they emit provenance-aware Entries themselves
 # (resolver names and source layers, from sr2.pipeline.resolvers and
-# sr2.memory). Each entry: (reason, authority, lifecycle, meta-source_ref
-# or None). Unknown names fall through to structural inference.
+# sr2.memory). Unknown names fall through to structural inference.
 _PRODUCTION_CAUSAL: dict[str, tuple[ContextReason, ContextAuthority, ContextLifecycle]] = {
     "input": (ContextReason.USER_INPUT, ContextAuthority.USER, ContextLifecycle.TURN),
     "session": (ContextReason.USER_INPUT, ContextAuthority.USER, ContextLifecycle.RECENT),
@@ -139,10 +138,6 @@ _PRODUCTION_CAUSAL: dict[str, tuple[ContextReason, ContextAuthority, ContextLife
     ),
     "tool_events": (ContextReason.TOOL_USE, ContextAuthority.AGENT_TENTATIVE, ContextLifecycle.TURN),
 }
-
-# Production entry-emitting components (their entries are genesis
-# resolver-origin entries; dangling declared sources are a store bug).
-_PRODUCTION_ENTRY_COMPONENTS = frozenset({"event_payload", "summarization"})
 
 
 def _coerce_causal(declared: dict | None) -> dict:
