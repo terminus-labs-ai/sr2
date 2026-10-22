@@ -51,7 +51,11 @@ THE FROZEN INTERFACE (implemented by C, ratified by B)
         The compiled-request type; ``system`` / each message's ``content``
         hold provenance ``sr2.pipeline.provenance.Entry`` items (entry
         ``content`` is an ``sr2.models.TextBlock``, entry ``layer`` drives
-        bucket attribution).
+        bucket attribution). This cage builds its ``Message`` carriers with
+        ``Message.model_construct``: provenance entries are delivery
+        payloads inside a compiled request, not channel content blocks, and
+        the discriminated union on ``Message.content`` (pydantic runtime
+        validation) is outside what these rows pin.
     ``request_text(compiled_request) -> str``
         The full delivered text (system + messages, entry contents).
     ``extraction_double(compiled_request) -> str``
@@ -242,14 +246,22 @@ def _entry(text: str, layer: str, **meta) -> Entry:
     )
 
 
+def _msg(role: str, content: list) -> Message:
+    """Message carrier without pydantic runtime validation (see docstring
+    'evals.continuity.runner' above): real ``sr2.models.Message`` identity,
+    content carried as-given. Entry-in-content is what the rows pin;
+    ``Message``'s channel-content union validation is not one of them."""
+    return Message.model_construct(role=role, content=content)
+
+
 def _cr(system: str, user: str, background: list[tuple[str, str]]):
     """Compiled request: ``(text, layer)`` background pairs (R8/R13 tests)."""
     bg_entries = [_entry(t, layer) for (t, layer) in background]
     return crunner.CompiledRequest(
         system=[_entry(system, "system_scaffold")],
         messages=[
-            Message(role="user", content=[_entry(user, "input")]),
-            Message(role="user", content=bg_entries),
+            _msg("user", [_entry(user, "input")]),
+            _msg("user", bg_entries),
         ],
     )
 
@@ -259,8 +271,8 @@ def _cr_entries(system: str, user: str, entries: list[Entry]):
     return crunner.CompiledRequest(
         system=[_entry(system, "system_scaffold")],
         messages=[
-            Message(role="user", content=[_entry(user, "input")]),
-            Message(role="user", content=entries),
+            _msg("user", [_entry(user, "input")]),
+            _msg("user", entries),
         ],
     )
 
@@ -790,7 +802,7 @@ def test_r13_prompt_background_buckets_partition_items_with_layer_attribution():
     mixed = crunner.CompiledRequest(
         system=[_entry("scaffold one", "system_scaffold")],
         messages=[
-            Message(role="user", content=[
+            _msg("user", [
                 _entry("restored under session layer", "session"),
                 _entry("fresh current input", "input"),
             ]),
@@ -1046,8 +1058,8 @@ def test_r20_baseline_compiles_full_history_after_n_turns_and_product_untouched(
 
     for i in range(n_prior):
         asyncio.run(_one_turn(f"baseline prior message {i}"))
-        transcript.append(Message(role="user", content=[TextBlock(text=f"baseline prior message {i}")]))
-        transcript.append(Message(role="assistant", content=[TextBlock(text="Hello world")]))
+        transcript.append(_msg("user", [TextBlock(text=f"baseline prior message {i}")]))
+        transcript.append(_msg("assistant", [TextBlock(text="Hello world")]))
         sr2.seed_session([m.model_copy() for m in transcript])
     asyncio.run(_one_turn("final probe question"))
 
