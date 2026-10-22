@@ -283,8 +283,18 @@ class TestAC1R10DanglingSourcesRejected:
 
     async def test_sqlite_write_with_dangling_source_rejected(self, tmp_path):
         """AC1-r10: SQLiteProvenanceStore rejects a write whose sources
-        reference IDs absent from the store."""
-        store = SQLiteProvenanceStore(path=tmp_path / "provenance-r10.db")
+        reference IDs absent from the store, persisting nothing dangling.
+
+        Rejection must not be an FK accident whose residue survives: after
+        the rejected write, NEITHER the entry row NOR any entry_sources row
+        naming it may exist. The connection-level queries below check both
+        tables directly, so a store that silently skipped the entry_sources
+        row while persisting the entry (or left half-written rows behind on
+        a rollback path) fails this test even though the FK constraint
+        raised IntegrityError.
+        """
+        db_path = tmp_path / "provenance-r10.db"
+        store = SQLiteProvenanceStore(path=db_path)
         await store.connect()
         try:
             assert await _dangling_ok(store), (
@@ -292,6 +302,36 @@ class TestAC1R10DanglingSourcesRejected:
             )
         finally:
             await store.close()
+
+        # Nothing dangling persisted, in either table. Fresh connection: the
+        # rows, if any, are durable file state, not connection state.
+        checker = SQLiteProvenanceStore(path=db_path)
+        await checker.connect()
+        try:
+            assert checker._db is not None  # fixture-internal read-back
+            # Rows written by this test file always carry the SP id prefix;
+            # the file's stores are dedicated to this tmp_path DB, so an
+            # empty table means this test persisted nothing.
+            async with checker._db.execute(
+                "SELECT id FROM entries WHERE id LIKE 'SP%'"
+            ) as cursor:
+                entry_rows = await cursor.fetchall()
+            assert entry_rows == [], (
+                "dangling-source write left entry rows behind: "
+                f"{[r[0] for r in entry_rows]!r}"
+            )
+            async with checker._db.execute(
+                "SELECT entry_id, source_id FROM entry_sources "
+                "WHERE source_id NOT IN (SELECT id FROM entries) "
+                "OR entry_id NOT IN (SELECT id FROM entries)"
+            ) as cursor:
+                dangling_rows = await cursor.fetchall()
+            assert dangling_rows == [], (
+                "entry_sources rows outlive the FK rejection: "
+                f"{dangling_rows!r}"
+            )
+        finally:
+            await checker.close()
 
     async def test_sqlite_valid_order_batch_succeeds(self, tmp_path):
         """AC1-r10 control: SQLite accepts the same graph written in valid

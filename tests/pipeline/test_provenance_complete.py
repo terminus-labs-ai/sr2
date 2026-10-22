@@ -470,6 +470,11 @@ class TestAC1R3SeededDialogueStoredEntries:
             subscriptions: list = []
             max_executions = 2**62
 
+        # The resolver's default subscriptions are user_input /
+        # assistant_response / tool events (B pass-1 finding), so a bare
+        # turn_start never fires it. Drive the seeded prior dialogue in with
+        # the resolver's own event name — user_input at COMPLETED, exactly as
+        # tests/conftest.py::run_engine queues it.
         session_resolver = SessionResolver(_Cfg())
         prior_user = Message(role="user", content=[TextBlock(text="prior question")])
         prior_assistant = Message(
@@ -488,6 +493,9 @@ class TestAC1R3SeededDialogueStoredEntries:
         )
         next_seq = engine.turn_seq + 1
         await engine.start_turn(turn_seq=next_seq)
+        await engine.continue_turn(
+            events=[_user_input_event("seed prior dialogue")], iteration_seq=0
+        )
         result = await engine.end_turn()
 
         # Replayed into the compiled request. A standalone Message in layer
