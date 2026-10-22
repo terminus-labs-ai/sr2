@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -200,8 +200,3 @@ class InMemoryProvenanceStore:
                 continue
             results.append(entry)
         return results
-
-
-def entry_now() -> datetime:
-    """Canonical observation time for synthesized provenance entries."""
-    return datetime.now(tz=timezone.utc)
