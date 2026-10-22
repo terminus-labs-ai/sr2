@@ -71,7 +71,9 @@ THE FROZEN INTERFACE (implemented by C, ratified by B)
     ``token_buckets(compiled_request) -> (prompt_tokens, background_tokens)``
     ``cost(prompt_tokens, background_tokens, pricing) -> float``
     ``latency_stats(runs: Sequence[Sequence[float]]) -> dict`` with keys
-        ``median`` and ``p95``; ``runs[0]`` is the discarded warm-up.
+        ``median`` and ``p95`` (both floats); ``runs[0]`` (the 5 runs'
+        per-turn timings of run 1) is the discarded warm-up; stats are
+        computed over the remaining runs' timings.
     ``load_pricing() -> dict``   the parsed ``evals/continuity/pricing.json``
     ``run_id() -> str``          ``<corpus-git-sha>+<sr2-git-sha>``
     ``run_baseline(output_root: Path | None = None) -> Path``
