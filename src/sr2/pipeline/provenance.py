@@ -200,3 +200,43 @@ class InMemoryProvenanceStore:
                 continue
             results.append(entry)
         return results
+
+
+# ---------------------------------------------------------------------------
+# Turn-archive read surface (sr2-93 — AC2)
+# ---------------------------------------------------------------------------
+
+TURN_ARCHIVE_LAYER = "turn_archive"
+
+
+async def read_turn_archive(
+    store: ProvenanceStore, session_id: str, turn_seq: int
+) -> list[Entry]:
+    """Return one turn's archived event entries in SR2-visible order.
+
+    Filters the session's entries on ``layer == "turn_archive"`` and
+    ``meta["turn_seq"] == turn_seq`` and orders them by the durable
+    per-turn ``meta["seq"]`` (the orchestrator's append order) — never by
+    ``created_at`` or id, which carry no ordering information (identical
+    timestamps and ULID-shaped ids are legitimate for one turn). Entries
+    without a numeric seq sort last, stably.
+
+    Works against any ProvenanceStore through ``get_session`` alone, so
+    durable reopen (AC2) is the store's concern and this helper stays a
+    pure filter/sort.
+    """
+    entries = await store.get_session(session_id, layer=TURN_ARCHIVE_LAYER)
+    wanted = [
+        entry
+        for entry in entries
+        if entry.meta.get("turn_seq") == turn_seq
+        and not isinstance(entry.meta.get("turn_seq"), bool)
+    ]
+
+    def _seq_key(entry: Entry) -> tuple[int, int]:
+        seq = entry.meta.get("seq")
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            return (0, seq)
+        return (1, 0)
+
+    return sorted(wanted, key=_seq_key)

@@ -12,13 +12,24 @@ import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from ulid import ULID
 
 from sr2.config.models import ConfigError, FinalAnswerConfig, LayerConfig, PipelineConfig, RepeatGuardConfig, ResolverConfig, ToolLoopLimitError, ToolProviderConfig, TransformerConfig
 from sr2.degradation.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
-from sr2.pipeline.provenance import InMemoryProvenanceStore, ProvenanceStore
+from sr2.pipeline.provenance import (
+    TURN_ARCHIVE_LAYER,
+    ContextAuthority,
+    ContextLifecycle,
+    ContextReason,
+    ContextScope,
+    Entry,
+    EntryOrigin,
+    InMemoryProvenanceStore,
+    ProvenanceStore,
+)
 
 if TYPE_CHECKING:
     from sr2.pipeline.tracing import Tracer
@@ -361,6 +372,99 @@ class _RepeatGuard:
         }
 
 
+class _TurnArchivist:
+    """sr2-93 (spec FR3/AC2, FR5): appends the SR2-visible turn sequence to
+    the provenance store as it happens.
+
+    One Entry per payload item, written in SR2-visible occurrence order:
+    user input → ``Message(role="user")``; each assistant iteration with
+    SR2-visible text and the final assistant output → ``Message(role=
+    "assistant")``; each ToolUseBlock / ToolResultBlock → the block itself,
+    verbatim (upstream truncation markers included — SR2 archives the
+    payload it received, never claimed raw data). Control events (retry,
+    finish_reason, iteration_complete, repeat_guard telemetry) are not
+    payloads and are never archived (spec R1).
+
+    Causal shape (amendment-fixed): ``layer == "turn_archive"``, session
+    id, ``meta["turn_seq"]`` (engine turn) and monotonic per-turn
+    ``meta["seq"]`` (append order, the durable ordering key), lifecycle
+    ARCHIVE, non-empty ``scope.owner_id``, origin ``("resolver",
+    "turn_archivist")`` genesis for the turn's first entry and
+    ``("transformer", "turn_archivist")`` afterwards. Each entry's sources
+    are the previously archived entry id for this session — real stored ids
+    only, written in order so every referenced id exists when it is
+    referenced (FR5; lineage from any archived entry walks back to the
+    user input).
+
+    Writes are unconditional (FR3): they never alter compiled context, so
+    continuity-disabled behavior is unchanged. A failed store write is
+    logged and swallowed — losing the archive must never crash a turn.
+    """
+
+    def __init__(self, store: ProvenanceStore, session_id: str) -> None:
+        self._store = store
+        self._session_id = session_id
+        self.turn_seq = -1
+        self._seq = 0
+        self._prev_id: str | None = None
+        """Id of the most recently archived entry for this session, or None
+        before the first write (the genesis entry must then be
+        resolver-origin with empty sources)."""
+
+    async def archive(
+        self,
+        content,
+        reason: ContextReason,
+        authority: ContextAuthority,
+    ) -> None:
+        """Append one SR2-visible payload item, stamped with turn/seq order."""
+        genesis = self._prev_id is None
+        entry = Entry(
+            id=str(ULID()),
+            content=content,
+            sources=() if genesis else (self._prev_id,),
+            origin=EntryOrigin(
+                kind="resolver" if genesis else "transformer",
+                name="turn_archivist",
+            ),
+            layer=TURN_ARCHIVE_LAYER,
+            session_id=self._session_id,
+            created_at=datetime.now(tz=timezone.utc),
+            reason=reason,
+            authority=authority,
+            lifecycle=ContextLifecycle.ARCHIVE,
+            # Non-empty owner: the SR2 session is the archive's owner scope.
+            scope=ContextScope(owner_id=self._session_id),
+            meta={"turn_seq": self.turn_seq, "seq": self._seq},
+        )
+        try:
+            await self._store.write(entry)
+        except Exception:
+            logger.exception(
+                "turn archive write failed (session=%s turn=%s seq=%s)",
+                self._session_id,
+                self.turn_seq,
+                self._seq,
+            )
+            return
+        self._prev_id = entry.id
+        self._seq += 1
+
+    async def archive_text(self, text: str) -> None:
+        """Archive an assistant iteration/final text as a Message.
+
+        An iteration with no SR2-visible text has no text payload to record
+        and contributes nothing (archive = what SR2 saw).
+        """
+        if not text:
+            return
+        await self.archive(
+            Message(role="assistant", content=[TextBlock(text=text)]),
+            ContextReason.ASSISTANT_OUTPUT,
+            ContextAuthority.AGENT_TENTATIVE,
+        )
+
+
 class SR2:
     """Top-level orchestrator: turns a PipelineConfig into a streaming turn loop."""
 
@@ -431,6 +535,12 @@ class SR2:
             _build_layer(lc, token_counter, deps, bus=shared_bus, provenance_store=resolved_provenance_store)
             for lc in pipeline_config.layers
         ]
+
+        # sr2-93 (FR3/AC2): append the SR2-visible turn sequence to the same
+        # store the layers write to.
+        self._turn_archivist = _TurnArchivist(
+            resolved_provenance_store, self.session_id
+        )
 
         # FR5: Build the degradation ladder from config (or None if absent)
         ladder = None
@@ -994,6 +1104,8 @@ class SR2:
         # Start the turn via the new engine API.
         next_seq = self._engine.turn_seq + 1
         await self._engine.start_turn(turn_seq=next_seq)
+        # sr2-93 (FR3): per-turn archive ordering follows the engine turn.
+        self._turn_archivist.turn_seq = next_seq
         in_band_errors.extend(self._engine.bus.get_errors())
 
         # Inject user_input as an event.
@@ -1005,6 +1117,14 @@ class SR2:
                     source_layer="engine",
                     data=user_input,
                 )
+            )
+            # sr2-93 (FR3/AC2): archive the user input payload — one
+            # Message(role="user") per event, the turn's genesis entry —
+            # before anything the model produces.
+            await self._turn_archivist.archive(
+                Message(role="user", content=list(user_input)),
+                ContextReason.USER_INPUT,
+                ContextAuthority.USER,
             )
             await self._engine.run_loop()
             in_band_errors.extend(self._engine.bus.get_errors())
@@ -1068,6 +1188,9 @@ class SR2:
                     )
                     placeholder_block = TextBlock(text=EMPTY_RESPONSE_PLACEHOLDER)
                     self._stamp_block(placeholder_block, origin)
+                    # sr2-93 (AC2): the placeholder is the turn's final
+                    # SR2-visible assistant output.
+                    await self._turn_archivist.archive_text(EMPTY_RESPONSE_PLACEHOLDER)
                     final_response = CompletionResponse(
                         id="turn-response",
                         content=[placeholder_block],
@@ -1099,6 +1222,10 @@ class SR2:
                 # before the final text.
                 # ---------------------------------------------------------------
                 content = list(iteration.assistant_content)
+                # sr2-93 (FR11, spec R1): archive the forced final answer like
+                # any final assistant output; control telemetry is not
+                # archived.
+                await self._turn_archivist.archive_text(iteration.text)
                 final_response = CompletionResponse(
                     id="turn-response",
                     content=content,
@@ -1140,6 +1267,9 @@ class SR2:
                     block = TextBlock(text=iteration.text)
                     self._stamp_block(block, origin)
                     content.append(block)
+                # sr2-93 (FR3/AC2): archive the final SR2-visible assistant
+                # output before finalization.
+                await self._turn_archivist.archive_text(iteration.text)
                 final_response = CompletionResponse(
                     id="turn-response",
                     content=content,
@@ -1214,6 +1344,23 @@ class SR2:
                 stop_reason="tool_use",
                 usage=iteration.usage,
             )
+            # sr2-93 (FR3/AC2): append this iteration's SR2-visible payload
+            # items in occurrence order — the iteration's text (when any),
+            # then each tool call, then each result exactly as received
+            # (post-stamp, post-guard blocks; truncation markers included).
+            await self._turn_archivist.archive_text(iteration.text)
+            for block in tool_use_blocks_for_bus:
+                await self._turn_archivist.archive(
+                    block,
+                    ContextReason.TOOL_USE,
+                    ContextAuthority.AGENT_TENTATIVE,
+                )
+            for block in tool_result_blocks:
+                await self._turn_archivist.archive(
+                    block,
+                    ContextReason.TOOL_RESULT,
+                    ContextAuthority.AGENT_TENTATIVE,
+                )
             self._engine.bus.queue(
                 Event(
                     name="assistant_iteration_response",
@@ -1269,6 +1416,9 @@ class SR2:
                 # Finalize and stream exactly like the forced_final_answer
                 # branch above (sr2-121): one final_answer event, then the
                 # final text, then end.
+                # sr2-93 (AC2): the forced final output is archived at its
+                # own seq, after the executed iteration's calls/results.
+                await self._turn_archivist.archive_text(forced.text)
                 final_response = CompletionResponse(
                     id="turn-response",
                     content=list(forced.assistant_content),
