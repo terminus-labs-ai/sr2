@@ -379,25 +379,26 @@ class TestAC4R5FiveHundredTurnEndurance:
         resolver = _build_resolver(budget, store)
 
         for n in range(1, 501):
-            text = _padded(f"WSR5TURN{n:04d}", 20)
-            assert _msg_tokens(_message(text, "user")) == 20
+            live_text = _padded(f"WSR5LIVE{n:04d}", 20)
+            archived_text = _padded(f"WSR5TURN{n:04d}", 20)
+            assert _msg_tokens(_message(live_text, "user")) == 20
 
-            result = await resolver.resolve([_user_input_event(text)])
+            result = await resolver.resolve([_user_input_event(live_text)])
 
             total = _count_output(result)
             assert total <= budget, (
                 f"turn {n}: compiled working set {total} tokens exceeds the "
                 f"{budget}-token budget"
             )
-            assert text in _all_text(result), (
-                f"turn {n}: current user input missing from the compiled "
-                "working set"
+            assert live_text in _all_text(result), (
+                f"turn {n}: current user input (live event) missing from the "
+                "compiled working set"
             )
 
             # close the turn: append user + assistant (20 tokens each)
             await store.write(
                 _make_message_entry(
-                    text, "user", ContextLifecycle.ARCHIVE, n * 2
+                    archived_text, "user", ContextLifecycle.ARCHIVE, n * 2
                 )
             )
             await store.write(
