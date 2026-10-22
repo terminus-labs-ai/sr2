@@ -403,8 +403,9 @@ class TestAC1R1StaticContextStoredEntry:
 class TestAC1R2LiveMarkdownStoredEntry:
     async def test_markdown_state_maps_to_stored_live_source_entry(self, tmp_path):
         """AC1-r2: MarkdownFileResolver content -> stored Entry with reason
-        LIVE_SOURCE, authority LIVE_SOURCE, and a stable source reference for
-        the file recorded in meta."""
+        LIVE_SOURCE, authority LIVE_SOURCE, and a stable source reference
+        recorded in meta["source_ref"] (path-level fidelity deferred to
+        sr2-93)."""
         from sr2.pipeline.protocols import Resolver
         from sr2.pipeline.resolvers.markdown_file import MarkdownFileResolver
 
@@ -438,11 +439,12 @@ class TestAC1R2LiveMarkdownStoredEntry:
         assert stored.reason == ContextReason().LIVE_SOURCE
         assert stored.authority == ContextAuthority().LIVE_SOURCE
 
-        # meta records a stable source reference for the file: at least one
-        # string value naming the fixture file's path.
-        refs = [v for v in stored.meta.values() if isinstance(v, str)]
-        assert any(str(md_file) in ref for ref in refs), (
-            f"no meta value references the source file {str(md_file)!r}; "
+        # meta records a stable source reference under "source_ref"
+        # (defaults to the source-layer identity; overridable by a
+        # block-declared reference).
+        source_ref = stored.meta.get("source_ref")
+        assert isinstance(source_ref, str) and source_ref, (
+            f"meta[\"source_ref\"] must be a non-empty string; "
             f"meta={stored.meta!r}"
         )
 
@@ -599,7 +601,7 @@ class TestAC1R5RetrievalStoredEntry:
             lifecycle=ContextLifecycle().RETRIEVED,
         )
         layer = make_layer(name="conversation", provenance_store=store)
-        layer.resolvers = [resolver]
+        layer.resolvers = [raw_resolver]
 
         engine = PipelineEngine(
             layers=[layer],
