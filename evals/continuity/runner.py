@@ -396,11 +396,29 @@ def _git_output(*args: str) -> str | None:
 
 
 def _tree_hash(dirpath: Path) -> str:
+    """SHA-256 over the directory's files, excluding the published results
+    tree (``evals/continuity/results``).
+
+    The results tree is the runner's own output; hashing it would make a
+    published run's outputs re-enter the next run's identity (churn: each
+    publication changes the next run-id). The corpus/src inputs — what the
+    run-id versioning actually pins — are the remaining files."""
+    results = _PKG_DIR / "results"
     h = hashlib.sha256()
     for p in sorted(dirpath.rglob("*")):
-        if p.is_file() and "__pycache__" not in p.parts:
-            h.update(str(p.relative_to(_REPO_ROOT)).encode())
-            h.update(p.read_bytes())
+        if not p.is_file():
+            continue
+        rel = p.relative_to(_REPO_ROOT)
+        parts = rel.parts
+        if (
+            len(parts) >= 4
+            and parts[0] == "evals"
+            and parts[1] == "continuity"
+            and parts[2] == "results"
+        ):
+            continue
+        h.update(str(rel).encode())
+        h.update(p.read_bytes())
     return h.hexdigest()
 
 
