@@ -162,7 +162,6 @@ each numeric or boolean).
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import re
@@ -1065,7 +1064,7 @@ def test_r19_baseline_completes_with_llm_endpoints_unreachable(tmp_path):
 # ===========================================================================
 
 
-def test_r20_baseline_compiles_full_history_after_n_turns_and_product_untouched():
+async def test_r20_baseline_compiles_full_history_after_n_turns_and_product_untouched():
     from conftest import MockLLM, make_minimal_config
     from sr2.orchestrator import SR2
     from sr2.pipeline.token_counting import CharacterTokenCounter
@@ -1084,11 +1083,11 @@ def test_r20_baseline_compiles_full_history_after_n_turns_and_product_untouched(
             pass
 
     for i in range(n_prior):
-        asyncio.run(_one_turn(f"baseline prior message {i}"))
+        await _one_turn(f"baseline prior message {i}")
         transcript.append(_msg("user", [TextBlock(text=f"baseline prior message {i}")]))
         transcript.append(_msg("assistant", [TextBlock(text="Hello world")]))
         sr2.seed_session([m.model_copy() for m in transcript])
-    asyncio.run(_one_turn("final probe question"))
+    await _one_turn("final probe question")
 
     assert len(mock_llm.stream_calls) == n_prior + 1, (
         f"R20: expected {n_prior + 1} LLM calls, got {len(mock_llm.stream_calls)}"
