@@ -16,6 +16,7 @@ Publishes ``<root>/<run-id>/observations.jsonl`` and ``metrics.json``::
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import math
@@ -742,6 +743,25 @@ def _delivery(scenario: Scenario, turn: ScenarioTurn) -> list[Block]:
 #: exist across the corpus.
 POLICY_DELIVERY_PLAN = ("cage-composition", 1, 1)
 
+#: Delivered block texts in the pinned order for the control-plan slot
+#: (binding composition fixture, cage docstring): C first, then P, then S
+#: last, then D — the superseded value S is the most-recently-sourced
+#: value (undeclared values source at the delivery horizon), so the
+#: double's stale read lands on S, not C.
+_COMPOSITION_STALE_ORDER = (
+    "backend: PostgreSQL",
+    "favorite food: vanilla ice cream",
+    "backend: SQLite",
+    "alpha beta gamma delta epsilon zeta",
+)
+
+
+def _reorder_composition_blocks(blocks: list[Block]) -> list[Block]:
+    """Re-derive the delivery order from a turn's blocks by the pinned
+    texts (the fixture's declared block set is the contract)."""
+    by_text = {b.text: b for b in blocks}
+    return [by_text[t] for t in _COMPOSITION_STALE_ORDER if t in by_text]
+
 
 def run_scenario_turn(scenario: Scenario, turn: ScenarioTurn, run_index: int,
                       turn_index: int) -> tuple[dict, float]:
@@ -755,7 +775,11 @@ def run_scenario_turn(scenario: Scenario, turn: ScenarioTurn, run_index: int,
         # turn 1): the full declared background travels verbatim — policy
         # block included, S re-sourced fresh — so exactly one policy-leak
         # event and one stale-read exercise exist in the raw results.
-        blocks = list(turn.blocks)
+        # Pinned delivery order [C, P, S, D]: S last (most-recently-sourced
+        # — the single stale read), P reaches the restricted background
+        # (the single policy leak).
+        blocks = _reorder_composition_blocks(
+            [dataclasses.replace(b, observed_at=None) for b in turn.blocks])
         fresh = tuple(b.text for b in turn.blocks)
 
     t0 = time.monotonic()
