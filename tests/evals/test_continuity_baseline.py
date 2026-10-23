@@ -105,13 +105,23 @@ BINDING COMPOSITION FIXTURE (the full-run numbers rows R16/R17 assert)
   - turn 1 declares ``delivered=None`` (both S and C count as delivered);
     turn 2 declares ``delivered=(C,)`` (S withheld).
 * Runner execution plan for this scenario — delivered background blocks,
-  per run 1–5 (run 1 is the discarded latency warm-up):
-  run 1: ``[C, P, D]``; runs 2–5: ``[S, C, D]``.
+  per run 1–5 (run 1 is the discarded latency warm-up). Exactly one
+  composition execution delivers S as the most-recently-sourced value
+  (S counts as delivered, so it is a stale read), and the same execution
+  delivers the policy block P (one policy-leak event); every other
+  execution has C as the most-recently-sourced value with P filtered:
+  - run 1 turn 1 (turn 1 declares delivered=None, so S counts as
+    delivered): ``[C, P, S, D]`` — S newest → the single stale read;
+    P reaches the restricted background → the single policy leak.
+  - run 1 turn 2 and runs 2–5 (turn 2 declares delivered=(C,)):
+    ``[C, D]`` — C newest, P filtered.
 * Pinned raw outcomes published in ``metrics.json`` (counts over all corpus
   scenario executions; the composition fixture contributes the nonzero
-  stale-current and policy-leak events, and every double answer states the
-  current gold value):
-  ``correctness == 1.0``, ``stale_current == 1``, ``policy_leak == 1``,
+  stale-current and policy-leak events, and every double answer but the
+  single stale read states the current gold value):
+  ``correctness == (N - 1) / N`` (N = number of observation records, the
+  one incorrect observation being the stale read),
+  ``stale_current == 1``, ``policy_leak == 1``,
   ``hallucination == 0``, ``cost > 0``.
 
 Token buckets (Metric Contract): entries whose provenance ``Entry.layer``
@@ -931,7 +941,7 @@ def test_r16_observations_one_record_per_turn_with_required_fields(tmp_path):
         f"R16: composition scenario {COMPOSITION_ID!r} absent from observations "
         f"(saw {sorted({s for s, _ in counts})})"
     )
-    sid = sorted(comp)[0]
+    sid = sorted(comp)[0][0]
     run_indices = sorted(r for (s, r) in counts if s == sid)
     assert run_indices == [1, 2, 3, 4, 5], (
         f"R16: composition scenario must observe runs 1..5; got {run_indices}"
@@ -960,11 +970,28 @@ def test_r17_metrics_json_holds_the_nine_aggregates(tmp_path):
     assert sorted(metrics) == sorted(NINE_METRICS), (
         f"R17: metrics.json must hold exactly the nine aggregates; got {sorted(metrics)}"
     )
-    # Pinned raw outcomes (module docstring): the double always states the
-    # current gold value; exactly one stale-current event and one
-    # policy-leak event exist in the fixed corpus; grounding invariant holds.
-    assert metrics["correctness"] == 1.0, (
-        f"R17: correctness aggregate must be 1.0, got {metrics['correctness']!r}"
+    # Pinned raw outcomes (module docstring): exactly one turn states the
+    # superseded value present in context (the stale read — its correctness
+    # is 0); every other turn states the current gold value; exactly one
+    # policy-leak event exists in the fixed corpus; grounding holds.
+    obs = _read_jsonl(run_dir / "observations.jsonl")
+    n_obs = len(obs)
+    incorrect = [o for o in obs if not o["flags"]["correct"]]
+    stale_obs = [o for o in obs if o["flags"]["stale_current"]]
+    assert len(incorrect) == 1, (
+        f"R17: exactly one observation must have flags.correct == 0; "
+        f"got {len(incorrect)} of {n_obs} incorrect"
+    )
+    assert incorrect[0]["scenario_id"] == stale_obs[0]["scenario_id"] and (
+        incorrect[0]["run_index"], incorrect[0]["turn_index"]
+    ) == (stale_obs[0]["run_index"], stale_obs[0]["turn_index"]), (
+        f"R17: the sole incorrect observation must be the one whose "
+        f"flags.stale_current == 1; incorrect {incorrect[0]!r}, "
+        f"stale {stale_obs[0]!r}"
+    )
+    assert metrics["correctness"] == pytest.approx((n_obs - 1) / n_obs), (
+        f"R17: correctness aggregate must be (N-1)/N over {n_obs} "
+        f"observation records, got {metrics['correctness']!r}"
     )
     assert metrics["stale_current"] == 1, (
         "R17: exactly one turn states a superseded value present in context; "
