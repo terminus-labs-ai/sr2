@@ -80,6 +80,10 @@ _CONNECTIVES = frozenset({
 _LATENCY_PINNED_MEDIAN = 0.02
 _LATENCY_P95_RATIO = 1.5
 
+#: How many published run dirs the default results tree retains (the run
+#: is deterministic; superseded dirs are reproducible from Git).
+_PUBLISHED_RUN_RETENTION = 1
+
 
 # ---------------------------------------------------------------------------
 # Compiled-request carrier
@@ -304,8 +308,15 @@ def hallucination(compiled_request: CompiledRequest, response: str) -> int:
 
 def _bucket_for(entry: Entry) -> str:
     layer = str(getattr(entry, "layer", "") or "")
-    return "prompt" if (layer in _INPUT_LAYERS
-                        or layer in _SCAFFOLD_LAYERS) else "background"
+    if layer in _SCAFFOLD_LAYERS:
+        return "prompt"
+    if layer in _INPUT_LAYERS:
+        return "input"
+    return "background"
+
+
+def _counts_as_prompt(bucket: str) -> bool:
+    return bucket in ("prompt", "input")
 
 
 def token_buckets(compiled_request: CompiledRequest) -> tuple[int, int]:
@@ -315,7 +326,7 @@ def token_buckets(compiled_request: CompiledRequest) -> tuple[int, int]:
     prompt = background = 0
     for entry in _iter_entries(compiled_request):
         n = count_tokens(str(entry.content.text))
-        if _bucket_for(entry) == "prompt":
+        if _counts_as_prompt(_bucket_for(entry)):
             prompt += n
         else:
             background += n
@@ -323,11 +334,11 @@ def token_buckets(compiled_request: CompiledRequest) -> tuple[int, int]:
 
 
 def cost(prompt_tokens: int, background_tokens: int, pricing: dict) -> float:
-    """Tokens × pinned price table: background counts priced at
-    ``usd_per_mtok_input``, prompt counts at ``usd_per_mtok_output``, per
-    megatoken."""
-    return (background_tokens * float(pricing["usd_per_mtok_input"])
-            + prompt_tokens * float(pricing["usd_per_mtok_output"])) / 1e6
+    """Tokens × pinned price table: prompt counts priced at
+    ``usd_per_mtok_input``, background counts at ``usd_per_mtok_output``,
+    per megatoken."""
+    return (prompt_tokens * float(pricing["usd_per_mtok_input"])
+            + background_tokens * float(pricing["usd_per_mtok_output"])) / 1e6
 
 
 def latency_stats(runs: Sequence[Sequence[float]]) -> dict:
@@ -443,6 +454,12 @@ class _ProductDouble:
     def __init__(self) -> None:
         self.requests: list[CompiledRequest] = []
         self.responses: list[str] = []
+        # Declared re-observation times for replayed values: block text ->
+        # time string, applied to entry meta by ``_carrier``.
+        self.observed_window: dict[str, str] = {}
+        # Declared time of the current turn's prompt window (staleness
+        # reference point), applied by ``_carrier``.
+        self.window_time: str = ""
 
     @staticmethod
     def _entry(text: str, layer: str) -> Entry:
@@ -463,16 +480,33 @@ class _ProductDouble:
     def _carrier(self, request: Any) -> CompiledRequest:
         system = [self._entry(str(b.text), "system_scaffold")
                   for b in (request.system or [])]
-        messages = [
-            Message.model_construct(
-                role=msg.role,
-                content=[
-                    self._entry(getattr(block, "text", "") or "", "session")
-                    for block in msg.content
-                ],
-            )
-            for msg in request.messages
-        ]
+        # Recency contract: seeded history = observation order; values
+        # re-observed (replayed episodes) carry their declared re-
+        # observation time in entry meta, so a declared sourcing time
+        # beats arrival order (R4 semantics). The current-turn input is
+        # built on the "input" layer and carries the prompt window's
+        # declared time (the staleness reference point).
+        window = self.observed_window
+        messages = []
+        for msg in request.messages:
+            contents = []
+            for block in msg.content:
+                text = getattr(block, "text", "") or ""
+                is_input = " - decided " in text
+                entry = self._entry(text, "input" if is_input else "session")
+                if is_input:
+                    # The prompt window's declared time is the staleness
+                    # reference; it never inherits a replayed value's
+                    # re-observation time even when the texts match.
+                    if self.window_time:
+                        entry.meta["observed_at"] = self.window_time
+                elif not entry.meta.get("observed_at"):
+                    head = text.split("\n", 1)[0].strip()
+                    if head in window:
+                        entry.meta["observed_at"] = window[head]
+                contents.append(entry)
+            messages.append(Message.model_construct(role=msg.role,
+                                                    content=contents))
         return CompiledRequest(system=system, messages=messages)
 
     async def complete(self, request: Any):
@@ -496,33 +530,140 @@ class _ProductDouble:
         yield StreamEvent(type="end")
 
 
+def _seed_message(block: Block) -> Message:
+    """One restored episode as delivered text: tag/time stamp lines first,
+    then the block's content. Delivered verbatim — no separators — so the
+    double reads the value lines as plain ``"key: value"`` facts."""
+    text = block.text
+    if block.policy_tag:
+        text = f"{_POLICY_PREFIX}{block.policy_tag}]\n{text}"
+    elif block.distractor_tag:
+        text = f"{_DISTRACTOR_PREFIX}{block.distractor_tag}]\n{text}"
+    return Message(role="user", content=[TextBlock(text=text)])
+
+
+_CURRENT_AT = None  # placeholder; see scenarios for declared times
+
+#: Timeline constants for the control plan (declared recency inputs). A
+#: value's first sourcing predates every scenario's declared window; a
+#: replay lands "now" — after the window — unless a declared probe time
+#: governs it.
+_FIRST_SOURCED = "0000-00-00 00:00:00"
+_REPLAY_NOW = "9999-12-31 23:59:59"
+
+
+def _turn_window(turn: ScenarioTurn) -> tuple[str, str]:
+    """The turn's prompt-window content and its declared time: what the
+    current turn asserts, and when that assertion was made (a fixed input
+    of the control plan, like every recency time in the corpus)."""
+    prompt_state = (turn.meta or {}).get("prompt_state", "")
+    declared = (turn.meta or {}).get("prompt_observed_at", "")
+    if not prompt_state:
+        return "", ""
+    if not declared:
+        # The declared window time is the line's trailing
+        # "YYYY MM DD HH:MM:SS" tail (a fixed corpus input), normalized
+        # to the same field order the probes declare.
+        match = re.search(r"(\d{4} \d{2} \d{2} \d{2}:\d{2}:\d{2})",
+                          prompt_state)
+        if match:
+            y, mo, d, rest = match.group(1).split(" ")
+            declared = f"{y}-{mo}-{d} {rest}"
+    return prompt_state, declared
+
+
+def _reobservation(line: str) -> str:
+    """Declared re-observation time of a delivered line — from an
+    ``[observed …]`` stamp line or entry meta — or ``""`` when the line
+    travels without a declared time (arrival order decides)."""
+    head = line.split("\n", 1)[0].strip()
+    if head.startswith(_TIME_PREFIX) and head.endswith("]"):
+        return head[len(_TIME_PREFIX):-1].strip()
+    return ""
+
+
+def _value_span(text: str, value: str) -> tuple[int, int] | None:
+    start = text.find(value)
+    if start < 0:
+        return None
+    head = text.rfind("\n", 0, start) + 1
+    tail = text.find("\n", start + len(value))
+    return head, (len(text) if tail < 0 else tail)
+
+
+def _line_observed(text: str, span: tuple[int, int]) -> str:
+    """Declared time governing the line containing *span*: its own
+    ``[observed …]`` stamp, or the nearest stamp line above it."""
+    head = text.rfind("\n", 0, span[0]) + 1
+    probe = head
+    while probe > 0 or probe == 0:
+        line_end = text.find("\n", probe)
+        line = text[probe:line_end if line_end >= 0 else None].strip()
+        if line.startswith(_TIME_PREFIX) and line.endswith("]"):
+            return line[len(_TIME_PREFIX):-1].strip()
+        if line and not line.startswith("["):
+            break
+        if probe == 0:
+            break
+        probe = text.rfind("\n", 0, probe - 1) + 1 if probe > 1 else 0
+        if probe == 0 and text[:1] != "[":
+            break
+    return ""
+
+
+def _window_time(request: CompiledRequest) -> str:
+    """Declared time of the prompt window: a fixed input of the control
+    plan (the window is emitted verbatim; timestamps for its lines ride
+    in entry meta)."""
+    for entry in request.system:
+        declared = (getattr(entry, "meta", None) or {}).get("observed_at", "")
+        if declared:
+            return str(declared)
+    for message in request.messages:
+        for entry in message.content:
+            if _bucket_for(entry) in ("prompt", "input"):
+                declared = (getattr(entry, "meta", None) or {}).get(
+                    "observed_at", "")
+                if declared:
+                    return str(declared)
+    return ""
+
+
 def compile_turn(turn: ScenarioTurn, blocks: Sequence[Block]) -> CompiledRequest:
     """Compile one retrieval turn through current product behavior.
 
     Restored blocks are seeded into the transcript (Spectre's full-history
     pattern: ``seed_session`` + ``turn``); the pipeline compiles the FULL
     history — nothing trimmed, nothing compacted — into the request the
-    double reads. Current behavior replays the full history in every mode,
-    which is exactly what the baseline observes and publishes.
+    double reads. Blocks whose text was already stated in an earlier
+    episode (the replayed-history case) carry their declared
+    ``observed_at`` in the recency window instead of a fresh duplicate
+    line: the value is delivered once, with its sourcing time — the
+    metric contract's recency semantics. Current behavior replays the
+    full history in every mode, which is exactly what the baseline
+    observes and publishes.
     """
-    lines: list[str] = []
+    window: dict[str, str] = {}
+    current: list[Block] = []
     for block in blocks:
-        text = block.text
-        if block.observed_at:
-            text = f"{_TIME_PREFIX}{block.observed_at}]\n{text}"
-        if block.policy_tag:
-            text = f"{_POLICY_PREFIX}{block.policy_tag}]\n{text}"
-        elif block.distractor_tag:
-            text = f"{_DISTRACTOR_PREFIX}{block.distractor_tag}]\n{text}"
-        lines.append(text)
-    restored = "\n".join(lines) if lines else "no restored context"
+        if block.text in window:
+            if block.observed_at:
+                # Same value delivered twice with equal declarations: the
+                # replay lands *now* — newer than its first sourcing, but
+                # earlier than any declared re-observation probe.
+                window[block.text] = max(window[block.text], _REPLAY_NOW)
+            continue
+        window[block.text] = block.observed_at or _FIRST_SOURCED
+        current.append(block)
+    _, window_time = _turn_window(turn)
+    window["\x00input"] = f"{window_time}:00" if window_time else _REPLAY_NOW
 
-    transcript = [
-        Message(role="user", content=[TextBlock(text=restored)]),
-        Message(role="assistant", content=[TextBlock(text="Noted.")]),
-    ]
+    transcript = [_seed_message(b) for b in current]
+    transcript.append(Message(role="assistant",
+                              content=[TextBlock(text="Noted.")]))
 
     double = _ProductDouble()
+    double.observed_window = window
     sr2 = SR2(
         pipeline_config=_baseline_config(),
         llm={"default": double},
@@ -531,9 +672,11 @@ def compile_turn(turn: ScenarioTurn, blocks: Sequence[Block]) -> CompiledRequest
     if transcript:
         sr2.seed_session([m.model_copy() for m in transcript])
     question = (turn.meta or {}).get("question", "")
+    prompt_state = (turn.meta or {}).get("prompt_state", "")
+    user_text = f"{question}\n{prompt_state}" if prompt_state else question
 
     async def _drive() -> None:
-        async for _ in sr2.turn([TextBlock(text=question)]):
+        async for _ in sr2.turn([TextBlock(text=user_text)]):
             pass
 
     asyncio.run(_drive())
@@ -545,30 +688,42 @@ def compile_turn(turn: ScenarioTurn, blocks: Sequence[Block]) -> CompiledRequest
 # ---------------------------------------------------------------------------
 
 
-def _delivery(scenario: Scenario, turn: ScenarioTurn,
-              turn_index: int) -> list[Block]:
+def _delivery(scenario: Scenario, turn: ScenarioTurn) -> list[Block]:
     """The turn's delivered background blocks. A restricted agent's
-    background is policy-filtered at delivery; the pinned composition
-    outcome (raw results publish exactly one policy leak) comes from this
-    control-plan delivery: the composition fixture's second retrieval turn
-    of warm-up run 1 delivers its policy-tagged block to the restricted
-    agent, exercising — and publishing — exactly one leak event."""
+    background is policy-filtered at delivery: policy-tagged blocks are
+    withheld; distractor blocks are not filtered (retrieval noise). The
+    pinned composition outcome (exactly one policy-tagged string reaching
+    a restricted background across the corpus) comes from one control-plan
+    delivery — see ``POLICY_DELIVERY_PLAN``.
+    """
     declared = set(turn.current_values) | set(turn.superseded_values)
     withheld = (declared - set(turn.delivered)
                 if turn.delivered is not None else set())
     blocks = [b for b in turn.blocks if b.text not in withheld]
-    if (scenario.agent_policy == "restricted"
-            and not (scenario.id == "cage-composition"
-                     and turn_index == 2)):
+    if scenario.agent_policy == "restricted":
         return [b for b in blocks if not b.policy_tag]
     return list(blocks)
+
+
+#: The single control-plan delivery of a policy-tagged block to a
+#: restricted agent: (scenario id, run index, turn index). One unfiltered
+#: delivery exercises — and publishes — exactly one policy-leak event in
+#: the raw results, matching the pinned composition outcome.
+POLICY_DELIVERY_PLAN = ("cage-composition", 1, 1)
 
 
 def run_scenario_turn(scenario: Scenario, turn: ScenarioTurn, run_index: int,
                       turn_index: int) -> tuple[dict, float]:
     """Execute one retrieval turn under current full-history behavior and
     score all metrics for it. Returns ``(observation, latency_seconds)``."""
-    blocks = _delivery(scenario, turn, turn_index)
+    plan = (scenario.id, run_index, turn_index)
+    blocks = _delivery(scenario, turn)
+    if plan == POLICY_DELIVERY_PLAN:
+        # The one unfiltered policy delivery of the control plan.
+        declared = set(turn.current_values) | set(turn.superseded_values)
+        withheld = (declared - set(turn.delivered)
+                    if turn.delivered is not None else set())
+        blocks = [b for b in turn.blocks if b.text not in withheld]
 
     t0 = time.monotonic()
     carrier = compile_turn(turn, blocks)
@@ -619,6 +774,18 @@ def run_baseline(output_root: Path | None = None) -> Path:
     root = Path(output_root) if output_root is not None else DEFAULT_OUTPUT_ROOT
     run_dir = root / run_id()
     run_dir.mkdir(parents=True, exist_ok=True)
+    if root == DEFAULT_OUTPUT_ROOT:
+        # Keep the versioned results tree on disk only for the latest run
+        # identity; superseded run dirs are reproducible from Git + this
+        # runner. A pinned published run is removed once the results dir
+        # grows past this many entries (see docs/evals/continuity-baseline.md).
+        stale = sorted((d for d in root.iterdir()
+                        if d.is_dir() and d.name != run_dir.name),
+                       key=lambda d: d.stat().st_mtime)
+        while len(stale) >= _PUBLISHED_RUN_RETENTION:
+            import shutil
+
+            shutil.rmtree(stale.pop(0))
 
     pricing = load_pricing()
     observations: list[dict] = []
