@@ -188,8 +188,18 @@ class LiteLLMCallable:
     while True:
       try:
         if stream:
+          # obsidian-la2z: ask the backend for a trailing usage-only chunk
+          # (OpenAI-compatible chat). Without it no usage ever arrives on a
+          # streamed call. Caller-supplied stream_options keys win; only
+          # include_usage defaults to True. LiteLLM drops unsupported params
+          # for other providers, so sending it is safe everywhere.
+          kwargs = dict(self._kwargs)
+          kwargs["stream_options"] = {
+            "include_usage": True,
+            **(kwargs.get("stream_options") or {}),
+          }
           return await litellm.acompletion(
-            model=self._model, messages=messages, stream=True, **self._kwargs, **extra,
+            model=self._model, messages=messages, stream=True, **kwargs, **extra,
           )
         return await litellm.acompletion(
           model=self._model, messages=messages, **self._kwargs, **extra,
@@ -281,8 +291,15 @@ class LiteLLMCallable:
     # index → {"id": str, "name": str, "arguments": str}
     tool_call_acc: dict[int, dict] = {}
     finish_reason: str | None = None
+    # obsidian-la2z: the pool name in the request can resolve to a different
+    # model id on the backend; chunk.model carries what was actually served.
+    served_model: str | None = None
 
     async for chunk in response:
+      if served_model is None:
+        chunk_model = getattr(chunk, "model", None)
+        if isinstance(chunk_model, str) and chunk_model:
+          served_model = chunk_model
       if chunk.choices:
         choice = chunk.choices[0]
         delta = choice.delta
@@ -378,4 +395,7 @@ class LiteLLMCallable:
         meta=meta,
       )
 
-    yield StreamEvent(type="end", meta={"finish_reason": finish_reason})
+    yield StreamEvent(
+      type="end",
+      meta={"finish_reason": finish_reason, "served_model": served_model},
+    )
