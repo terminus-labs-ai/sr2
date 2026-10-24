@@ -7,6 +7,12 @@ from typing import Any
 
 import litellm
 
+from sr2.integrations.context_guard import (
+  estimate_request_tokens,
+  is_context_overflow_error,
+  requested_output_tokens,
+  shed_oldest_messages,
+)
 from sr2.models import TextBlock, ThinkingBlock, TokenUsage, ToolUseBlock, ToolResultBlock
 from sr2.protocols.llm import CompletionRequest, CompletionResponse, StreamEvent
 
@@ -14,6 +20,12 @@ logger = logging.getLogger(__name__)
 
 # obsidian-1fmv: cap on raw argument text kept in WARNING logs.
 RAW_ARG_LOG_LIMIT = 2000
+
+# obsidian-pt2k.1: bound on shed-and-retry attempts after a provider rejects
+# the request as too long. Each attempt drops one whole turn, so this only
+# bounds pathological estimators; the shed loop ends early when nothing is
+# droppable.
+MAX_CONTEXT_OVERFLOW_RETRIES = 5
 
 
 def _finish_reason_text(value: object) -> str:
@@ -37,7 +49,8 @@ def _safe_parse_tool_arguments(arguments: str) -> tuple[dict | None, str | None]
 
 
 class LiteLLMCallable:
-  def __init__(self, model: str, base_url: str | None = None, **kwargs) -> None:
+  def __init__(self, model: str, base_url: str | None = None,
+               context_limit: int | None = None, **kwargs) -> None:
     # When hitting an OpenAI-compatible endpoint with a bare model name,
     # litellm needs a provider prefix to route the call correctly.
     if base_url is not None and "/" not in model:
@@ -46,6 +59,10 @@ class LiteLLMCallable:
     self._kwargs: dict = kwargs
     if base_url is not None:
       self._kwargs["base_url"] = base_url
+    # obsidian-pt2k.1: total token ceiling (input estimate + requested
+    # output) the serving endpoint accepts, in the hub's own estimate units.
+    # None disables the guard and every request goes out as compiled.
+    self._context_limit = context_limit
 
   @property
   def model(self) -> str:
@@ -130,16 +147,71 @@ class LiteLLMCallable:
       ]
     return extra
 
-  async def complete(self, request: CompletionRequest) -> CompletionResponse:
-    messages = self._build_messages(request)
-    extra = self._build_extra(request)
+  def _fit_messages(self, messages: list[dict], extra: dict) -> list[dict]:
+    """obsidian-pt2k.1: shed oldest turns until the request fits the limit.
 
-    resp = await litellm.acompletion(
-      model=self._model,
-      messages=messages,
-      **self._kwargs,
-      **extra,
-    )
+    Proactive half of the context guard: the estimate mirrors the hub's
+    admission formula (including the reserved output tokens), so a request
+    that leaves here is admitted by at least the largest node. When even
+    shedding every droppable turn is not enough, the smallest possible
+    request goes out and the provider's answer stands.
+    """
+    if self._context_limit is None:
+      return messages
+    output = requested_output_tokens(self._kwargs)
+    dropped = 0
+    while estimate_request_tokens(messages, extra.get("tools")) + output > self._context_limit:
+      shed = shed_oldest_messages(messages)
+      if shed is None:
+        logger.warning(
+          "context guard: request still over limit after shedding all droppable"
+          " turns (limit=%s, output=%s)", self._context_limit, output,
+        )
+        break
+      messages = shed
+      dropped += 1
+    if dropped:
+      logger.warning(
+        "context guard: dropped %d oldest message(s) to fit context_limit=%s",
+        dropped, self._context_limit,
+      )
+    return messages
+
+  async def _acompletion(self, messages: list[dict], extra: dict, *, stream: bool):
+    """acall litellm with the reactive half of the context guard.
+
+    A context-length rejection (estimates under-count vs. the node) sheds one
+    more turn and retries, bounded by MAX_CONTEXT_OVERFLOW_RETRIES. Any other
+    error, and a request with nothing left to shed, propagate immediately.
+    """
+    attempt = 0
+    while True:
+      try:
+        if stream:
+          return await litellm.acompletion(
+            model=self._model, messages=messages, stream=True, **self._kwargs, **extra,
+          )
+        return await litellm.acompletion(
+          model=self._model, messages=messages, **self._kwargs, **extra,
+        )
+      except Exception as exc:
+        if attempt >= MAX_CONTEXT_OVERFLOW_RETRIES or not is_context_overflow_error(exc):
+          raise
+        shed = shed_oldest_messages(messages)
+        if shed is None:
+          raise
+        messages = shed
+        attempt += 1
+        logger.warning(
+          "context guard: endpoint rejected request as too long — dropped"
+          " oldest turn (retry %d/%d)", attempt, MAX_CONTEXT_OVERFLOW_RETRIES,
+        )
+
+  async def complete(self, request: CompletionRequest) -> CompletionResponse:
+    extra = self._build_extra(request)
+    messages = self._fit_messages(self._build_messages(request), extra)
+
+    resp = await self._acompletion(messages, extra, stream=False)
 
     choice = resp.choices[0]
     tool_calls = choice.message.tool_calls
@@ -201,16 +273,10 @@ class LiteLLMCallable:
     )
 
   async def stream(self, request: CompletionRequest) -> AsyncIterator[StreamEvent]:
-    messages = self._build_messages(request)
     extra = self._build_extra(request)
+    messages = self._fit_messages(self._build_messages(request), extra)
 
-    response = await litellm.acompletion(
-      model=self._model,
-      messages=messages,
-      stream=True,
-      **self._kwargs,
-      **extra,
-    )
+    response = await self._acompletion(messages, extra, stream=True)
 
     # index → {"id": str, "name": str, "arguments": str}
     tool_call_acc: dict[int, dict] = {}
