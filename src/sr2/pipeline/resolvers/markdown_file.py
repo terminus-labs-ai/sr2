@@ -42,11 +42,13 @@ class MarkdownFileResolver:
         placeholder — no other environment-style interpolation of ``path``
         happens here.
     on_missing : "skip" | "error" | None
-        Required if and only if ``path`` contains ``{area}``. "skip" makes
-        an unmatched path resolve to empty content and log one WARNING;
-        "error" raises ``FileNotFoundError`` from ``resolve()``. Supplying
-        it on a path without ``{area}``, or omitting it on a path with
-        ``{area}``, is a configuration error raised at ``__init__``.
+        Optional for any path (templated or static); ``None`` is the default
+        and behaves as ``"error"``. "skip" makes a pattern that matches
+        nothing resolve to empty content and log one WARNING; "error" raises
+        ``FileNotFoundError``. For a static path the branch is taken at
+        ``__init__`` (an empty glob warns-and-empties or raises there); for a
+        templated path it is taken on every ``resolve()`` call. Any other
+        value is a configuration error raised at ``__init__``.
     max_tokens : int | None
         Optional token budget (CharacterTokenCounter approximation: chars // 4).
         For a static path this is enforced at ``__init__`` (fails fast). For
@@ -59,9 +61,10 @@ class MarkdownFileResolver:
 
     Static mode (no ``{area}`` in path)
     ------------------------------------
-    Unchanged from before: the glob is expanded and files are read once at
-    ``__init__``; an empty glob raises ``FileNotFoundError`` at ``__init__``,
-    and ``max_tokens`` is enforced at ``__init__``.
+    The glob is expanded and files are read once at ``__init__``. An empty
+    glob follows ``on_missing``: the default (``None``) and ``"error"`` raise
+    ``FileNotFoundError`` at ``__init__``, while ``"skip"`` logs one WARNING
+    and resolves to empty content. ``max_tokens`` is enforced at ``__init__``.
 
     Templated mode (``{area}`` in path)
     ------------------------------------
@@ -104,31 +107,40 @@ class MarkdownFileResolver:
         self._templated: bool = _AREA_PLACEHOLDER in raw_path
         self._file_cache: dict[Path, tuple[float, str]] = {}
 
+        # on_missing is a valid, meaningful flag for any path (templated or
+        # static). None is the default and behaves as "error": a pattern that
+        # matches nothing fails — at __init__ for a static path, at resolve()
+        # for a templated one. "skip" makes a no-match resolve to empty content
+        # with a single warning instead of failing the pipeline.
+        if on_missing not in (None, "skip", "error"):
+            raise ValueError(
+                "MarkdownFileResolver: on_missing must be 'skip' or 'error'; "
+                f"got {on_missing!r}."
+            )
+        self._on_missing: str = on_missing if on_missing is not None else "error"
+
         if self._templated:
-            if on_missing not in ("skip", "error"):
-                raise ValueError(
-                    "MarkdownFileResolver: on_missing ('skip' or 'error') is "
-                    f"required when path contains {{area}}; path={raw_path!r}."
-                )
-            self._on_missing = on_missing
             # Resolve-time mode: no glob/read/budget check happens here.
             return
 
-        if on_missing is not None:
-            raise ValueError(
-                "MarkdownFileResolver: on_missing is only valid when path "
-                f"contains {{area}}; path={raw_path!r} does not."
-            )
-        self._on_missing = None
-
-        # Resolve the path.  If the raw_path is not absolute and a
-        # declaring_dir is provided, prepend it so relative globs work.
+        # Static mode: resolve the path, expand the glob and load files at init.
+        # If the raw_path is not absolute and a declaring_dir is provided,
+        # prepend it so relative globs work.
         resolved_path = self._resolve_path(raw_path, declaring_dir)
 
         # Expand glob and load files.
         self._files: list[Path] = self._expand_and_sort(resolved_path)
 
         if not self._files:
+            if self._on_missing == "skip":
+                logger.warning(
+                    "MarkdownFileResolver: no files matched pattern %r; "
+                    "on_missing='skip', returning empty content",
+                    resolved_path,
+                )
+                self._contents: list[tuple[Path, str]] = []
+                self._combined: str = ""
+                return
             raise FileNotFoundError(self._no_files_message(resolved_path))
 
         # Read all file contents now (at init) so token counting can happen.
