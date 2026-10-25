@@ -41,13 +41,14 @@ Two consecutive publications produced byte-identical `metrics.json`
 exactly one run directory is retained (retention constant
 `_PUBLISHED_RUN_RETENTION = 1`).
 
-### Raw per-scenario numbers (60 observations = 11 scenarios × 5 runs;
-the composition fixture contributes 2 retrieval turns per run = 10)
+### Raw per-scenario numbers (60 observations = 10 single-turn scenarios
+× 5 runs = 50, plus the cage-composition fixture's 5 runs × 2 retrieval
+turns = 10)
 
 | scenario | runs | correctness | recall | stale_current | policy_leak | prompt tok | background tok | irrelevant_ctx (mean) | hallucination |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | bounded-context-endurance-500-turn | 5 | 1.0000 | 1.0000 | 0 | 0 | 115 | 4100 | 0.965854 | 0 |
-| cage-composition | 10 | 0.9000 | 1.0000 | 1 | 1 | 190 | 260 | 1.174831* | 0 |
+| cage-composition | 10 | 0.9000 | 1.0000 | 1 | 1 | 190 | 260 | 0.587416 | 0 |
 | continuity-service-failure | 5 | 1.0000 | 1.0000 | 0 | 0 | 120 | 315 | 0.523810 | 0 |
 | correction-supersession | 5 | 1.0000 | 1.0000 | 0 | 0 | 105 | 310 | 0.516129 | 0 |
 | cross-project-dependency | 5 | 1.0000 | 1.0000 | 0 | 0 | 110 | 305 | 0.508197 | 0 |
@@ -58,11 +59,10 @@ the composition fixture contributes 2 retrieval turns per run = 10)
 | relevant-episodic-recovery | 5 | 1.0000 | 1.0000 | 0 | 0 | 115 | 310 | 0.516129 | 0 |
 | restart | 5 | 1.0000 | 1.0000 | 0 | 0 | 125 | 300 | 0.500000 | 0 |
 
-\* The composition fixture's per-run `irrelevant_context` is
-distractor-tokens ÷ background-tokens per turn; run 1 turn 1 delivers the
-full unfiltered background (the control-plan policy-leak delivery), so the
-mean over its ten observations exceeds 1.0. This is raw output of the
-fixed metric contract, not an error.
+The `cage-composition` `irrelevant_ctx` mean is taken over its ten
+observations (5 runs × 2 retrieval turns); `irrelevant_context` is a
+distractor-token ÷ background-token share bounded by 1.0, and no
+per-observation value exceeds 0.8125.
 
 ### Aggregate (`metrics.json`, exact)
 
@@ -100,5 +100,6 @@ checkout (scored runs 2–5, run 1 discarded as warm-up):
 - measured median: **0.000297 s**
 - measured p95: **0.001000 s**
 
-The pinned values are ~67× the measured ones; they document the metric
-shape, not this checkout's wall clock.
+The pinned median is ~67× the measured median (0.02 / 0.000297) and the
+pinned p95 is ~30× the measured p95 (0.03 / 0.001); they document the
+metric shape, not this checkout's wall clock.
