@@ -302,14 +302,16 @@ class SQLiteProvenanceStore:
             raise RuntimeError("SQLiteProvenanceStore: call connect() before using the store.")
         return self._db
 
-    async def _insert_entry_row(self, entry: Entry) -> None:
+    async def _insert_entry_row(self, entry: Entry, *, skip_existing: bool = False) -> None:
         db = self._assert_connected()
         content_type, content_json = _serialize_content(entry.content)
         content_hash = _hash_content(content_json)
         meta_json = json.dumps(entry.meta) if entry.meta else None
-        # FR4 append-only: INSERT (never OR REPLACE) — a duplicate id hits
-        # the PRIMARY KEY constraint and the caller's transaction rolls
-        # back, so a stored entry can never be silently overwritten.
+        # FR4 append-only: INSERT (never OR REPLACE). By default a duplicate
+        # id hits the PRIMARY KEY constraint and the caller's transaction
+        # rolls back; skip_existing keeps the stored row instead. Either way
+        # a stored entry can never be silently overwritten.
+        conflict = " ON CONFLICT(id) DO NOTHING" if skip_existing else ""
         await db.execute(
             """
             INSERT INTO entries
@@ -318,7 +320,8 @@ class SQLiteProvenanceStore:
                  token_count, created_at, meta_json,
                  reason, authority, lifecycle, scope_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            """
+            + conflict,
             (
                 entry.id,
                 entry.session_id,
@@ -403,19 +406,16 @@ class SQLiteProvenanceStore:
         failure the whole batch rolls back — a rejected write leaves no
         entry or entry_sources residue.
 
-        FR4: entries whose id is already stored are skipped unchanged —
-        content-addressed ids make re-persisting unchanged content a
-        no-op, while a *different* payload under a stored id would reach
-        the PRIMARY KEY constraint and fail the batch.
+        FR4: an entry whose id is already stored — earlier in this batch,
+        by a previous write, or by another process sharing the DB file — is
+        skipped and the first stored row wins. Content-addressed ids make
+        re-persisting unchanged content a no-op.
         """
         db = self._assert_connected()
         try:
-            # Pass 0: ids already durable (append-only: never rewritten).
-            existing = await self._existing_ids([e.id for e in entries])
-            # Pass 1: all entry rows
+            # Pass 1: all entry rows (append-only: existing ids never rewritten)
             for entry in entries:
-                if entry.id not in existing:
-                    await self._insert_entry_row(entry)
+                await self._insert_entry_row(entry, skip_existing=True)
             # Pass 2: all source links (FKs now satisfied)
             for entry in entries:
                 await self._insert_sources(entry)
@@ -423,22 +423,6 @@ class SQLiteProvenanceStore:
         except Exception:
             await db.rollback()
             raise
-
-    async def _existing_ids(self, ids: list[str]) -> set[str]:
-        """Return the subset of ids that already have entries rows."""
-        if not ids:
-            return set()
-        db = self._assert_connected()
-        found: set[str] = set()
-        for i in range(0, len(ids), 500):
-            chunk = ids[i : i + 500]
-            placeholders = ",".join("?" * len(chunk))
-            cursor = await db.execute(
-                f"SELECT id FROM entries WHERE id IN ({placeholders})", chunk
-            )
-            rows = await cursor.fetchall()
-            found.update(r[0] for r in rows)
-        return found
 
     async def get(self, entry_id: str) -> Entry | None:
         """Fetch a single entry by ID. Returns None if not found."""

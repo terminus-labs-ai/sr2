@@ -10,6 +10,8 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
+
 import aiosqlite
 import pytest
 import pytest_asyncio
@@ -238,6 +240,39 @@ class TestRoundTripWriteGet:
         retrieved = await store.get(transformer.id)
         assert retrieved is not None
         assert set(retrieved.sources) == {src1.id, src2.id}
+
+    @pytest.mark.asyncio
+    async def test_write_batch_with_repeated_id_keeps_first(self, store):
+        """Content-addressed ids repeat when a batch carries identical content
+        twice; the batch succeeds and the first entry wins (FR4)."""
+        entry_id = _next_id()
+        first = make_entry(id=entry_id, meta={"n": 1})
+        second = make_entry(id=entry_id, meta={"n": 2})
+        await store.write_batch([first, second])
+
+        retrieved = await store.get(entry_id)
+        assert retrieved is not None
+        assert retrieved.meta == {"n": 1}
+
+    @pytest.mark.asyncio
+    async def test_write_batch_concurrent_connections_same_id(self, tmp_path):
+        """Two processes sharing one DB may flush the same content-addressed id
+        at once; neither batch fails."""
+        path = tmp_path / "shared.db"
+        a = SQLiteProvenanceStore(path=path)
+        b = SQLiteProvenanceStore(path=path)
+        await a.connect()
+        await b.connect()
+        try:
+            entry_id = _next_id()
+            await asyncio.gather(
+                a.write_batch([make_entry(id=entry_id)]),
+                b.write_batch([make_entry(id=entry_id)]),
+            )
+            assert await b.get(entry_id) is not None
+        finally:
+            await a.close()
+            await b.close()
 
     @pytest.mark.asyncio
     async def test_get_unknown_id_returns_none(self, store):
