@@ -3,7 +3,9 @@
 Covers:
   - Single file: loaded and returned as a single TextBlock
   - Multiple files via glob: sorted alphabetically, concatenated with \\n separator
-  - Empty glob match: raises FileNotFoundError with a clear message
+  - Empty glob match: raises FileNotFoundError with a clear message (default / 'error')
+  - on_missing: a uniform flag for any path — 'skip' resolves a no-match to
+    empty content (one warning), 'error'/default raises; invalid values error at init
   - max_tokens budget: within budget → no error at init
   - max_tokens budget exceeded → raises MarkdownTokenBudgetError at init time
   - Budget error message: itemizes each file path + token count, total, budget, null hint
@@ -522,49 +524,137 @@ def warning_records(caplog) -> list:
 
 
 # ---------------------------------------------------------------------------
-# AC 14 / AC 15 — config validation of the on_missing / {area} pairing
+# on_missing — a uniform flag valid for any path (templated or static)
 # ---------------------------------------------------------------------------
+#
+# AC 14 / AC 15 (the old {area} constraint on on_missing) are retired by
+# obsidian-xwy0: on_missing ('skip' | 'error') is now a valid, meaningful flag
+# for ANY path. Omitting it on a templated path no longer raises — it defaults
+# to 'error' (raise from resolve() on a no-match). Supplying it on a static
+# path no longer raises — it is honored at __init__.
 
 
-class TestMarkdownFileResolverTemplatedConfigValidation:
-    def test_area_path_without_on_missing_raises_at_init(self, tmp_path):
-        """AC 14: {area} in path but on_missing omitted -> config error at __init__."""
+class TestMarkdownFileResolverOnMissingValidation:
+    # --- templated path, on_missing omitted -> valid, defaults to "error" ---
+
+    def test_area_path_without_on_missing_builds_at_init(self, tmp_path):
+        """AC 14 (retired): a {area} path that omits on_missing now builds.
+
+        on_missing is optional everywhere; the default is 'error', so a
+        templated path that matches nothing raises from resolve(), not init.
+        """
         templated = str(tmp_path / "{area}" / "CLAUDE.md")
-        with pytest.raises(ValueError):
-            MarkdownFileResolver(make_area_config(templated))
+        resolver = MarkdownFileResolver(make_area_config(templated))
+        assert resolver is not None
 
-    def test_area_path_without_on_missing_message_names_resolver_and_path(
+    @pytest.mark.asyncio
+    async def test_area_path_without_on_missing_defaults_to_error_at_resolve(
         self, tmp_path
     ):
-        """AC 14: the config error names the resolver and the offending path."""
-        templated = str(tmp_path / "{area}" / "CLAUDE.md")
-        with pytest.raises(ValueError) as exc_info:
-            MarkdownFileResolver(make_area_config(templated))
-        msg = str(exc_info.value)
-        assert "MarkdownFileResolver" in msg
-        assert templated in msg
+        """AC 14 (retired): a templated path without on_missing raises
+        FileNotFoundError from resolve() on a no-match (the 'error' default)."""
+        base = tmp_path / "projects"
+        base.mkdir()
+        templated = str(base / "{area}" / "CLAUDE.md")
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated), area_deps("nope")
+        )
+        with pytest.raises(FileNotFoundError):
+            await resolver.resolve([make_turn_start_event()])
 
-    def test_area_path_without_on_missing_via_build_raises(self, tmp_path):
-        """AC 14: validation also triggers through build()."""
+    def test_area_path_without_on_missing_via_build_builds(self, tmp_path):
+        """AC 14 (retired): build() no longer raises for a templated path
+        that omits on_missing."""
         templated = str(tmp_path / "{area}" / "CLAUDE.md")
-        with pytest.raises(ValueError):
-            MarkdownFileResolver.build(
-                make_area_config(templated), area_deps("alpha")
-            )
+        resolver = MarkdownFileResolver.build(
+            make_area_config(templated), area_deps("alpha")
+        )
+        assert resolver is not None
 
-    def test_on_missing_without_area_path_raises_at_init(self, tmp_path):
-        """AC 15: on_missing supplied on a non-templated path -> config error at __init__."""
+    # --- static path, on_missing supplied -> valid, honored ---
+
+    @pytest.mark.asyncio
+    async def test_on_missing_skip_on_static_path_with_match_resolves(self, tmp_path):
+        """AC 15 (retired): on_missing='skip' on a static path is valid and a
+        matching file resolves to its content."""
+        f = tmp_path / "doc.md"
+        f.write_text("STATIC CONTENT")
+        resolver = MarkdownFileResolver(make_area_config(str(f), on_missing="skip"))
+        result = await resolver.resolve([make_turn_start_event()])
+        assert combined_text(result) == "STATIC CONTENT"
+
+    def test_on_missing_error_on_static_path_builds(self, tmp_path):
+        """AC 15 (retired): on_missing='error' on a static path is valid and builds."""
         f = tmp_path / "doc.md"
         f.write_text("content")
-        with pytest.raises(ValueError):
-            MarkdownFileResolver(make_area_config(str(f), on_missing="skip"))
+        resolver = MarkdownFileResolver(make_area_config(str(f), on_missing="error"))
+        assert resolver is not None
 
-    def test_on_missing_error_without_area_path_raises_at_init(self, tmp_path):
-        """AC 15: same for on_missing='error' on a non-templated path."""
+    # --- invalid on_missing value -> config error for any path ---
+
+    def test_invalid_on_missing_value_raises_at_init(self, tmp_path):
+        """An on_missing value other than 'skip'/'error' is a config error at init."""
         f = tmp_path / "doc.md"
         f.write_text("content")
-        with pytest.raises(ValueError):
-            MarkdownFileResolver(make_area_config(str(f), on_missing="error"))
+        with pytest.raises(ValueError, match="on_missing"):
+            MarkdownFileResolver(make_area_config(str(f), on_missing="bogus"))
+
+    def test_invalid_on_missing_value_on_templated_raises_at_init(self, tmp_path):
+        """The invalid-value check applies to templated paths too."""
+        templated = str(tmp_path / "{area}" / "CLAUDE.md")
+        with pytest.raises(ValueError, match="on_missing"):
+            MarkdownFileResolver(make_area_config(templated, on_missing="bogus"))
+
+
+# ---------------------------------------------------------------------------
+# Static (non-templated) paths honor on_missing at __init__
+# ---------------------------------------------------------------------------
+#
+# The design decision behind obsidian-xwy0: on_missing='skip' on a static path
+# whose glob matches nothing resolves to empty content (one warning) instead of
+# failing the pipeline. The default (None) and 'error' keep failing at __init__
+# with FileNotFoundError, preserving today's behavior for configs that omit it.
+
+
+class TestMarkdownFileResolverStaticOnMissing:
+    @pytest.mark.asyncio
+    async def test_static_skip_empty_glob_resolves_empty(self, tmp_path):
+        """on_missing='skip' + empty static glob: builds at init, empty content."""
+        pattern = str(tmp_path / "*.md")  # no .md files
+        resolver = MarkdownFileResolver(make_area_config(pattern, on_missing="skip"))
+        result = await resolver.resolve([make_turn_start_event()])
+        assert_empty_content(result)
+
+    def test_static_skip_empty_glob_logs_exactly_one_warning(self, tmp_path, caplog):
+        """on_missing='skip' + empty static glob emits exactly one WARNING at init."""
+        pattern = str(tmp_path / "*.md")
+        with caplog.at_level(logging.WARNING):
+            MarkdownFileResolver(make_area_config(pattern, on_missing="skip"))
+        assert len(warning_records(caplog)) == 1
+
+    def test_static_error_empty_glob_raises_at_init(self, tmp_path):
+        """on_missing='error' + empty static glob still raises FileNotFoundError at init."""
+        pattern = str(tmp_path / "*.md")
+        with pytest.raises(FileNotFoundError):
+            MarkdownFileResolver(make_area_config(pattern, on_missing="error"))
+
+    def test_static_default_empty_glob_raises_at_init(self, tmp_path):
+        """on_missing omitted (default) + empty static glob still raises at init.
+
+        Backward-compat guard: the default behaves as 'error'.
+        """
+        pattern = str(tmp_path / "*.md")
+        with pytest.raises(FileNotFoundError):
+            MarkdownFileResolver(make_area_config(pattern))
+
+    @pytest.mark.asyncio
+    async def test_static_skip_matching_file_resolves_content(self, tmp_path):
+        """on_missing='skip' + a matching static file resolves to its content."""
+        f = tmp_path / "doc.md"
+        f.write_text("PRESENT")
+        resolver = MarkdownFileResolver(make_area_config(str(f), on_missing="skip"))
+        result = await resolver.resolve([make_turn_start_event()])
+        assert combined_text(result) == "PRESENT"
 
 
 # ---------------------------------------------------------------------------
