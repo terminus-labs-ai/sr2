@@ -115,7 +115,7 @@ def _rule_matches(
         return False
     if rule.agent_tags and not set(rule.agent_tags) & set(context.agent_tags):
         return False
-    if rule.target_agents and (scope.agent_id or "") not in rule.target_agents:
+    if rule.target_agents and (context.agent_id or "") not in rule.target_agents:
         return False
     if rule.target_agent_tags and not set(rule.target_agent_tags) & set(context.agent_tags):
         return False
