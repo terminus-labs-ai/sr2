@@ -766,3 +766,88 @@ def unsuppression_event(suppressed_record_id: str, ordinal: int = 0) -> Continui
         salience=0.5,
         created_at=_BASE_TIME + timedelta(seconds=2000 + ordinal),
     )
+
+
+# ---------------------------------------------------------------------------
+# sr2-146 (FR16): target_agents fixtures — additive, A-owned.
+#
+# FR16 makes source agent (``record.scope.agent_id``, matched by the rule's
+# ``agents`` field) and target agent (the QUERYING agent,
+# ``context.agent_id``, matched by the rule's ``target_agents`` field)
+# DISTINCT match dimensions. The fixtures below exist only to run the case
+# table: they never reuse or alter the AC8 fixtures above.
+# ---------------------------------------------------------------------------
+
+#: A third agent: it is neither :data:`AGENT_ASSISTANT_ID` (a source agent
+#: used by the rows) nor :data:`AGENT_CODING_ID` (the querying agent of the
+#: allow rows) — the querying agent of the FR16-r2/r5/r7 rows, so a
+#: ``target_agents`` list naming only the coding agent cannot match it.
+AGENT_OTHER_ID = "agent-other"
+AGENT_OTHER_TAGS = ("other",)
+
+#: The record of every FR16 row. A plain project fact: no sensitivity tags
+#: and a non-personal kind, so under the profile's
+#: ``deny_cross_agent_personal`` default the record is ALLOWED by the default
+#: when no rule matches. That is exactly the variable the rows pin —
+#: FR16-r2/r5/r7 assert the decision the PROFILE DEFAULT makes, so the
+#: default must allow; a row that expected the default to deny could not
+#: distinguish "the rule did not match" from "the default denied".
+FR16_CONTENT = "PROJECT-FACT-TARGET-AGENTS-CASE-146f0a"
+FR16_RECORD_ID = "rec-fr16-project-fact"
+
+
+def fr16_view(
+    *,
+    source_agent_id: str = AGENT_ASSISTANT_ID,
+    agent_id: str | None = None,
+    kind: ContinuityKind = ContinuityKind.PROJECT_FACT,
+) -> ContinuityView:
+    """One FR16 case-table record: a project fact by default (non-personal,
+    so the profile's ``deny_cross_agent_personal`` default admits it when no
+    rule matches), optionally re-typed (FR16-r6 uses a preference)."""
+    return make_view(
+        FR16_RECORD_ID,
+        kind=kind,
+        content=FR16_CONTENT,
+        scope=ContextScope(
+            owner_id=OWNER_ID,
+            agent_id=agent_id if agent_id is not None else source_agent_id,
+            projects=(PROJECT_SR2,),
+        ),
+    )
+
+
+def fr16_profile(
+    effect: str,
+    rule_id: str,
+    *,
+    agents: tuple[str, ...] = (),
+    target_agents: tuple[str, ...] = (),
+) -> Any:
+    """A one-rule profile isolating exactly one match dimension.
+
+    The default is ``deny_cross_agent_personal`` (the spec's example
+    default); with the FR16 record (non-personal, no sensitivity) the
+    default admits, so the profile's single rule is the only variable that
+    can name (or fail to name) the decision.
+    """
+    from sr2.config.models import RetrievalProfileConfig
+
+    return RetrievalProfileConfig.model_validate(
+        {
+            "default": "deny_cross_agent_personal",
+            "rules": [
+                {
+                    "id": rule_id,
+                    "effect": effect,
+                    "agents": list(agents),
+                    "target_agents": list(target_agents),
+                }
+            ],
+        }
+    )
+
+
+def fr16_policy(module: Any, profile: Any) -> Any:
+    """Build the policy under test from an :func:`fr16_profile` profile."""
+    return make_policy(module, profile=profile)
