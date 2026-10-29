@@ -122,7 +122,23 @@ async for event in sr2.turn([TextBlock(text="hello")]):
         print(event.text, end="")
 ```
 
-`post_process()` is a hook for post-turn work (memory extraction, summarization). Currently a no-op. Scheduled via `asyncio.create_task` after `_finalize_turn()` — it runs as a deferred background task and is awaited at the start of the next `turn()` call (or on `aclose()`), not before the current `turn()` generator exits.
+`turn()` has two error channels. Consumers must handle `event.type == "error"` and wrap the entire `async for` loop in `try`/`except`; catching errors only when calling `turn()` does not cover iteration of its async generator. A raised exception terminates iteration without a final `end` event.
+
+| Channel | Condition | Consumer-visible result |
+|---|---|---|
+| Raised exception | LLM circuit breaker rejects a request | `CircuitBreakerOpenError` from `sr2.degradation.circuit_breaker` |
+| Raised exception | LLM still requests tools at `max_tool_iterations` and `final_answer.enabled` is false | `ToolLoopLimitError` from `sr2.config.models`; with final answers enabled, SR2 instead attempts a forced final answer |
+| Raised exception | Tool calls require execution but `tool_executor` is `None` | `ConfigError` from `sr2.config.models` |
+| Raised exception | `tool_executor` returns a non-awaitable, such as a synchronous executor's result | `TypeError` |
+| Raised exception | LLM streaming fails or exceeds `llm_timeout_seconds` | Original provider exception or `TimeoutError`; these are not converted to error events |
+| In-band event | Bus subscriber failures or drain errors collected during the turn's in-band drains | `StreamEvent(type="error", errors=[...])` before the final `end` event if the turn completes |
+| In-band event | An uncaught exception from the previous turn's deferred `post_process()` task | `StreamEvent(type="error", errors=["deferred post_process error: ..."])` at the start of the next turn; the new turn then continues |
+
+These exceptions are not an exhaustive list: uncaught pipeline or injected-dependency errors also propagate. `asyncio.CancelledError` propagates unchanged. Exceptions raised while awaiting an individual tool executor are instead returned to the model as `ToolResultBlock(is_error=True)`; they do not by themselves fail the turn or produce a stream error event.
+
+`post_process()` runs as a deferred task scheduled by `_finalize_turn()` after `end_turn()`. The next `turn()` awaits it before starting new work. Call and await `aclose()` at shutdown to join a pending task; an uncaught deferred exception is raised directly by `aclose()`, which clears the pending task even on failure. Completion of the current turn's stream does not establish that deferred work succeeded.
+
+The built-in `post_process()` consolidates continuity only when both a consolidator and continuity store are configured; otherwise it is a no-op. Its consolidation failures are logged and swallowed, so they do not surface through the next turn or `aclose()`. The deferred-error channel above applies to exceptions that escape the hook, including overrides.
 
 ### Event-Driven Pipeline
 
