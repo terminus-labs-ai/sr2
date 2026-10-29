@@ -604,6 +604,30 @@ class SR2:
     # Session seeding
     # ------------------------------------------------------------------
 
+    async def continue_archive(self) -> None:
+        """Continue this session's archive before running its first turn.
+
+        Restore ordering and lineage only; compiled context is unchanged.
+        A failed read leaves the new instance's default archive state intact.
+        """
+        try:
+            entries = await self.provenance_store.get_session(
+                self.session_id, layer=TURN_ARCHIVE_LAYER
+            )
+            if not entries:
+                return
+            last = max(
+                entries,
+                key=lambda entry: (entry.meta["turn_seq"], entry.meta["seq"]),
+            )
+        except Exception:
+            logger.exception(
+                "turn archive continuation failed (session=%s)", self.session_id
+            )
+            return
+        self._engine.seed_turn_seq(last.meta["turn_seq"])
+        self._turn_archivist._prev_id = last.id
+
     def seed_session(self, messages: list[Message]) -> None:
         """Pre-populate conversation history in all SessionResolver instances.
 
