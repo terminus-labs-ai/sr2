@@ -16,7 +16,8 @@ Time is injected through the module-level patchable ``date`` namespace
 from __future__ import annotations
 
 import datetime
-import re
+import os
+import time
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -33,11 +34,30 @@ def frozen_now(monkeypatch):
     """Patch the clock seam so ``date.now(tz)`` returns a fixed instant in *tz*."""
 
     def _freeze(dt: datetime.datetime):
+        def now(tz=None):
+            local = dt.astimezone(tz)
+            return local.replace(tzinfo=None) if tz is None else local
+
         monkeypatch.setattr(
-            static_text_module.date, "now", lambda tz=None: dt.astimezone(tz)
+            static_text_module.date, "now", now
         )
 
     return _freeze
+
+
+@pytest.fixture
+def host_timezone(request):
+    previous = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = request.param
+        time.tzset()
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
 
 
 def make_config(text: str, timezone: str | None = None) -> ResolverConfig:
@@ -129,13 +149,48 @@ class TestTimePlaceholder:
         assert "{time}" not in text
 
     @pytest.mark.asyncio
-    async def test_time_without_timezone_uses_host_local(self):
-        resolver = StaticTextResolver(make_config("{time}"))
+    @pytest.mark.parametrize(
+        "host_timezone, instant, expected",
+        [
+            ("America/Phoenix", "2026-01-23T02:40:00+00:00",
+             "Thursday 19:40 MST (UTC-07:00)"),
+            ("UTC", "2026-01-23T02:40:00+00:00",
+             "Friday 02:40 UTC (UTC+00:00)"),
+            ("America/New_York", "2026-01-23T02:40:00+00:00",
+             "Thursday 21:40 EST (UTC-05:00)"),
+            ("America/New_York", "2026-07-23T02:40:00+00:00",
+             "Wednesday 22:40 EDT (UTC-04:00)"),
+        ],
+        indirect=["host_timezone"],
+    )
+    async def test_time_without_timezone_uses_host_local(
+        self, host_timezone, frozen_now, instant, expected
+    ):
+        frozen_now(datetime.datetime.fromisoformat(instant))
+        resolver = StaticTextResolver.build(make_config("{weekday} {time}"), None)
 
         text = await resolve_text(resolver)
 
-        # Host local — assert shape, not value: HH:MM <abbr> (UTC±hh:mm)
-        assert re.fullmatch(r"\d{2}:\d{2} \S+ \(UTC[+-]\d{2}:\d{2}\)", text), text
+        assert text == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("host_timezone", ["UTC"], indirect=True)
+    @pytest.mark.parametrize(
+        "zone, expected",
+        [
+            ("America/Phoenix", "Wednesday 2026-07-22 19:40 MST (UTC-07:00)"),
+            ("Asia/Kolkata", "Thursday 2026-07-23 08:10 IST (UTC+05:30)"),
+        ],
+    )
+    async def test_configured_timezone_is_not_overridden_by_host(
+        self, host_timezone, frozen_now, zone, expected
+    ):
+        frozen_now(datetime.datetime(2026, 7, 23, 2, 40, tzinfo=datetime.timezone.utc))
+        resolver = StaticTextResolver.build(
+            make_config("{weekday} {date} {time}", timezone=zone), None
+        )
+
+        assert await resolve_text(resolver) == expected
 
 
 # ---------------------------------------------------------------------------

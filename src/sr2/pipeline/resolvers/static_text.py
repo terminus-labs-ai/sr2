@@ -127,7 +127,8 @@ class StaticTextResolver:
 
         ``date.now`` is the patchable seam (see ``_make_date_namespace``).
         """
-        return date.now(self._timezone)
+        now = date.now(self._timezone)
+        return now.astimezone() if self._timezone is None else now
 
     @staticmethod
     def _format_time(now: _datetime.datetime) -> str:
