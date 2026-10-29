@@ -354,6 +354,10 @@ class PipelineEngine:
         for layer in self._layers:
             layer.seed(messages)
 
+    def seed_turn_seq(self, turn_seq: int) -> None:
+        """Restore the last archived turn number before starting a new turn."""
+        self._turn_seq = turn_seq
+
     def reset_execution_counts(self) -> None:
         """Reset execution_count to zero on all resolvers, transformers, and tool providers.
 
