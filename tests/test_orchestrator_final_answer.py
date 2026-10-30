@@ -152,6 +152,48 @@ def _last_message_text(request: CompletionRequest) -> str:
 
 class TestAC1ForcedPath:
     @pytest.mark.asyncio
+    async def test_ac1_multi_call_limit_pairs_every_unexecuted_call(self):
+        """AC1: every call in the limit iteration retains its not_run pairing."""
+        executor = RecordingExecutor()
+        llm = SequentialMockLLM([
+            _tool_iteration("tc_0"),
+            _tool_iteration("tc_1"),
+            [
+                tool_use_event(tool_use_id="tc_2a", tool_input={"location": "Oslo"}),
+                tool_use_event(tool_use_id="tc_2b", tool_input={"location": "Bergen"}),
+                StreamEvent(type="end"),
+            ],
+            _text_reply("VERDICT: done"),
+        ])
+        sr2 = _build_sr2(llm, executor, _config(final_answer=_fa()))
+        events = [e async for e in sr2.turn(make_user_input())]
+
+        assert [b.id for b in executor.calls] == ["tc_0", "tc_1"]
+        assert len(llm.stream_calls) == 4
+        forced_request = llm.stream_calls[-1]
+        assistant, results, instruction = forced_request.messages[-3:]
+        assert [assistant.role, results.role, instruction.role] == [
+            "assistant", "user", "user"
+        ]
+        assert all(isinstance(b, ToolUseBlock) for b in assistant.content)
+        assert [b.id for b in assistant.content] == ["tc_2a", "tc_2b"]
+        assert [(b.name, b.input) for b in assistant.content] == [
+            ("get_weather", {"location": "Oslo"}),
+            ("get_weather", {"location": "Bergen"}),
+        ]
+        assert all(isinstance(b, ToolResultBlock) for b in results.content)
+        assert [(b.tool_use_id, b.content, b.is_error) for b in results.content] == [
+            ("tc_2a", DEFAULT_FINAL_ANSWER_NOT_RUN, False),
+            ("tc_2b", DEFAULT_FINAL_ANSWER_NOT_RUN, False),
+        ]
+        assert forced_request.tools is None
+        assert _last_message_text(forced_request) == (
+            DEFAULT_FINAL_ANSWER_INSTRUCTION.format(reason=REASON)
+        )
+        assert _final_text(events) == "VERDICT: done"
+        assert events[-1].type == "end"
+
+    @pytest.mark.asyncio
     async def test_ac1_r1_executor_runs_only_before_limit(self):
         """AC1-r1: the executor runs for iterations 0 and 1 only."""
         events, llm, executor = await _run_turn(
