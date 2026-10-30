@@ -338,6 +338,30 @@ class TestAC2Fallback:
         assert events[-1].type == "end"
 
     @pytest.mark.asyncio
+    async def test_ac2_r3_text_and_tool_call_use_fallback_without_leaking_text(self):
+        """AC2-r3: mixed forced text and a tool call yield only the fallback."""
+        events, llm, executor = await _run_turn(
+            _config(final_answer=_fa()),
+            [
+                StreamEvent(type="text", text="UNUSABLE FORCED TEXT"),
+                tool_use_event(tool_use_id="tc_forced"),
+                StreamEvent(type="end"),
+            ],
+        )
+
+        assert "".join(e.text for e in events if e.type == "text") == (
+            DEFAULT_FINAL_ANSWER_FALLBACK.format(reason=REASON)
+        )
+        fa = _fa_events(events)
+        assert len(fa) == 1
+        assert fa[0].meta == {"reason": "limit", "fallback_used": True}
+        assert all(e.type != "text" for e in events[:events.index(fa[0])])
+        assert [b.id for b in executor.calls] == ["tc_0", "tc_1"]
+        assert len(llm.stream_calls) == 4
+        assert llm.stream_calls[-1].tools is None
+        assert events[-1].type == "end"
+
+    @pytest.mark.asyncio
     async def test_ac2_r4_custom_fallback_with_reason(self):
         """AC2-r4: custom fallback text with {reason} filled."""
         events, _, _ = await _run_turn(
@@ -401,6 +425,7 @@ class TestAC3DisabledAndEvents:
         fa = _fa_events(events)
         assert len(fa) == 1
         assert fa[0].meta == {"reason": "limit", "fallback_used": False}
+        assert all(e.type != "text" for e in events[:events.index(fa[0])])
         first_text_after = next(
             i for i, e in enumerate(events) if i > events.index(fa[0]) and e.type == "text"
         )
