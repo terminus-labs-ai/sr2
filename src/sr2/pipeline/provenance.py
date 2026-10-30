@@ -98,6 +98,20 @@ class Entry:
             )
 
 
+@dataclass(frozen=True)
+class SessionSummary:
+    """One session's listing row (FR 10) — what a resume picker shows.
+
+    ``turn_count`` is the number of *distinct* ``meta["turn_seq"]`` values
+    held by the session's entries in the listed layer; ``last_activity``
+    is the newest ``created_at`` among them.
+    """
+
+    session_id: str
+    turn_count: int
+    last_activity: datetime
+
+
 @runtime_checkable
 class ProvenanceStore(Protocol):
     async def write(self, entry: Entry) -> None: ...
@@ -110,6 +124,7 @@ class ProvenanceStore(Protocol):
         layer: str | None = None,
         since: datetime | None = None,
     ) -> list[Entry]: ...
+    async def list_sessions(self, layer: str, limit: int) -> list[SessionSummary]: ...
 
 
 class InMemoryProvenanceStore:
@@ -200,6 +215,47 @@ class InMemoryProvenanceStore:
                 continue
             results.append(entry)
         return results
+
+    async def list_sessions(self, layer: str, limit: int) -> list[SessionSummary]:
+        """One summary per session holding ``layer`` entries (FR 10).
+
+        A turn is a distinct ``meta["turn_seq"]`` value, keyed by its type
+        and value so no two spellings merge or collapse: an int, a float
+        and a bool each count separately, matching the SQLite store's
+        strict per-JSON-type reading and mirroring the existing
+        bool-is-not-an-int rule in ``read_turn_archive``. A ``turn_seq``
+        that is absent, ``None`` or unhashable (a list/dict) counts as no
+        turn but still marks the session active. Newest activity first,
+        ties broken on session id; capped at ``limit``.
+        """
+        turns: dict[str, set[tuple[str, Any]]] = {}
+        last_activity: dict[str, datetime] = {}
+        for entry in self._store.values():
+            if entry.layer != layer:
+                continue
+            session_id = entry.session_id
+            current = last_activity.get(session_id)
+            if current is None or entry.created_at > current:
+                last_activity[session_id] = entry.created_at
+            turn_seq = entry.meta.get("turn_seq")
+            if turn_seq is None:
+                continue
+            try:
+                hash(turn_seq)
+            except TypeError:
+                continue  # unhashable turn_seq — activity only, not a countable turn
+            turns.setdefault(session_id, set()).add((type(turn_seq).__name__, turn_seq))
+
+        summaries = [
+            SessionSummary(
+                session_id=session_id,
+                turn_count=len(turns.get(session_id, ())),
+                last_activity=created_at,
+            )
+            for session_id, created_at in last_activity.items()
+        ]
+        summaries.sort(key=lambda s: (s.last_activity, s.session_id), reverse=True)
+        return summaries[:limit]
 
 
 # ---------------------------------------------------------------------------
