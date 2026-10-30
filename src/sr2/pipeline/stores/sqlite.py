@@ -26,6 +26,7 @@ from sr2.pipeline.provenance import (
     ContextScope,
     Entry,
     EntryOrigin,
+    SessionSummary,
 )
 
 # ---------------------------------------------------------------------------
@@ -508,3 +509,65 @@ class SQLiteProvenanceStore:
             results.append(_row_to_entry(row, sources))
 
         return results
+
+    async def list_sessions(self, layer: str, limit: int) -> list[SessionSummary]:
+        """One summary per session holding ``layer`` entries (FR 10).
+
+        One read query over the indexed ``layer`` column — no schema
+        change, no new index, no write-path change. ``created_at`` is
+        stored as ISO-8601 text (a single UTC offset in the write path),
+        whose lexical order equals instant order, so ``MAX`` yields the
+        newest activity per session, read back loss-free with
+        ``fromisoformat``. ``json_extract`` reads
+        ``meta.turn_seq``; each distinct turn is keyed strictly by JSON
+        type plus canonical value text — the mirror of the in-memory
+        ``(type, value)`` key — so ``0``/``1``, ``False``/``True`` and
+        int/float spellings each count as their own turn. ``json_valid``
+        guards malformed ``meta_json``; ``json_type`` then classifies
+        those rows (and absent or ``null`` turn_seq values) as no turn,
+        while the session still appears with a zero turn count. Newest
+        activity first, ties broken on session id for a total order
+        matching the in-memory store; capped at ``limit``.
+        """
+        db = self._assert_connected()
+        cursor = await db.execute(
+            """
+            SELECT s.session_id, s.last_activity,
+                   (
+                       SELECT COUNT(DISTINCT
+                           CASE json_type(e2.meta_json, '$.turn_seq')
+                               WHEN 'integer'
+                               THEN 'integer:' || CAST(json_extract(e2.meta_json, '$.turn_seq') AS TEXT)
+                               WHEN 'real'
+                               THEN 'real:' || CAST(json_extract(e2.meta_json, '$.turn_seq') AS TEXT)
+                               WHEN 'text'
+                               THEN 'text:' || CAST(json_extract(e2.meta_json, '$.turn_seq') AS TEXT)
+                               WHEN 'true'  THEN 'boolean:true'
+                               WHEN 'false' THEN 'boolean:false'
+                           END
+                       )
+                       FROM entries e2
+                       WHERE e2.layer = ?
+                         AND e2.session_id = s.session_id
+                         AND json_valid(e2.meta_json) = 1
+                   ) AS turn_count
+            FROM (
+                SELECT session_id, MAX(created_at) AS last_activity
+                FROM entries
+                WHERE layer = ?
+                GROUP BY session_id
+            ) AS s
+            ORDER BY s.last_activity DESC, s.session_id ASC
+            LIMIT ?
+            """,
+            (layer, layer, limit),
+        )
+        rows = await cursor.fetchall()
+        return [
+            SessionSummary(
+                session_id=session_id,
+                turn_count=turn_count,
+                last_activity=datetime.fromisoformat(last_activity),
+            )
+            for session_id, last_activity, turn_count in rows
+        ]
