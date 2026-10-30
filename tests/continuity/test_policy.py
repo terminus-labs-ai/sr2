@@ -433,6 +433,61 @@ def test_ac8_r6_denied_record_source_expansion_is_empty(policy):
     ]
 
 
+def test_fr16_raw_source_target_agents_gates_expansion_after_record_allow():
+    """FR16: derived admission leaves the raw episode's target gate decisive."""
+    from sr2.config.models import RetrievalProfileConfig
+
+    profile = RetrievalProfileConfig.model_validate(
+        {
+            "default": "deny",
+            "rules": [
+                {
+                    "id": "derived-visible",
+                    "effect": "allow",
+                    "kinds": ["project_fact"],
+                },
+                {
+                    "id": "raw-for-coding",
+                    "effect": "allow",
+                    "kinds": ["episode"],
+                    "target_agents": [AGENT_CODING_ID],
+                },
+            ],
+        }
+    )
+    policy = make_policy(policy_module, profile=profile)
+    view = project_view(
+        "target-source-view",
+        content="DERIVED-TARGET-SOURCE",
+        agent_id=AGENT_ASSISTANT_ID,
+        projects=(PROJECT_SR2,),
+        provenance_ids=("raw-target-source",),
+    )
+    raw_entry = entry_for(
+        "raw-target-source",
+        text="RAW-TARGET-SOURCE",
+        scope=view.current_record.scope,
+    )
+    targeted = RetrievalContext(
+        owner_id="diego",
+        agent_id=AGENT_CODING_ID,
+        agent_tags=(),
+        projects=(PROJECT_SR2,),
+        frame_id="frame-target-source",
+        query="expand source",
+        token_budget=2000,
+    )
+    non_targeted = targeted.model_copy(update={"agent_id": AGENT_ASSISTANT_ID})
+
+    for context in (non_targeted, targeted):
+        decision = policy.evaluate(view, context)
+        assert decision.allowed is True
+        assert decision.matched_rule_ids == ("derived-visible",)
+
+    assert expand(policy, view, non_targeted, [raw_entry]) == []
+    assert expand(policy, view, targeted, [raw_entry]) == [raw_entry]
+
+
 def test_ac8_r7_unclassified_personal_denied_for_other_agent(policy):
     """AC8-r7 — a personal record (personal kind, a sensitivity the profile
     never mentions, so no allow rule matches) retrieved by a DIFFERENT agent
