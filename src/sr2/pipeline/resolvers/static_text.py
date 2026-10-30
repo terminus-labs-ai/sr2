@@ -42,6 +42,9 @@ _AREA_PLACEHOLDER = "{area}"
 _DATE_PLACEHOLDER = "{date}"
 _TIME_PLACEHOLDER = "{time}"
 _WEEKDAY_PLACEHOLDER = "{weekday}"
+_ENGLISH_WEEKDAYS = (
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+)
 
 
 class StaticTextResolver:
@@ -94,7 +97,7 @@ class StaticTextResolver:
             if _TIME_PLACEHOLDER in text:
                 text = text.replace(_TIME_PLACEHOLDER, self._format_time(now))
             if _WEEKDAY_PLACEHOLDER in text:
-                text = text.replace(_WEEKDAY_PLACEHOLDER, now.strftime("%A"))
+                text = text.replace(_WEEKDAY_PLACEHOLDER, _ENGLISH_WEEKDAYS[now.weekday()])
         return ResolvedContent(
             resolver_name=self.name,
             source_layer="static_text",

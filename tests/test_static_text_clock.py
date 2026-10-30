@@ -217,12 +217,23 @@ class TestWeekdayPlaceholder:
         assert text == f"Today is {expected}."
 
     @pytest.mark.asyncio
-    async def test_weekday_without_timezone_works(self):
+    async def test_weekday_without_timezone_works(self, monkeypatch):
+        class FixedLocalDatetime(datetime.datetime):
+            def astimezone(self, tz=None):
+                return self if tz is None else super().astimezone(tz)
+
+        fixed = FixedLocalDatetime(2026, 7, 22, 9, tzinfo=ZoneInfo("UTC"))
+
+        def now(tz=None):
+            assert tz is None
+            return fixed
+
+        monkeypatch.setattr(static_text_module.date, "now", now)
         resolver = StaticTextResolver(make_config("{weekday}"))
 
         text = await resolve_text(resolver)
 
-        assert text == datetime.date.today().strftime("%A")
+        assert text == "Wednesday"
 
 
 # ---------------------------------------------------------------------------
