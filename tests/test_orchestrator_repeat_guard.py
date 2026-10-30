@@ -680,6 +680,36 @@ class TestAC9StopKeepsExecutedResults:
         assert DEFAULT_FINAL_ANSWER_NOT_RUN not in [r.content for r in all_results]
 
     @pytest.mark.asyncio
+    async def test_ac9_error_result_is_preserved_in_mixed_stop_request(self):
+        """AC9-error1: the cap stops on c2 and preserves both full results."""
+        events, llm, executor = await _run_turn(
+            _config(repeat_guard=_guard(max_identical_calls=2)),
+            [_iter_events(_x("c1"), _x("c2"))],
+            {"c1": ("success", False), "c2": ("tool failed", True)},
+        )
+
+        assert executor.order == ["c1", "c2"]
+        assert len(llm.stream_calls) == 2, "one batch plus exactly one forced call"
+        forced_request = llm.stream_calls[1]
+        assert forced_request.tools is None
+        tool_use_ids = [
+            block.id
+            for block in forced_request.messages[-3].content
+            if isinstance(block, ToolUseBlock)
+        ]
+        assert tool_use_ids == ["c1", "c2"]
+        results = [
+            (block.tool_use_id, block.content, block.is_error)
+            for block in forced_request.messages[-2].content
+            if isinstance(block, ToolResultBlock)
+        ]
+        assert results == [("c1", "success", False), ("c2", "tool failed", True)]
+        fa = _fa_events(events)
+        assert len(fa) == 1 and fa[0].meta == {"reason": "repeat", "fallback_used": False}
+        assert _final_text(events) == "FINAL"
+        assert events[-1].type == "end"
+
+    @pytest.mark.asyncio
     async def test_ac9_r4_stop_iteration_tool_pair_is_queued_once(self):
         """AC9-r4: X ×4 (same result). The stop iteration's tool_use_emitted
         and tool_result_received bus events are each queued exactly once, with
