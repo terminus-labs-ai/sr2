@@ -309,3 +309,27 @@ def test_fr16_r7_deny_miss_on_target_dimension_leaves_profile_default():
         "no rule matched, so the profile default decides; the non-personal "
         f"FR16 record is admitted by the default ({decision.explanation})"
     )
+
+
+# ---------------------------------------------------------------------------
+# FR16-r8 — source membership cannot substitute for querying-agent membership
+# ---------------------------------------------------------------------------
+
+
+def test_fr16_r8_source_in_target_agents_does_not_match_non_target_querier():
+    """A source in target_agents must not enable a non-target querier."""
+    profile = fr16_profile(
+        effect="allow",
+        rule_id=RULE_ALLOW,
+        target_agents=(AGENT_CODING_ID,),
+    )
+    record = fr16_view(source_agent_id=AGENT_CODING_ID)
+    context = _context(AGENT_ASSISTANT_ID)
+
+    decision = _policy(profile).evaluate(record, context)
+
+    assert decision.matched_rule_ids == (), (
+        "source membership must not substitute for querying-agent membership "
+        f"in target_agents ({decision.explanation})"
+    )
+    assert decision.allowed is True, decision.explanation
