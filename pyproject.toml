@@ -1,7 +1,7 @@
 [project]
 name = "sr2"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.0.1"
+description = "SR2 — a context runtime for AI agents: layered context assembly, compaction, memory, token budgeting and continuity"
 readme = "README.md"
 authors = [{ name = "Diego Camizotti", email = "diego@terminuslabs.co" }]
 license = "Apache-2.0"
