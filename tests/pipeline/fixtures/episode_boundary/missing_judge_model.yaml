@@ -1,0 +1,9 @@
+models:
+  default:
+    model: test/default
+pipeline:
+  transformers:
+    - type: episode_boundary
+      config:
+        judge_model: judge
+  layers: []
