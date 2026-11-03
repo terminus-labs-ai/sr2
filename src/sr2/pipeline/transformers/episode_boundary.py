@@ -136,9 +136,12 @@ class EpisodeBoundaryTransformer:
 
     def _build_request(self, turns: list[tuple[int, str]]) -> CompletionRequest:
         prompt = self._config.config.get("judge_prompt") or _DEFAULT_PROMPT
-        system = [TextBlock(text=prompt)]
-        selected: list[Message] = []
         budget = self._config.config.get("judge_max_tokens", 4000)
+        system = [TextBlock(text=prompt)]
+        while self._request_tokens(CompletionRequest(system=system, messages=[])) > budget:
+            prompt = prompt[: max(0, len(prompt) - max(1, len(prompt) // 4))]
+            system = [TextBlock(text=prompt)] if prompt else []
+        selected: list[Message] = []
         for seq, text in reversed(turns):
             candidate = Message(
                 role="user",
