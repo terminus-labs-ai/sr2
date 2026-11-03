@@ -1150,6 +1150,10 @@ class SR2:
                 )
             self._pp_task = None
 
+        # A failed turn has no post-process task to consume its observations.
+        for transformer in self._episode_transformers:
+            transformer.consume_observed_events()
+
         # Reset all pipeline components so turn 2+ re-fires them.
         self._engine.reset_execution_counts()
 
