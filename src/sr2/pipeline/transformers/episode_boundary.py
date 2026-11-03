@@ -64,6 +64,7 @@ class EpisodeBoundaryTransformer:
             {**PHASE_MAP, "started": EventPhase.STARTING},
             [EventSubscription("assistant_response", EventPhase.COMPLETED)],
         )
+        self._observed_events: list[Event] = []
         self.episode_start: int | None = None
 
     @classmethod
@@ -83,13 +84,20 @@ class EpisodeBoundaryTransformer:
             )
         return cls(config, deps.llm[key], token_counter)
 
-    def matches(self, events: list[Event]) -> bool:
-        return any(
+    def observe(self, event: Event) -> None:
+        """Record a real bus event when its configured phase also matches."""
+        if any(
             subscription.event_name == event.name
             and (subscription.phase is None or subscription.phase is event.phase)
             for subscription in self.subscriptions
-            for event in events
-        )
+        ):
+            self._observed_events.append(event)
+
+    def consume_observed_events(self) -> list[Event]:
+        """Return this turn's triggers once for deferred judge execution."""
+        events = self._observed_events
+        self._observed_events = []
+        return events
 
     @property
     def min_episode_turns(self) -> int:

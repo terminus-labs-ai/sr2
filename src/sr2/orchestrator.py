@@ -542,6 +542,12 @@ class SR2:
         # Resolve shared infrastructure before building layers so layers receive
         # the real bus and provenance store — not throwaway placeholders.
         shared_bus = EventBus()
+        for transformer in self._episode_transformers:
+            for event_name in {
+                subscription.event_name
+                for subscription in transformer.subscriptions
+            }:
+                shared_bus.subscribe(event_name, transformer.observe)
         resolved_provenance_store: ProvenanceStore = (
             provenance_store if provenance_store is not None else InMemoryProvenanceStore()
         )
@@ -1639,24 +1645,9 @@ class SR2:
         from sr2.pipeline.tracing import FiringRecord
 
         turn_seq = self._turn_archivist.turn_seq
-        current_entries = await read_turn_archive(
-            self._turn_archivist._store, self.session_id, turn_seq
-        )
-        event_names = {"assistant_response", "turn_end"}
-        reasons = {entry.reason for entry in current_entries}
-        if ContextReason.USER_INPUT in reasons:
-            event_names.add("user_input")
-        if ContextReason.TOOL_USE in reasons:
-            event_names.add("tool_use")
-        if ContextReason.TOOL_RESULT in reasons:
-            event_names.add("tool_result")
-        events = [
-            Event(name, EventPhase.COMPLETED, "orchestrator")
-            for name in sorted(event_names)
-        ]
-
         for transformer in self._episode_transformers:
-            if not transformer.matches(events):
+            events = transformer.consume_observed_events()
+            if not events:
                 continue
             if transformer.episode_start is None:
                 transformer.episode_start = turn_seq
