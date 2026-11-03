@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib
 import sys
 from dataclasses import asdict, is_dataclass
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,17 @@ class RecordingContinuityStore:
         return None
 
 
+class CompileBoundaryTracer(CollectingTracer):
+    def __init__(self, store: RecordingContinuityStore) -> None:
+        super().__init__()
+        self.store = store
+        self.records_seen_at_compile: list[int] = []
+
+    def on_compile(self, request: CompletionRequest) -> None:
+        self.records_seen_at_compile.append(len(self.store.records))
+        super().on_compile(request)
+
+
 def _episode_config(
     *,
     judge_model: str | None = None,
@@ -149,10 +161,11 @@ async def _open_store(tmp_path: Path, name: str = "continuity.db") -> RecordingC
     return RecordingContinuityStore()
 
 
-async def _closed_episode(tmp_path: Path):
+async def _closed_episode(tmp_path: Path, *, tracer_factory=None):
     store = await _open_store(tmp_path)
     provenance = InMemoryProvenanceStore()
     session_id = "close-record"
+    tracer = tracer_factory(store) if tracer_factory is not None else None
 
     seed = _runtime(
         {"default": ScriptedLLM()},
@@ -170,7 +183,11 @@ async def _closed_episode(tmp_path: Path):
         store=store,
     )
     runtime = _runtime(
-        {"default": judge}, store=store, provenance=provenance, session_id=session_id
+        {"default": judge},
+        store=store,
+        provenance=provenance,
+        tracer=tracer,
+        session_id=session_id,
     )
     await runtime.continue_archive()
     for seq in range(1, 5):
@@ -275,9 +292,22 @@ async def test_ac23_r2_triggering_turn_is_not_in_closed_episode(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ac23_r3_close_is_stored_before_next_compile(tmp_path):
-    runtime, judge, store, _ = await _closed_episode(tmp_path)
+    tracers = []
+
+    def build_tracer(continuity_store):
+        tracer = CompileBoundaryTracer(continuity_store)
+        tracers.append(tracer)
+        return tracer
+
+    runtime, _, store, _ = await _closed_episode(
+        tmp_path,
+        tracer_factory=build_tracer,
+    )
+    tracer = tracers[0]
+    tracer.records_seen_at_compile.clear()
     await _drain(runtime, "turn 6")
-    assert judge.records_seen_at_stream[-1] == 1
+    assert tracer.records_seen_at_compile
+    assert tracer.records_seen_at_compile[0] == 1
     await runtime.aclose()
     await store.close()
 
@@ -370,6 +400,11 @@ async def test_ac25_r3_omitted_model_uses_default(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ac25_r4_yaml_transformer_judges_tool_turn_once(tmp_path):
+    discovered = {
+        entry_point.name: entry_point
+        for entry_point in entry_points(group="sr2.transformers")
+    }
+    assert discovered["episode_boundary"].load()
     config = load_config(str(FIXTURES / "episode_boundary.yaml"))
     runtime_config = PipelineConfig.model_validate(config["pipeline"])
     store = await _open_store(tmp_path)
@@ -393,18 +428,29 @@ async def test_ac25_r5_explicit_subscription_matches_event_and_phase(tmp_path):
     runtime = _runtime(
         {"default": completed},
         config=_episode_config(
-            subscriptions=[{"event": "assistant_response", "phase": "completed"}]
+            subscriptions=[{"event": "turn_end", "phase": "completed"}]
         ),
     )
-    await _drain(runtime, "matching event")
+    await _drain(runtime, "matching non-default event")
     await runtime.aclose()
     assert len(completed.complete_calls) == 1
+
+    wrong_event = ScriptedLLM()
+    runtime = _runtime(
+        {"default": wrong_event},
+        config=_episode_config(
+            subscriptions=[{"event": "tool_result", "phase": "completed"}]
+        ),
+    )
+    await _drain(runtime, "unrelated event")
+    await runtime.aclose()
+    assert wrong_event.complete_calls == []
 
     wrong_phase = ScriptedLLM()
     runtime = _runtime(
         {"default": wrong_phase},
         config=_episode_config(
-            subscriptions=[{"event": "assistant_response", "phase": "started"}]
+            subscriptions=[{"event": "turn_end", "phase": "started"}]
         ),
     )
     await _drain(runtime, "same event, unrelated phase")
@@ -434,15 +480,16 @@ async def test_ac25_r7_prompt_budget_keeps_newest_turns(tmp_path):
     store = await _open_store(tmp_path)
     llm = ScriptedLLM()
     runtime = _runtime(
-        {"default": llm}, config=_episode_config(judge_max_tokens=90), store=store
+        {"default": llm}, config=_episode_config(judge_max_tokens=260), store=store
     )
     for marker in ("OLDEST", "MIDDLE1", "MIDDLE2", "NEWEST"):
-        await _drain(runtime, marker + " " + marker.lower() * 35)
+        await _drain(runtime, marker + " " + (marker.lower() + " ") * 20)
         await runtime.aclose()
     request = llm.complete_calls[-1]
     text = _request_text(request)
-    assert _request_tokens(request) <= 90
+    assert _request_tokens(request) <= 260
     assert "NEWEST" in text
+    assert "MIDDLE2" in text
     assert "OLDEST" not in text
     await store.close()
 
@@ -476,9 +523,15 @@ async def test_ac25_r9_trace_records_known_latency_and_usage(tmp_path, monkeypat
     runtime = _runtime({"default": llm}, store=store, tracer=tracer)
     await _drain(runtime, "turn")
     await runtime.aclose()
-    trace = tracer.get_trace()
-    assert 13 in _metric_values(trace, ("input", "token"))
-    assert 7 in _metric_values(trace, ("output", "token"))
-    latencies = _metric_values(trace, ("latency",))
+    judge_records = [
+        record
+        for record in tracer.get_trace()
+        if record.kind == "transformer" and record.component_name == "episode_boundary"
+    ]
+    assert len(judge_records) == 1
+    judge_record = judge_records[0]
+    assert 13 in _metric_values(judge_record, ("input", "token"))
+    assert 7 in _metric_values(judge_record, ("output", "token"))
+    latencies = _metric_values(judge_record, ("latency",))
     assert 125 in latencies or 0.125 in latencies
     await store.close()
