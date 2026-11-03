@@ -88,6 +88,19 @@ class TransformerConfig(BaseModel):
   config: _LiveDict = {}
   max_executions: int = 1
 
+  @model_validator(mode="after")
+  def _validate_episode_boundary(self) -> "TransformerConfig":
+    if self.type != "episode_boundary":
+      return self
+    for key, default in (("judge_max_tokens", 4000), ("min_episode_turns", 2)):
+      value = self.config.get(key, default)
+      if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise _ValidatableConfigError(f"{key} must be a positive integer; got {value!r}")
+    judge_model = self.config.get("judge_model", "default")
+    if not isinstance(judge_model, str) or not judge_model:
+      raise _ValidatableConfigError("judge_model must be a non-empty model key")
+    return self
+
 
 class ResolverConfig(BaseModel):
   type: str
@@ -304,6 +317,7 @@ class RetrievalProfileConfig(BaseModel):
 
 class PipelineConfig(BaseModel):
   layers: list[LayerConfig]
+  transformers: list[TransformerConfig] = []
   token_budget: int = 200_000
   max_tool_iterations: int = 25
   max_parallel_tools: int | None = None

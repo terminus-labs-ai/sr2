@@ -7,7 +7,7 @@ import sys
 
 import yaml
 
-from sr2.config.models import PipelineConfig
+from sr2.config.models import ConfigError, PipelineConfig, TransformerConfig
 from sr2.integrations.litellm import LiteLLMCallable
 from sr2.models import TextBlock
 from sr2.orchestrator import SR2
@@ -22,7 +22,18 @@ def load_config(path: str) -> dict:
     if not os.path.exists(path):
         raise FileNotFoundError(f"Config file not found: {path}")
     with open(path) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    models = config.get("models", {})
+    for raw in config.get("pipeline", {}).get("transformers", []):
+        transformer = TransformerConfig.model_validate(raw)
+        if transformer.type != "episode_boundary":
+            continue
+        judge_model = transformer.config.get("judge_model", "default")
+        if judge_model not in models:
+            raise ConfigError(
+                f"episode_boundary judge_model {judge_model!r} is absent from models"
+            )
+    return config
 
 
 def build_llm_clients(models: dict) -> dict[str, LLMCallable]:
