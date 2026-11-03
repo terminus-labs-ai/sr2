@@ -74,6 +74,21 @@ class ScriptedLLM:
         yield StreamEvent(type="end")
 
 
+class FailedThenCompletedToolTurnLLM:
+    def __init__(self) -> None:
+        self.stream_calls: list[CompletionRequest] = []
+
+    async def stream(self, request: CompletionRequest):
+        self.stream_calls.append(request)
+        if len(self.stream_calls) == 1:
+            yield tool_use_event("failed-turn-tool")
+        elif len(self.stream_calls) == 2:
+            raise RuntimeError("driver failed after tool result")
+        else:
+            yield StreamEvent(type="text", text="unrelated turn completed")
+            yield StreamEvent(type="end")
+
+
 async def _tool_executor(block) -> ToolResultBlock:
     return ToolResultBlock(tool_use_id=block.id, content="tool result")
 
@@ -535,4 +550,36 @@ async def test_ac25_r9_trace_records_known_latency_and_usage(tmp_path, monkeypat
     assert 7 in _metric_values(judge_record, ("output", "token"))
     latencies = _metric_values(judge_record, ("latency",))
     assert 125 in latencies or 0.125 in latencies
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_ac25_r10_failed_turn_subscription_does_not_leak_to_next_turn(tmp_path):
+    store = await _open_store(tmp_path)
+    default = FailedThenCompletedToolTurnLLM()
+    judge = ScriptedLLM()
+    runtime = _runtime(
+        {"default": default, "judge": judge},
+        config=_episode_config(
+            judge_model="judge",
+            subscriptions=[{"event": "tool_result", "phase": "completed"}],
+        ),
+        store=store,
+        tool_executor=_tool_executor,
+    )
+
+    failed_turn_events = []
+    with pytest.raises(RuntimeError, match="driver failed after tool result"):
+        async for event in runtime.turn(make_user_input("failed tool turn")):
+            failed_turn_events.append(event)
+    assert any(event.type == "tool_result_received" for event in failed_turn_events)
+    assert len(default.stream_calls) == 2
+
+    completed_turn_events = await _drain(runtime, "unrelated text-only turn")
+    assert any(event.type == "text" for event in completed_turn_events)
+    assert all(event.type != "tool_result_received" for event in completed_turn_events)
+    await runtime.aclose()
+
+    assert len(default.stream_calls) == 3
+    assert judge.complete_calls == []
     await store.close()
