@@ -1,0 +1,24 @@
+models:
+  default:
+    model: test/default
+pipeline:
+  transformers:
+    - type: episode_boundary
+      config:
+        judge_max_tokens: 4000
+        min_episode_turns: 2
+  layers:
+    - name: system
+      target: system
+      resolvers:
+        - type: static
+          config:
+            text: You are a helpful assistant.
+    - name: conversation
+      target: messages
+      resolvers:
+        - type: session
+        - type: input
+          subscriptions:
+            - event: user_input
+              phase: completed

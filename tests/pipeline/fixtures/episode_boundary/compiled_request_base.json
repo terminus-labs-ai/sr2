@@ -1,0 +1,1 @@
+{"system":[{"token_count":null,"meta":{},"type":"text","text":"You are a helpful assistant."}],"messages":[{"role":"user","content":[{"token_count":null,"meta":{},"type":"text","text":"Reference input"}],"turn_index":null,"timestamp":null,"zone":null}],"tools":null}
