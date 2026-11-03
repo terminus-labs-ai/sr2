@@ -32,6 +32,10 @@ class FiringRecord:
     status: Literal["ok", "failed"] = "ok"
     error: str | None = None
     iteration_seq: int = 1
+    warnings: tuple[dict, ...] = ()
+    judge_latency_ms: float | None = None
+    judge_input_tokens: int | None = None
+    judge_output_tokens: int | None = None
 
 
 @runtime_checkable

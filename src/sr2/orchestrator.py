@@ -527,6 +527,11 @@ class SR2:
             continuity_consolidator=continuity_consolidator,
             continuity_store=continuity_store,
         )
+        self._episode_transformers = [
+            _TRANSFORMERS.get(config.type).build(config, deps, token_counter)
+            for config in pipeline_config.transformers
+            if config.type == "episode_boundary"
+        ]
         # sr2-96 (FR10, FR14): the post-process consolidation seam. Both
         # parts are opt-in; when either is absent post_process stays the
         # MVP no-op.
@@ -1126,7 +1131,17 @@ class SR2:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                yield StreamEvent(type="error", errors=[f"deferred post_process error: {exc}"])
+                meta = None
+                if hasattr(exc, "capability"):
+                    meta = {
+                        "capability": exc.capability,
+                        "retryable": getattr(exc, "retryable", False),
+                    }
+                yield StreamEvent(
+                    type="error",
+                    errors=[f"deferred post_process error: {exc}"],
+                    meta=meta,
+                )
             self._pp_task = None
 
         # Reset all pipeline components so turn 2+ re-fires them.
@@ -1597,6 +1612,7 @@ class SR2:
         continuity, mirroring the turn archivist): it must never crash a
         turn nor raise out of this hook.
         """
+        await self._judge_episode_boundaries()
         if self._continuity_consolidator is None or self._continuity_store is None:
             return
         try:
@@ -1608,6 +1624,155 @@ class SR2:
                 self.session_id,
             )
         return None
+
+    async def _judge_episode_boundaries(self) -> None:
+        """Run configured episode judges inside the next-turn barrier."""
+        if not self._episode_transformers:
+            return
+
+        from sr2.continuity.models import (
+            ContinuityEventKind,
+            ContinuityKind,
+            ContinuityRecord,
+        )
+        from sr2.pipeline.provenance import read_turn_archive
+        from sr2.pipeline.tracing import FiringRecord
+
+        turn_seq = self._turn_archivist.turn_seq
+        current_entries = await read_turn_archive(
+            self._turn_archivist._store, self.session_id, turn_seq
+        )
+        event_names = {"assistant_response", "turn_end"}
+        reasons = {entry.reason for entry in current_entries}
+        if ContextReason.USER_INPUT in reasons:
+            event_names.add("user_input")
+        if ContextReason.TOOL_USE in reasons:
+            event_names.add("tool_use")
+        if ContextReason.TOOL_RESULT in reasons:
+            event_names.add("tool_result")
+        events = [
+            Event(name, EventPhase.COMPLETED, "orchestrator")
+            for name in sorted(event_names)
+        ]
+
+        for transformer in self._episode_transformers:
+            if not transformer.matches(events):
+                continue
+            if transformer.episode_start is None:
+                transformer.episode_start = turn_seq
+            turns: list[tuple[int, str]] = []
+            entries_by_turn: dict[int, list[Entry]] = {}
+            for seq in range(transformer.episode_start, turn_seq + 1):
+                entries = await read_turn_archive(
+                    self._turn_archivist._store, self.session_id, seq
+                )
+                entries_by_turn[seq] = entries
+                rendered = "\n".join(
+                    entry.content.model_dump_json()
+                    if hasattr(entry.content, "model_dump_json")
+                    else repr(entry.content)
+                    for entry in entries
+                )
+                turns.append((seq, rendered))
+
+            try:
+                judgement = await transformer.judge(turns)
+            except Exception as exc:
+                self._trace_episode_judge(
+                    FiringRecord,
+                    transformer,
+                    turn_seq,
+                    events,
+                    status="failed",
+                    error=str(exc),
+                )
+                raise
+            self._trace_episode_judge(
+                FiringRecord,
+                transformer,
+                turn_seq,
+                events,
+                warning_code=judgement.warning_code,
+                latency_ms=judgement.latency_ms,
+                input_tokens=judgement.input_tokens,
+                output_tokens=judgement.output_tokens,
+            )
+
+            first_seq = transformer.episode_start
+            last_seq = turn_seq - 1
+            if (
+                judgement.decision != "close"
+                or last_seq - first_seq + 1 < transformer.min_episode_turns
+                or self._continuity_store is None
+            ):
+                continue
+            closed_entries = [
+                entry
+                for seq in range(first_seq, last_seq + 1)
+                for entry in entries_by_turn[seq]
+            ]
+            episode_id = str(ULID())
+            record = ContinuityRecord(
+                id=str(ULID()),
+                subject_id=episode_id,
+                event_kind=ContinuityEventKind.FORMED,
+                kind=ContinuityKind.EPISODE,
+                content=judgement.summary,
+                scope=ContextScope(owner_id=self.session_id, agent_id="sr2"),
+                authority=ContextAuthority.DERIVED,
+                provenance_ids=tuple(entry.id for entry in closed_entries),
+                confidence=1.0,
+                salience=1.0,
+                created_at=datetime.now(timezone.utc),
+                meta={
+                    "episode_state": "closed",
+                    "episode_id": episode_id,
+                    "title": judgement.title,
+                    "turn_range": [first_seq, last_seq],
+                },
+            )
+            await self._continuity_store.append(record)
+            transformer.episode_start = turn_seq
+
+    def _trace_episode_judge(
+        self,
+        record_type: Any,
+        transformer: Any,
+        turn_seq: int,
+        events: list[Event],
+        *,
+        status: str = "ok",
+        error: str | None = None,
+        warning_code: str | None = None,
+        latency_ms: float | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
+        if self._tracer is None:
+            return
+        warnings = ({"code": warning_code},) if warning_code else ()
+        self._tracer.on_firing(
+            record_type(
+                turn_seq=turn_seq,
+                firing_seq=0,
+                kind="transformer",
+                component_name=transformer.name,
+                layer="post_process",
+                trigger_events=[event.name for event in events],
+                content_before=[],
+                content_after=[],
+                tokens_before=0,
+                tokens_after=0,
+                tokens_delta=0,
+                duration_ms=latency_ms or 0.0,
+                status=status,
+                error=error,
+                warnings=warnings,
+                judge_latency_ms=latency_ms,
+                judge_input_tokens=input_tokens,
+                judge_output_tokens=output_tokens,
+            )
+        )
 
     async def _consolidate_completed_turn(self) -> None:
         """Consolidate the current turn's archived entries into the ledger."""
