@@ -305,6 +305,7 @@ async def test_ac23_r3_close_is_stored_before_next_compile(tmp_path):
     )
     tracer = tracers[0]
     tracer.records_seen_at_compile.clear()
+    assert len(await store.get_events()) == 1
     await _drain(runtime, "turn 6")
     assert tracer.records_seen_at_compile
     assert tracer.records_seen_at_compile[0] == 1
