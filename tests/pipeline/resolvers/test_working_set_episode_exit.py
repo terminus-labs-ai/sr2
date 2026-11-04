@@ -200,7 +200,10 @@ async def test_ac31_r4_no_close_record_preserves_pre_amendment_window(tmp_path):
     await empty_continuity.close()
 
 
-async def _unrelated_session_closed_episode_store(tmp_path) -> ContinuityStore:
+async def _unrelated_session_closed_episode_store(
+    tmp_path,
+    provenance_store: InMemoryProvenanceStore,
+) -> ContinuityStore:
     unrelated_entries = [
         Entry(
             id=str(ULID()),
@@ -215,6 +218,8 @@ async def _unrelated_session_closed_episode_store(tmp_path) -> ContinuityStore:
         )
         for turn_seq in range(1, 5)
     ]
+    for entry in unrelated_entries:
+        await provenance_store.write(entry)
     store = ContinuityStore(tmp_path / "unrelated-continuity.sqlite3")
     await store.connect()
     await store.append(
@@ -245,12 +250,16 @@ async def _unrelated_session_closed_episode_store(tmp_path) -> ContinuityStore:
 async def test_ac31_r4_unrelated_session_close_preserves_partitioned_window(tmp_path):
     entries = [_entry(f"archive turn {seq}", seq) for seq in range(1, 6)]
     provenance = await _provenance(entries)
-    unrelated_continuity = await _unrelated_session_closed_episode_store(tmp_path)
-
-    pre_amendment = await _resolver(provenance, None).resolve([_event()])
-    unrelated_close = await _resolver(provenance, unrelated_continuity).resolve(
-        [_event()]
+    unrelated_continuity = await _unrelated_session_closed_episode_store(
+        tmp_path, provenance
     )
 
-    assert unrelated_close.content == pre_amendment.content
-    await unrelated_continuity.close()
+    try:
+        pre_amendment = await _resolver(provenance, None).resolve([_event()])
+        unrelated_close = await _resolver(provenance, unrelated_continuity).resolve(
+            [_event()]
+        )
+
+        assert unrelated_close.content == pre_amendment.content
+    finally:
+        await unrelated_continuity.close()
