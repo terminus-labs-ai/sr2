@@ -137,6 +137,7 @@ class WorkingSetResolver:
             self._session_id, layer=TURN_ARCHIVE_LAYER
         )
         entries.sort(key=self._order_key)
+        entry_ids = {entry.id for entry in entries}
 
         closed_ranges: list[tuple[int, int]] = []
         if self._continuity_store is not None:
@@ -144,6 +145,7 @@ class WorkingSetResolver:
                 if (
                     record.kind is ContinuityKind.EPISODE
                     and record.meta.get("episode_state") == "closed"
+                    and not entry_ids.isdisjoint(record.provenance_ids)
                 ):
                     start, end = record.meta["turn_range"]
                     closed_ranges.append((start, end))
