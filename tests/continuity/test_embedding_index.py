@@ -171,6 +171,15 @@ async def test_ac26_r2_reopen_embeds_only_changed_content(
         make_record(f"record-{i}", content=f"Archived decision number {i}.")
         for i in range(4)
     ]
+    vectors = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+    ]
+    endpoint.vectors.update(
+        {record.content: vector for record, vector in zip(records, vectors)}
+    )
     originals = [record.model_dump_json() for record in records]
     cache = tmp_path / "persistent.sqlite"
     async with new_index(path=cache) as index:
@@ -185,6 +194,11 @@ async def test_ac26_r2_reopen_embeds_only_changed_content(
     replay[-1] = ContinuityRecord.model_validate(
         {**replay[-1].model_dump(), "content": "Revised storage decision."}
     )
+    endpoint.vectors[replay[-1].content] = [0.0, 1.0, 1.0]
+    queries = dict(zip(("cedar", "cobalt", "amber", "quartz"), replay))
+    endpoint.vectors.update(
+        {query: endpoint.vectors[record.content] for query, record in queries.items()}
+    )
     assert [record.id for record in replay] == [record.id for record in records]
     endpoint.requests.clear()
     endpoint.texts.clear()
@@ -194,11 +208,18 @@ async def test_ac26_r2_reopen_embeds_only_changed_content(
             "three unchanged records must reuse their persisted vectors"
         )
         assert endpoint.texts == [replay[-1].content]
-        results = await reopened.search(CONTEXT, limit=10)
-        assert record_ids(results) == record_ids(replay)
-        assert {
-            c.record.current_record.id: c.record.current_record.content for c in results
-        } == {record.id: record.content for record in replay}
+        endpoint.texts.clear()
+        for query, expected in queries.items():
+            context = CONTEXT.model_copy(update={"query": query})
+            results = await reopened.search(context, limit=10)
+            assert record_ids(results) == record_ids(replay)
+            assert {
+                c.record.current_record.id: c.record.current_record.content
+                for c in results
+            } == {record.id: record.content for record in replay}
+            assert results[0].record.current_record.id == expected.id
+            assert results[0].score > results[1].score
+        assert set(endpoint.texts) == set(queries)
     assert [record.model_dump_json() for record in records] == originals
 
 
@@ -231,14 +252,24 @@ async def test_ac26_r3_http_500_reports_retryable_index_failure(
         )
 
 
-async def test_ac26_r4_nearest_cosine_record_ranks_first(new_index, endpoint):
+@pytest.mark.parametrize(
+    "nearest_vector,farther_vector",
+    [
+        ([2.0, 0.0, 0.0], [100.0, 100.0, 0.0]),
+        ([100.0, 0.0, 0.0], [1.0, 1.0, 0.0]),
+    ],
+    ids=["dot-product-disagrees", "euclidean-disagrees"],
+)
+async def test_ac26_r4_nearest_cosine_record_ranks_first(
+    nearest_vector, farther_vector, new_index, endpoint
+):
     nearest = make_record("z-nearest", content="cedar cobalt")
     farther = make_record("a-farther", content="amber quartz")
     context = CONTEXT.model_copy(update={"query": "recover earlier choice"})
     endpoint.vectors.update(
         {
-            nearest.content: [2.0, 0.0, 0.0],
-            farther.content: [100.0, 100.0, 0.0],
+            nearest.content: nearest_vector,
+            farther.content: farther_vector,
             context.query: [1.0, 0.0, 0.0],
         }
     )
