@@ -6,7 +6,8 @@ import hashlib
 import json
 import math
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
+from itertools import chain
 from pathlib import Path
 
 import aiosqlite
@@ -80,7 +81,8 @@ class EmbeddingContinuityIndex:
             self._db = None
 
     async def append(self, records: list[ContinuityRecord]) -> None:
-        vectors = await self._cached_vectors(records)
+        expected_size = len(next(iter(self._vectors.values()))) if self._vectors else None
+        vectors = await self._cached_vectors(records, expected_size=expected_size)
         await self._structured.append(records)
         self._vectors.update(vectors)
 
@@ -97,7 +99,8 @@ class EmbeddingContinuityIndex:
     ) -> list[ContinuityCandidate]:
         if not self._vectors or limit <= 0:
             return []
-        query = (await self._embed([context.query]))[0]
+        expected_size = len(next(iter(self._vectors.values())))
+        query = (await self._embed([context.query], expected_size=expected_size))[0]
         candidates = await self._structured.search(context, limit=len(self._vectors))
         results = []
         for candidate in candidates:
@@ -131,7 +134,7 @@ class EmbeddingContinuityIndex:
         return ContinuityHealth(status="healthy")
 
     async def _cached_vectors(
-        self, records: list[ContinuityRecord]
+        self, records: list[ContinuityRecord], *, expected_size: int | None = None
     ) -> dict[str, list[float]]:
         await self.connect()
         assert self._db is not None
@@ -152,11 +155,12 @@ class EmbeddingContinuityIndex:
                 vectors[record.id] = json.loads(cached[0])
             else:
                 pending.append((record.id, content_hash, text))
+        embedded = await self._embed(
+            [text for _, _, text in pending],
+            cached_vectors=vectors.values(),
+            expected_size=expected_size,
+        )
         if pending:
-            embedded = await self._embed(
-                [text for _, _, text in pending],
-                cached_size=len(next(iter(vectors.values()))) if vectors else None,
-            )
             try:
                 await self._db.executemany(
                     """INSERT OR REPLACE INTO continuity_embeddings
@@ -178,32 +182,37 @@ class EmbeddingContinuityIndex:
         return vectors
 
     async def _embed(
-        self, texts: list[str], *, cached_size: int | None = None
+        self,
+        texts: list[str],
+        *,
+        cached_vectors: Iterable[list[float]] = (),
+        expected_size: int | None = None,
     ) -> list[list[float]]:
+        """Embed new texts and validate compatibility with restored vectors."""
         try:
-            options = {}
-            if self._settings.dimensions is not None:
-                options["dimensions"] = self._settings.dimensions
-            response = await litellm.aembedding(
-                model=self._settings.model,
-                custom_llm_provider="openai",
-                api_base=self._settings.base_url,
-                api_key=os.environ.get("OPENAI_API_KEY") or "not-needed",
-                input=texts,
-                allowed_openai_params=["dimensions"],
-                max_retries=0,
-                **options,
-            )
-            data = sorted(response.data, key=lambda item: item["index"])
-            if [item["index"] for item in data] != list(range(len(texts))):
-                raise EmbeddingIndexError(
-                    "Endpoint returned missing or duplicate embeddings; retry the request."
+            vectors = []
+            if texts:
+                options = {}
+                if self._settings.dimensions is not None:
+                    options["dimensions"] = self._settings.dimensions
+                response = await litellm.aembedding(
+                    model=self._settings.model,
+                    custom_llm_provider="openai",
+                    api_base=self._settings.base_url,
+                    api_key=os.environ.get("OPENAI_API_KEY") or "not-needed",
+                    input=texts,
+                    allowed_openai_params=["dimensions"],
+                    max_retries=0,
+                    **options,
                 )
-            vectors = [item["embedding"] for item in data]
-            expected_size = self._settings.dimensions
-            if expected_size is None and self._vectors:
-                expected_size = len(next(iter(self._vectors.values())))
-            for vector in vectors:
+                data = sorted(response.data, key=lambda item: item["index"])
+                if [item["index"] for item in data] != list(range(len(texts))):
+                    raise EmbeddingIndexError(
+                        "Endpoint returned missing or duplicate embeddings; retry the request."
+                    )
+                vectors = [item["embedding"] for item in data]
+            expected_size = self._settings.dimensions or expected_size
+            for vector in chain(cached_vectors, vectors):
                 if (
                     not isinstance(vector, list)
                     or not vector
@@ -214,10 +223,9 @@ class EmbeddingContinuityIndex:
                         for value in vector
                     )
                     or (expected_size is not None and len(vector) != expected_size)
-                    or (cached_size is not None and len(vector) != cached_size)
                 ):
                     raise EmbeddingIndexError(
-                        "Endpoint returned invalid vectors; check the model and dimensions."
+                        "Invalid embedding vectors; check the model and dimensions."
                     )
                 expected_size = len(vector)
         except Exception:
