@@ -26,7 +26,10 @@ resolver is opt-in via the ``working_set`` resolver type.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sr2.config.models import ResolverConfig
+from sr2.continuity.models import ContinuityKind
 from sr2.models import ContentBlock, ContentBlockBase, Message
 from sr2.pipeline.dependencies import Dependencies
 from sr2.pipeline.events import Event, EventPhase, EventSubscription
@@ -39,6 +42,9 @@ from sr2.pipeline.provenance import (
 )
 from sr2.pipeline.token_counting import CharacterTokenCounter
 from sr2.pipeline.utils import PHASE_MAP, build_subscriptions
+
+if TYPE_CHECKING:
+    from sr2.continuity.store import ContinuityStore
 
 _DEFAULT_SUBSCRIPTIONS = [
     EventSubscription(event_name="user_input", phase=EventPhase.STARTING),
@@ -79,6 +85,7 @@ class WorkingSetResolver:
         recent_token_budget: int,
         hard_token_budget: int | None = None,
         token_counter: CharacterTokenCounter | None = None,
+        continuity_store: ContinuityStore | None = None,
     ) -> None:
         if recent_token_budget <= 0:
             raise ValueError(
@@ -91,6 +98,7 @@ class WorkingSetResolver:
         self._recent_budget = recent_token_budget
         self._hard_budget = hard_token_budget
         self._counter = token_counter or CharacterTokenCounter()
+        self._continuity_store = continuity_store
         self.max_executions: int = config.max_executions
         self.execution_count: int = 0
         self.subscriptions: list[EventSubscription] = build_subscriptions(
@@ -119,6 +127,7 @@ class WorkingSetResolver:
             session_id=deps.session_id,
             recent_token_budget=int(raw_recent),
             hard_token_budget=int(raw_hard) if raw_hard is not None else None,
+            continuity_store=deps.continuity_store,
         )
 
     async def resolve(self, events: list[Event]) -> ResolvedContent:
@@ -129,12 +138,23 @@ class WorkingSetResolver:
         )
         entries.sort(key=self._order_key)
 
+        closed_ranges: list[tuple[int, int]] = []
+        if self._continuity_store is not None:
+            for record in await self._continuity_store.get_events():
+                if (
+                    record.kind is ContinuityKind.EPISODE
+                    and record.meta.get("episode_state") == "closed"
+                ):
+                    start, end = record.meta["turn_range"]
+                    closed_ranges.append((start, end))
+
         pinned = [e for e in entries if e.lifecycle is ContextLifecycle.PINNED]
         window_pool = [
             e
             for e in entries
             if e.lifecycle is not ContextLifecycle.PINNED
             and e.lifecycle is not ContextLifecycle.RETRIEVED
+            and not self._is_in_closed_episode(e, closed_ranges)
         ]
 
         current_blocks = self._current_input_blocks(events)
@@ -203,6 +223,15 @@ class WorkingSetResolver:
         if isinstance(content, Message):
             return self._counter.count(list(content.content))
         return self._counter.count([content])
+
+    @staticmethod
+    def _is_in_closed_episode(
+        entry: Entry, closed_ranges: list[tuple[int, int]]
+    ) -> bool:
+        turn_seq = entry.meta.get("turn_seq")
+        return isinstance(turn_seq, int) and any(
+            start <= turn_seq <= end for start, end in closed_ranges
+        )
 
     def _entry_text(self, entry: Entry) -> str:
         content = entry.content
