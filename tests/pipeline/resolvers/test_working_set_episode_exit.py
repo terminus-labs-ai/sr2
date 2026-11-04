@@ -198,3 +198,59 @@ async def test_ac31_r4_no_close_record_preserves_pre_amendment_window(tmp_path):
 
     assert no_close_record.content == pre_amendment.content
     await empty_continuity.close()
+
+
+async def _unrelated_session_closed_episode_store(tmp_path) -> ContinuityStore:
+    unrelated_entries = [
+        Entry(
+            id=str(ULID()),
+            content=_message(f"unrelated closed turn {turn_seq}"),
+            sources=(),
+            origin=ORIGIN,
+            layer=TURN_ARCHIVE_LAYER,
+            session_id="unrelated-session",
+            created_at=BASE_TIME + timedelta(seconds=turn_seq),
+            lifecycle=ContextLifecycle.ARCHIVE,
+            meta={"turn_seq": turn_seq},
+        )
+        for turn_seq in range(1, 5)
+    ]
+    store = ContinuityStore(tmp_path / "unrelated-continuity.sqlite3")
+    await store.connect()
+    await store.append(
+        ContinuityRecord(
+            id="unrelated-episode-close",
+            subject_id="unrelated-episode",
+            event_kind=ContinuityEventKind.FORMED,
+            kind=ContinuityKind.EPISODE,
+            content="Another session's turns 1 through 4 are complete.",
+            scope=ContextScope(owner_id="unrelated-session", agent_id="sr2"),
+            authority=ContextAuthority.DERIVED,
+            provenance_ids=tuple(entry.id for entry in unrelated_entries),
+            confidence=1.0,
+            salience=1.0,
+            created_at=BASE_TIME + timedelta(seconds=5),
+            meta={
+                "episode_state": "closed",
+                "episode_id": "unrelated-episode",
+                "title": "Unrelated closed topic",
+                "turn_range": [1, 4],
+            },
+        )
+    )
+    return store
+
+
+@pytest.mark.asyncio
+async def test_ac31_r4_unrelated_session_close_preserves_partitioned_window(tmp_path):
+    entries = [_entry(f"archive turn {seq}", seq) for seq in range(1, 6)]
+    provenance = await _provenance(entries)
+    unrelated_continuity = await _unrelated_session_closed_episode_store(tmp_path)
+
+    pre_amendment = await _resolver(provenance, None).resolve([_event()])
+    unrelated_close = await _resolver(provenance, unrelated_continuity).resolve(
+        [_event()]
+    )
+
+    assert unrelated_close.content == pre_amendment.content
+    await unrelated_continuity.close()
