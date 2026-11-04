@@ -153,7 +153,10 @@ class EmbeddingContinuityIndex:
             else:
                 pending.append((record.id, content_hash, text))
         if pending:
-            embedded = await self._embed([text for _, _, text in pending])
+            embedded = await self._embed(
+                [text for _, _, text in pending],
+                cached_size=len(next(iter(vectors.values()))) if vectors else None,
+            )
             try:
                 await self._db.executemany(
                     """INSERT OR REPLACE INTO continuity_embeddings
@@ -174,7 +177,9 @@ class EmbeddingContinuityIndex:
             )
         return vectors
 
-    async def _embed(self, texts: list[str]) -> list[list[float]]:
+    async def _embed(
+        self, texts: list[str], *, cached_size: int | None = None
+    ) -> list[list[float]]:
         try:
             options = {}
             if self._settings.dimensions is not None:
@@ -209,6 +214,7 @@ class EmbeddingContinuityIndex:
                         for value in vector
                     )
                     or (expected_size is not None and len(vector) != expected_size)
+                    or (cached_size is not None and len(vector) != cached_size)
                 ):
                     raise EmbeddingIndexError(
                         "Endpoint returned invalid vectors; check the model and dimensions."
