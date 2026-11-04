@@ -225,6 +225,27 @@ class RepeatGuardConfig(BaseModel):
   """Appended to the note on repeat ``notes_before_stop``. ``{repeat}``."""
 
 
+class EmbeddingIndexConfig(BaseModel):
+  """Settings for an OpenAI-compatible embedding endpoint."""
+
+  model: str = Field(min_length=1)
+  base_url: str = Field(min_length=1)
+  dimensions: int | None = Field(default=None, gt=0)
+
+
+class ContinuityIndexConfig(BaseModel):
+  """Backend selection and its backend-specific settings."""
+
+  type: str
+  config: dict = {}
+
+  @model_validator(mode="after")
+  def _validate_embedding_settings(self) -> "ContinuityIndexConfig":
+    if self.type == "embedding":
+      EmbeddingIndexConfig.model_validate(self.config)
+    return self
+
+
 class ContinuityConfig(BaseModel):
   """Bounded working-set configuration (FR6/FR7 — sr2-94).
 
@@ -238,6 +259,9 @@ class ContinuityConfig(BaseModel):
   hard_token_budget: int | None = None
   """Hard cap on total resolver output. ``None`` means the recent window
   budget alone bounds the compiled working set."""
+
+  index: ContinuityIndexConfig | None = None
+  """Optional retrieval backend and its YAML configuration."""
 
   @model_validator(mode="after")
   def _validate_recent_budget_positive(self) -> "ContinuityConfig":
