@@ -279,6 +279,33 @@ async def test_ac26_reopen_dimension_mismatch_reports_degraded_index_health(
         assert any(f.capability == "index" for f in health.failures)
 
 
+async def test_ac26_cached_append_after_fresh_rebuild_reports_degraded_index_health(
+    new_index, endpoint, tmp_path
+):
+    unchanged = make_record("unchanged", content="Keep the portable archive.")
+    fresh = make_record("fresh", content="Adopt the revised storage plan.")
+    endpoint.vectors[unchanged.content] = [1.0, 0.0, 0.0]
+    cache = tmp_path / "persistent.sqlite"
+    async with new_index(path=cache) as index:
+        await index.append([unchanged])
+        assert (await index.health()).status == "healthy"
+
+    endpoint.vectors[fresh.content] = [0.0, 1.0]
+    endpoint.texts.clear()
+    async with new_index(path=cache) as reopened:
+        try:
+            await reopened.rebuild(records_iter([fresh]))
+            if (await reopened.health()).status == "healthy":
+                await reopened.append([unchanged])
+        except Exception:
+            # The protocol leaves raising versus returning on failure open.
+            pass
+        assert set(endpoint.texts) == {fresh.content}
+        health = await reopened.health()
+        assert health.status == "degraded"
+        assert any(f.capability == "index" for f in health.failures)
+
+
 @pytest.mark.parametrize(
     "nearest_vector,farther_vector",
     [
