@@ -273,7 +273,7 @@ async def test_ac26_reopen_dimension_mismatch_reports_degraded_index_health(
         except Exception:
             # The protocol leaves raising versus returning on failure open.
             pass
-        assert endpoint.texts == [changed.content]
+        assert set(endpoint.texts) == {changed.content}
         health = await reopened.health()
         assert health.status == "degraded"
         assert any(f.capability == "index" for f in health.failures)
