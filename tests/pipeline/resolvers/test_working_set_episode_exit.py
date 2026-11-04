@@ -178,7 +178,7 @@ async def test_ac31_r3_pinned_plan_from_closed_turn_survives(tmp_path):
         lifecycle=ContextLifecycle.PINNED,
     )
     provenance = await _provenance([*closed_entries, pinned_plan])
-    continuity = await _closed_episode_store(tmp_path, closed_entries)
+    continuity = await _closed_episode_store(tmp_path, [*closed_entries, pinned_plan])
 
     result = await _resolver(provenance, continuity).resolve([_event()])
 
