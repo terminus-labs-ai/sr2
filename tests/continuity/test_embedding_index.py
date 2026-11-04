@@ -252,6 +252,33 @@ async def test_ac26_r3_http_500_reports_retryable_index_failure(
         )
 
 
+async def test_ac26_reopen_dimension_mismatch_reports_degraded_index_health(
+    new_index, endpoint, tmp_path
+):
+    unchanged = make_record("unchanged", content="Keep the portable archive.")
+    original = make_record("changed", content="Use the original storage plan.")
+    cache = tmp_path / "persistent.sqlite"
+    async with new_index(path=cache) as index:
+        await index.append([unchanged, original])
+        assert (await index.health()).status == "healthy"
+
+    changed = ContinuityRecord.model_validate(
+        {**original.model_dump(), "content": "Use the revised storage plan."}
+    )
+    endpoint.vectors[changed.content] = [0.0, 1.0]
+    endpoint.texts.clear()
+    async with new_index(path=cache) as reopened:
+        try:
+            await reopened.rebuild(records_iter([unchanged, changed]))
+        except Exception:
+            # The protocol leaves raising versus returning on failure open.
+            pass
+        assert endpoint.texts == [changed.content]
+        health = await reopened.health()
+        assert health.status == "degraded"
+        assert any(f.capability == "index" for f in health.failures)
+
+
 @pytest.mark.parametrize(
     "nearest_vector,farther_vector",
     [
